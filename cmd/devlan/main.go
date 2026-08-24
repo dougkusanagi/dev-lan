@@ -87,7 +87,9 @@ func run(args []string) error {
 		if len(args) != 0 {
 			return fmt.Errorf("uso: devlan uninstall")
 		}
-		if err := service.Uninstall(ctx); err != nil {
+		result, err := service.Uninstall(ctx)
+		printWarnings(result.Warnings)
+		if err != nil {
 			return err
 		}
 		fmt.Println("Arquivos gerenciados removidos; diretórios dos projetos foram preservados.")

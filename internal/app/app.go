@@ -111,14 +111,16 @@ func (a *App) InstallWithPort(ctx context.Context, configureFirewall bool, windo
 	return result, nil
 }
 
-func (a *App) Uninstall(ctx context.Context) error {
+func (a *App) Uninstall(ctx context.Context) (ApplyResult, error) {
+	result := ApplyResult{}
 	if err := platform.RemoveFirewall(ctx); err != nil && runtime.GOOS == "windows" {
-		return fmt.Errorf("remover regra de firewall DevLAN: %w", err)
+		result.Warnings = append(result.Warnings, "não foi possível remover a regra de firewall DevLAN; execute uninstall como administrador")
 	}
 	if err := a.Store.RemoveManagedFiles(); err != nil {
-		return err
+		return result, err
 	}
-	return a.appendLog("arquivos gerenciados removidos; diretórios de projetos preservados")
+	_ = a.appendLog("uninstall concluído")
+	return result, nil
 }
 
 func (a *App) Link(ctx context.Context, name, projectPath string) (domain.Project, ApplyResult, error) {
