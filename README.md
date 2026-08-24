@@ -87,6 +87,9 @@ O MVP está implementado como uma CLI Go em `cmd/devlan`. O núcleo cobre:
 
 ## Instalação rápida via curl
 
+Abra o **PowerShell como Administrador**. A elevação é necessária para instalar
+ou configurar WSL, Caddy e a regra de firewall. Em seguida, execute:
+
 ```powershell
 curl.exe -fsSL https://raw.githubusercontent.com/dougkusanagi/dev-lan/master/scripts/install.ps1 -o "$env:TEMP\devlan-install.ps1"; powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\devlan-install.ps1"
 ```

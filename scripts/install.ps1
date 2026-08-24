@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [ValidatePattern('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')]
     [string]$Repository = 'dougkusanagi/dev-lan',
@@ -22,6 +22,14 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $script:TempWork = $null
 
+# Windows PowerShell 5.1 needs an explicit UTF-8 output encoding for native
+# commands. The file itself also carries a UTF-8 BOM so its literals are read
+# correctly by both Windows PowerShell 5.1 and PowerShell 7+.
+$utf8 = [System.Text.UTF8Encoding]::new($false)
+[Console]::InputEncoding = $utf8
+[Console]::OutputEncoding = $utf8
+$OutputEncoding = $utf8
+
 function Write-Step {
     param([string]$Message)
     Write-Host "`n==> $Message" -ForegroundColor Cyan
@@ -32,8 +40,17 @@ function Invoke-Native {
         [Parameter(Mandatory = $true)][string]$FilePath,
         [string[]]$ArgumentList = @()
     )
-    $output = & $FilePath @ArgumentList 2>&1
-    $exitCode = $LASTEXITCODE
+    # Windows PowerShell 5.1 turns native stderr into ErrorRecord objects and,
+    # with Stop enabled, may abort even when the process exits successfully.
+    # Native process success is determined by its exit code instead.
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = & $FilePath @ArgumentList 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
     if ($exitCode -ne 0) {
         $detail = (($output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
         if ($detail.Length -gt 1200) {
@@ -138,7 +155,7 @@ function Get-WslDistribution {
     }
 
     $installed = @(& wsl.exe --list --quiet 2>$null | ForEach-Object {
-            ([string]$_).Replace([char]0, '').Trim()
+            ([string]$_).Replace([string][char]0, [string]'').Trim()
         } | Where-Object { $_ })
     if ($Distribution) {
         if ($installed -notcontains $Distribution) {

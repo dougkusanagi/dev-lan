@@ -12,6 +12,10 @@ Abra o PowerShell como Administrador e execute:
 curl.exe -fsSL https://raw.githubusercontent.com/dougkusanagi/dev-lan/master/scripts/install.ps1 -o "$env:TEMP\devlan-install.ps1"; powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\devlan-install.ps1"
 ```
 
+O instalador interrompe a execução com uma mensagem clara quando o terminal não
+está elevado. A conta usada continua sendo a conta atual; a elevação serve para
+configurar os componentes do sistema e a regra de firewall.
+
 Ao executar o script a partir de um clone local, não é necessário baixar o
 código novamente:
 
