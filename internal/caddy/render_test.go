@@ -33,11 +33,18 @@ func TestRenderWSLIsDeterministicAndSorted(t *testing.T) {
 	if !strings.Contains(first, "handle_path /alpha/*") {
 		t.Fatal("remoção de prefixo nativa ausente")
 	}
-	if !strings.Contains(first, "header_down Location ^/(.*)$ /alpha/$1") {
-		t.Fatal("reescrita de redirect relativo ausente")
+	if !strings.Contains(first, "vars devlan_request_uri {http.request.uri}") {
+		t.Fatal("captura da URI antes do FastCGI ausente")
 	}
-	if !strings.Contains(first, "env REQUEST_URI {http.request.uri}") {
+	if !strings.Contains(first, "env REQUEST_URI /alpha{vars.devlan_request_uri}") {
 		t.Fatal("URI interna do FastCGI ausente")
+	}
+	if !strings.Contains(first, "env SCRIPT_NAME /alpha/index.php") {
+		t.Fatal("subdiretório FastCGI ausente")
+	}
+	if !strings.Contains(first, "header_down Location ^/alpha/(.*)$ /$1") ||
+		!strings.Contains(first, "header_down Location ^/(.*)$ /alpha/$1") {
+		t.Fatal("normalização de redirects relativos ausente")
 	}
 	if !strings.Contains(first, "admin 127.0.0.1:2020") {
 		t.Fatal("porta administrativa dedicada do WSL ausente")
