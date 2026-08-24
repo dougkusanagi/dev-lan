@@ -16,6 +16,19 @@ Um executável Go concentra regras de negócio e oferece a CLI. Ele será respon
 
 Operações administrativas devem ser pequenas e explícitas. A execução normal de `link`, `status` e `open` não deve pedir elevação.
 
+### CLI no WSL planejada
+
+O bootstrap instalará também um binário Linux `devlan` no WSL. Ele será um
+cliente do núcleo controlador no Windows, não uma segunda implementação do
+domínio. Sua função será interpretar caminhos e variáveis no namespace Linux,
+identificar `WSL_DISTRO_NAME` e enviar comandos estruturados ao controlador.
+
+O estado continuará autoritativo em `%LOCALAPPDATA%/DevLAN`. O cliente WSL não
+manterá configuração concorrente em `$HOME`, e a comunicação deverá validar
+versão, distribuição, operação e argumentos. O agente Linux futuro para
+processos JavaScript poderá compartilhar o transporte, mas terá responsabilidade
+separada da CLI interativa.
+
 ### Caddy no Windows
 
 É a borda da rede. Escuta somente nos endereços e portas configurados, recebe requisições da LAN e as encaminha para o WSL.
@@ -119,6 +132,9 @@ Composer, extensões Laravel e Caddy no WSL, compila `devlan.exe` e delega a
 configuração final para o comando `devlan install`. A seleção de versões é
 explícita; o script não instala dependências de projetos nem executa scripts
 encontrados nos diretórios registrados.
+
+Na Fase 1.1, o mesmo bootstrap também fará cross-compilation do cliente Linux e
+o instalará como `/usr/local/bin/devlan` na distribuição selecionada.
 
 ## Aplicação segura de configuração
 

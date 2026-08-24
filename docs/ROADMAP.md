@@ -59,6 +59,25 @@ Critérios de aceite:
 - uma configuração inválida não derruba projetos já funcionais;
 - `doctor` identifica firewall, Caddy, PHP-FPM, socket e document root.
 
+## Fase 1.1 — CLI dentro do WSL
+
+Objetivo: oferecer a mesma experiência de terminal no WSL sem criar uma
+segunda fonte de configuração ou um segundo controlador.
+
+- compilar e instalar um binário Linux `devlan` no WSL pelo bootstrap;
+- reconhecer a distribuição atual e caminhos como `~/Sites` no namespace Linux;
+- encaminhar operações de controle ao núcleo Windows por um protocolo local
+  versionado, com argumentos estruturados e sem concatenação de shell;
+- manter `%LOCALAPPDATA%/DevLAN` como fonte autoritativa do estado;
+- oferecer paridade para `link`, `park`, `links`, `status`, `reload`, `doctor`
+  e `open`, com mensagens adequadas ao ambiente Linux;
+- registrar explicitamente a distribuição WSL associada a links e parks;
+- atualizar e remover o binário WSL junto com o bootstrap do Windows.
+
+Critério de aceite: dentro do WSL, `devlan park ~/Sites` produz o mesmo estado
+que a operação equivalente no Windows, sem duplicar arquivos de configuração e
+sem exigir que o usuário converta caminhos manualmente.
+
 ## Fase 2 — PHP completo
 
 Objetivo: suportar ambientes PHP heterogêneos com baixo consumo ocioso.

@@ -10,6 +10,17 @@ devlan unlink financeiro
 devlan links
 ```
 
+Uma CLI Linux está planejada para a Fase 1.1. Depois de instalada pelo
+bootstrap, permitirá executar no WSL:
+
+```bash
+devlan park ~/Sites
+```
+
+Ela encaminhará a operação ao controlador Windows; não manterá uma configuração
+separada no WSL. Até essa fase ser implementada, caminhos WSL devem ser passados
+à CLI Windows como caminhos Linux absolutos e com capitalização exata.
+
 `link` associa um nome estável a um diretório específico e tem prioridade sobre projetos descobertos por `park`.
 
 ### Diretórios estacionados

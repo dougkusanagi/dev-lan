@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/dougkusanagi/dev-lan/internal/app"
@@ -310,12 +312,6 @@ func printProjects(service *app.App) error {
 	if err != nil {
 		return err
 	}
-	urlByName := map[string]string{}
-	for i, project := range cfg.Projects {
-		if i < len(urls) {
-			urlByName[project.Name] = urls[i]
-		}
-	}
 	effective, err := service.EffectiveConfig(context.Background(), cfg)
 	if err != nil {
 		return err
@@ -324,15 +320,45 @@ func printProjects(service *app.App) error {
 		fmt.Println("Nenhum projeto registrado.")
 		return nil
 	}
-	for _, project := range effective.Projects {
+	rows := make([]projectRow, 0, len(effective.Projects))
+	for index, project := range effective.Projects {
 		resolved, err := effective.Resolve(project.Name)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("%-20s %-8s %-8s %s\n", project.Name, resolved.Mode, resolved.Source, urlByName[project.Name])
-		fmt.Printf("  %s\n", project.Path)
+		url := "-"
+		if index < len(urls) {
+			url = urls[index]
+		}
+		rows = append(rows, projectRow{
+			Name: project.Name, Mode: string(resolved.Mode), Source: string(resolved.Source), URL: url, Path: project.Path,
+		})
 	}
-	return nil
+	return writeProjectTable(os.Stdout, rows)
+}
+
+type projectRow struct {
+	Name   string
+	Mode   string
+	Source string
+	URL    string
+	Path   string
+}
+
+func writeProjectTable(output io.Writer, rows []projectRow) error {
+	writer := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
+	if _, err := fmt.Fprintln(writer, "PROJETO\tMODO\tORIGEM\tURL\tCAMINHO"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(writer, "-------\t----\t------\t---\t-------"); err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n", row.Name, row.Mode, row.Source, row.URL, row.Path); err != nil {
+			return err
+		}
+	}
+	return writer.Flush()
 }
 
 func printStatus(ctx context.Context, service *app.App, dataDir string) error {

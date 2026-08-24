@@ -12,6 +12,16 @@ import (
 )
 
 func LANAddress() (string, error) {
+	// The outbound route normally selects the physical LAN interface and avoids
+	// virtual adapters such as WSL, Hyper-V and Docker being chosen first.
+	if connection, err := net.Dial("udp4", "8.8.8.8:80"); err == nil {
+		if address, ok := connection.LocalAddr().(*net.UDPAddr); ok && address.IP.To4() != nil && !address.IP.IsLoopback() {
+			_ = connection.Close()
+			return address.IP.String(), nil
+		}
+		_ = connection.Close()
+	}
+
 	interfaces, err := net.Interfaces()
 	if err != nil {
 		return "", err

@@ -61,6 +61,10 @@ O script não executa `composer install` nos projetos e não instala bancos,
 Node ou dependências de aplicação. Esses passos continuam explícitos e fora do
 MVP.
 
+O binário `devlan` nativo para uso direto dentro do WSL está planejado para a
+Fase 1.1 e ainda não é instalado pelo bootstrap atual. Ele será um cliente da
+CLI/controlador Windows, preservando uma única fonte de estado.
+
 ## Versão do PHP
 
 PHP não possui uma categoria oficial chamada “LTS”: cada branch recebe dois

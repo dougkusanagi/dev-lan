@@ -10,6 +10,11 @@ Go será usado para CLI, domínio, instalação, diagnósticos e processos. Moti
 - possibilidade de reutilizar o núcleo na interface Wails;
 - cross-compilation para um pequeno agente Linux no WSL.
 
+A CLI planejada para o WSL será um cliente fino do controlador Windows. Ela
+resolverá caminhos Linux e a distribuição corrente, mas não possuirá banco ou
+configuração independentes. Essa decisão evita divergência entre duas CLIs e
+preserva uma única ordem para geração, validação, reload e rollback.
+
 O domínio não deve importar Wails, Cobra, Caddy ou detalhes de PowerShell diretamente. Essas integrações ficam em adaptadores para permitir testes e evolução.
 
 ## Bootstrap e versão PHP do MVP
