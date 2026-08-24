@@ -62,6 +62,8 @@ type Config struct {
 	DefaultMode   Mode      `json:"default_mode"`
 	LANAddress    string    `json:"lan_address"`
 	WindowsPort   int       `json:"windows_port"`
+	HTTPSPort     int       `json:"https_port"`
+	TLSEnabled    bool      `json:"tls_enabled"`
 	WSLPort       int       `json:"wsl_port"`
 	PHPFPMOsocket string    `json:"php_fpm_socket"`
 	Projects      []Project `json:"projects"`
@@ -83,6 +85,7 @@ func NewConfig() Config {
 		DefaultMode:   ModePHP,
 		LANAddress:    "auto",
 		WindowsPort:   80,
+		HTTPSPort:     443,
 		WSLPort:       8181,
 		PHPFPMOsocket: "/run/php/php-fpm.sock",
 		Projects:      []Project{},
@@ -109,6 +112,9 @@ func (c *Config) Normalize() error {
 	if c.WSLPort == 0 {
 		c.WSLPort = 8181
 	}
+	if c.HTTPSPort == 0 {
+		c.HTTPSPort = 443
+	}
 	if c.PHPFPMOsocket == "" {
 		c.PHPFPMOsocket = "/run/php/php-fpm.sock"
 	}
@@ -120,6 +126,12 @@ func (c *Config) Normalize() error {
 	}
 	if c.WSLPort < 1 || c.WSLPort > 65535 {
 		return fmt.Errorf("porta WSL inválida: %d", c.WSLPort)
+	}
+	if c.HTTPSPort < 1 || c.HTTPSPort > 65535 {
+		return fmt.Errorf("porta HTTPS inválida: %d", c.HTTPSPort)
+	}
+	if c.TLSEnabled && c.WindowsPort == c.HTTPSPort {
+		return fmt.Errorf("portas HTTP e HTTPS não podem ser iguais: %d", c.WindowsPort)
 	}
 	if strings.TrimSpace(c.PHPFPMOsocket) == "" || !strings.HasPrefix(c.PHPFPMOsocket, "/") {
 		return fmt.Errorf("socket PHP-FPM deve ser um caminho absoluto Linux: %q", c.PHPFPMOsocket)
@@ -363,15 +375,21 @@ func (c Config) Validate() error {
 	return copy.Normalize()
 }
 
-func (r ResolvedProject) URL(host string, port int) string {
+func (r ResolvedProject) URL(host string, httpPort, httpsPort int, secure bool) string {
 	address := host
 	if address == "" || address == "auto" {
 		address = "localhost"
 	}
-	if port == 80 {
+	if secure {
+		if httpsPort == 443 {
+			return fmt.Sprintf("https://%s/%s", address, r.Project.Name)
+		}
+		return fmt.Sprintf("https://%s:%d/%s", address, httpsPort, r.Project.Name)
+	}
+	if httpPort == 80 {
 		return fmt.Sprintf("http://%s/%s", address, r.Project.Name)
 	}
-	return fmt.Sprintf("http://%s:%d/%s", address, port, r.Project.Name)
+	return fmt.Sprintf("http://%s:%d/%s", address, httpPort, r.Project.Name)
 }
 
 var ErrUnsupportedMode = errors.New("modo ainda não implementado no MVP")

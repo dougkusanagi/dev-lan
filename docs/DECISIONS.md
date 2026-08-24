@@ -77,6 +77,19 @@ Manter dois Caddys preserva fronteiras:
 
 O Caddy do Windows deve ter configuração quase estática. O do WSL pode ser regenerado conforme os projetos.
 
+## TLS global por CA interna
+
+No modo de rota por IP e subpath, TLS é propriedade da borda Windows, não de
+um projeto. `devlan secure` portanto ativa HTTPS globalmente, usa `tls internal`
+do Caddy e muda todas as URLs anunciadas para `https`; `devlan unsecure`
+restaura HTTP. Uma coluna por projeto continua útil para tornar o estado
+visível, mas não representa certificados independentes por path.
+
+Uma autoridade pública não é pressuposta para IPs privados. A CA interna
+permite criptografia na LAN, porém cada dispositivo cliente precisa confiar no
+certificado raiz. Automação de distribuição, rotação e revogação permanece uma
+evolução posterior de segurança.
+
 ## Roteamento
 
 O MVP usa `http://IP/nome` por ser a opção que não depende de DNS. O produto completo terá:

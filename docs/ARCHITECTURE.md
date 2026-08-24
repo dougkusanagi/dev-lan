@@ -31,7 +31,10 @@ separada da CLI interativa.
 
 ### Caddy no Windows
 
-É a borda da rede. Escuta somente nos endereços e portas configurados, recebe requisições da LAN e as encaminha para o WSL.
+É a borda da rede. Escuta somente nos endereços e portas configurados, recebe
+requisições da LAN e as encaminha para o WSL. Com SSL desligado, atende HTTP.
+Com SSL ligado, mantém HTTP para redirect, termina TLS na porta 443 com a CA
+interna do Caddy e encaminha ao mesmo upstream WSL.
 
 Sua configuração deve mudar pouco. A lógica de PHP e de cada projeto permanece no WSL.
 
@@ -79,6 +82,16 @@ GET http://IP/financeiro/clientes
   4. php_fastcgi executa public/index.php
   5. Laravel responde ao cliente da LAN
 ```
+
+Quando `tls_enabled = true`, a primeira etapa ocorre em
+`https://IP/financeiro/clientes`; uma requisição HTTP recebe redirect 308. TLS
+é global porque a negociação do certificado acontece antes de o Caddy conhecer
+o subpath do projeto. Por isso `secure`/`unsecure` não recebem um nome de
+projeto e a coluna SSL de `links` repete o estado efetivo da borda.
+
+O Caddy armazena a CA e a chave privada no perfil do usuário Windows. Somente o
+certificado raiz público pode ser copiado para clientes LAN. A chave privada e
+o diretório de armazenamento do Caddy não devem ser compartilhados.
 
 ## Compatibilidade com Laravel em subpath
 

@@ -180,6 +180,24 @@ func run(args []string) error {
 		fmt.Println("Configurações geradas, validadas quando possível e recarregadas quando o Caddy está disponível.")
 		return nil
 
+	case "secure", "unsecure":
+		if len(args) != 0 {
+			return fmt.Errorf("uso: devlan %s", command)
+		}
+		enabled := command == "secure"
+		result, err := service.SetTLS(ctx, enabled)
+		printWarnings(result.Warnings)
+		if err != nil {
+			return err
+		}
+		if enabled {
+			fmt.Println("SSL ativado com a CA interna do Caddy; HTTP agora redireciona para HTTPS.")
+			fmt.Println("Outros dispositivos da LAN precisam confiar na CA local do DevLAN.")
+		} else {
+			fmt.Println("SSL desativado; os projetos voltaram a usar HTTP.")
+		}
+		return nil
+
 	case "doctor":
 		if len(args) > 1 {
 			return fmt.Errorf("uso: devlan doctor [NAME]")
@@ -331,7 +349,7 @@ func printProjects(service *app.App) error {
 			url = urls[index]
 		}
 		rows = append(rows, projectRow{
-			Name: project.Name, Mode: string(resolved.Mode), Source: string(resolved.Source), URL: url, Path: project.Path,
+			Name: project.Name, Mode: string(resolved.Mode), Source: string(resolved.Source), SSL: sslState(cfg.TLSEnabled), URL: url, Path: project.Path,
 		})
 	}
 	return writeProjectTable(os.Stdout, rows)
@@ -341,24 +359,32 @@ type projectRow struct {
 	Name   string
 	Mode   string
 	Source string
+	SSL    string
 	URL    string
 	Path   string
 }
 
 func writeProjectTable(output io.Writer, rows []projectRow) error {
 	writer := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(writer, "PROJETO\tMODO\tORIGEM\tURL\tCAMINHO"); err != nil {
+	if _, err := fmt.Fprintln(writer, "PROJETO\tMODO\tORIGEM\tSSL\tURL\tCAMINHO"); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(writer, "-------\t----\t------\t---\t-------"); err != nil {
+	if _, err := fmt.Fprintln(writer, "-------\t----\t------\t---\t---\t-------"); err != nil {
 		return err
 	}
 	for _, row := range rows {
-		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n", row.Name, row.Mode, row.Source, row.URL, row.Path); err != nil {
+		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n", row.Name, row.Mode, row.Source, row.SSL, row.URL, row.Path); err != nil {
 			return err
 		}
 	}
 	return writer.Flush()
+}
+
+func sslState(enabled bool) string {
+	if enabled {
+		return "on"
+	}
+	return "off"
 }
 
 func printStatus(ctx context.Context, service *app.App, dataDir string) error {
@@ -368,7 +394,7 @@ func printStatus(ctx context.Context, service *app.App, dataDir string) error {
 	}
 	fmt.Printf("DevLAN %s (%s)\n", version, app.RuntimeDescription())
 	fmt.Printf("Dados: %s\n", dataDir)
-	fmt.Printf("Padrão: %s | porta Windows: %d | porta WSL: %d\n", cfg.DefaultMode, cfg.WindowsPort, cfg.WSLPort)
+	fmt.Printf("Padrão: %s | HTTP: %d | HTTPS: %d | SSL: %s | porta WSL: %d\n", cfg.DefaultMode, cfg.WindowsPort, cfg.HTTPSPort, sslState(cfg.TLSEnabled), cfg.WSLPort)
 	if err := service.WindowsCaddy.Available(ctx); err == nil {
 		fmt.Println("Caddy Windows: disponível")
 	} else {
@@ -409,6 +435,8 @@ Fundação e registro:
 Operação:
   status                     mostra componentes, projetos e URLs
   reload                     valida/aplica configurações e recarrega Caddy
+  secure                     ativa HTTPS com a CA interna do Caddy
+  unsecure                   desativa HTTPS e volta a usar HTTP
   doctor [NAME]              diagnostica host, runtime e projeto
   logs [COMPONENT]           mostra logs gerenciados
   open [NAME]                abre URL ou mostra o dashboard textual

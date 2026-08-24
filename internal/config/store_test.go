@@ -16,6 +16,7 @@ func TestStoreRoundTripAndTOML(t *testing.T) {
 	cfg := domain.NewConfig()
 	cfg.LANAddress = "192.168.1.50"
 	cfg.DefaultMode = domain.ModePHP
+	cfg.TLSEnabled = true
 	cfg.Projects = []domain.Project{{Name: "financeiro", Path: "/home/dev/financeiro"}}
 	cfg.Parks = []domain.Park{{Path: "/home/dev"}}
 	if err := store.Save(cfg); err != nil {
@@ -28,11 +29,14 @@ func TestStoreRoundTripAndTOML(t *testing.T) {
 	if !strings.Contains(string(data), `lan_address = "192.168.1.50"`) {
 		t.Fatalf("TOML não contém endereço: %s", data)
 	}
+	if !strings.Contains(string(data), "tls_enabled = true") || !strings.Contains(string(data), "https_port = 443") {
+		t.Fatalf("TOML não contém configuração TLS: %s", data)
+	}
 	loaded, err := store.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded.Projects) != 1 || loaded.Projects[0].Name != "financeiro" || len(loaded.Parks) != 1 {
+	if !loaded.TLSEnabled || loaded.HTTPSPort != 443 || len(loaded.Projects) != 1 || loaded.Projects[0].Name != "financeiro" || len(loaded.Parks) != 1 {
 		t.Fatalf("round-trip incorreto: %#v", loaded)
 	}
 }

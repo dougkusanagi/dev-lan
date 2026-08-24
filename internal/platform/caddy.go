@@ -80,6 +80,16 @@ func (c CaddyClient) Reload(ctx context.Context, configPath string) error {
 	return err
 }
 
+// Trust installs Caddy's local root CA in the current Windows trust store.
+// Caddy may require an elevated terminal depending on host policy.
+func (c CaddyClient) Trust(ctx context.Context) error {
+	if c.Runner == nil || c.WSL {
+		return fmt.Errorf("%w: confiança TLS disponível apenas no Caddy Windows", ErrUnavailable)
+	}
+	_, err := c.Runner.Run(ctx, "trust")
+	return err
+}
+
 // EnsureRunning reloads a running Caddy or starts the local Windows instance
 // after a reboot or a previously interrupted installation.
 func (c CaddyClient) EnsureRunning(ctx context.Context, configPath string) error {

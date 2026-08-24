@@ -11,6 +11,8 @@ O repositório contém a fundação Go da Fase 0 e o núcleo operacional da Fase
   Composer, Caddy e a CLI compilada;
 - adaptadores sem shell concatenado para `wsl.exe`, Caddy, navegador e
   firewall Windows.
+- HTTPS opcional por CA interna, controlado por `secure` e `unsecure`, com o
+  estado SSL visível por projeto na listagem.
 
 O bootstrap instala os runtimes e prepara os serviços, mas o aceite ponta a
 ponta em outro dispositivo ainda precisa ser executado em uma máquina limpa.
@@ -35,7 +37,8 @@ Critério de aceite: dada uma configuração de teste, a ferramenta gera as mesm
 
 ## Fase 1 — MVP Laravel na LAN
 
-Objetivo: publicar projetos Laravel como `http://meu-ip/nome-do-projeto`.
+Objetivo: publicar projetos Laravel como `http://meu-ip/nome-do-projeto` ou,
+quando solicitado, `https://meu-ip/nome-do-projeto`.
 
 - instalar ou localizar Caddy no Windows e WSL;
 - instalar ou localizar uma versão suportada de PHP-FPM;
@@ -50,6 +53,10 @@ Objetivo: publicar projetos Laravel como `http://meu-ip/nome-do-projeto`.
 - rollback para última configuração funcional;
 - orientar `APP_URL`, trusted proxies e cache de configuração;
 - desinstalação que preserva os diretórios dos projetos.
+- implementar `secure` e `unsecure` como política TLS global da borda Windows;
+- emitir certificados pela CA interna do Caddy, redirecionar HTTP para HTTPS e
+  mostrar `SSL on/off` em `links`;
+- documentar a instalação da CA nos clientes da LAN.
 
 Critérios de aceite:
 
@@ -58,6 +65,8 @@ Critérios de aceite:
 - reiniciar Windows e WSL não exige refazer `link`;
 - uma configuração inválida não derruba projetos já funcionais;
 - `doctor` identifica firewall, Caddy, PHP-FPM, socket e document root.
+- `secure` publica os mesmos projetos na porta 443 e `unsecure` restaura HTTP
+  sem alterar links ou diretórios.
 
 ## Fase 1.1 — CLI dentro do WSL
 
@@ -124,7 +133,7 @@ Objetivo: atender projetos incompatíveis com subpath e reduzir exposição acid
 - exposição temporária com expiração;
 - detecção de rede pública;
 - autenticação opcional;
-- HTTPS por CA interna;
+- distribuição assistida da CA interna e rotação de certificados;
 - suporte posterior a DNS interno;
 - auditoria local de alterações relevantes.
 

@@ -65,6 +65,24 @@ func TestRenderWindowsUsesDedicatedAdminAddress(t *testing.T) {
 	}
 }
 
+func TestRenderWindowsWithInternalTLS(t *testing.T) {
+	cfg := domain.NewConfig()
+	cfg.LANAddress = "192.168.10.77"
+	cfg.TLSEnabled = true
+	result, err := RenderWindows(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"http://:80", "https://192.168.10.77:443", "tls internal",
+		"redir https://{http.request.host}{http.request.uri} 308",
+	} {
+		if !strings.Contains(result, expected) {
+			t.Fatalf("configuração TLS não contém %q:\n%s", expected, result)
+		}
+	}
+}
+
 func TestRenderRejectsFutureModeUntilImplemented(t *testing.T) {
 	cfg := domain.NewConfig()
 	mode := domain.ModeDev

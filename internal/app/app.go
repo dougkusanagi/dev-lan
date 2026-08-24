@@ -68,7 +68,11 @@ func (a *App) InstallWithPort(ctx context.Context, configureFirewall bool, windo
 		return result, err
 	}
 	if configureFirewall {
-		if err := platform.EnsureFirewall(ctx, cfg.WindowsPort); err != nil && runtime.GOOS == "windows" {
+		ports := []int{cfg.WindowsPort}
+		if cfg.TLSEnabled {
+			ports = append(ports, cfg.HTTPSPort)
+		}
+		if err := platform.EnsureFirewall(ctx, ports...); err != nil && runtime.GOOS == "windows" {
 			result.Warnings = append(result.Warnings, "não foi possível criar a regra de firewall DevLAN; execute install como administrador")
 		}
 	}
@@ -224,6 +228,34 @@ func (a *App) SetProjectMode(ctx context.Context, name string, mode *domain.Mode
 	return result, err
 }
 
+func (a *App) SetTLS(ctx context.Context, enabled bool) (ApplyResult, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	cfg.TLSEnabled = enabled
+	result, err := a.saveAndApply(ctx, cfg, true)
+	if err != nil {
+		return result, err
+	}
+	ports := []int{cfg.WindowsPort}
+	if enabled {
+		ports = append(ports, cfg.HTTPSPort)
+	}
+	if err := platform.EnsureFirewall(ctx, ports...); err != nil && runtime.GOOS == "windows" {
+		result.Warnings = append(result.Warnings, "não foi possível atualizar o firewall; execute o comando em PowerShell como Administrador")
+	}
+	if enabled {
+		if err := a.WindowsCaddy.Trust(ctx); err != nil {
+			result.Warnings = append(result.Warnings, "não foi possível confiar na CA local automaticamente; execute `caddy trust` como Administrador")
+		}
+		_ = a.appendLog("TLS interno ativado")
+	} else {
+		_ = a.appendLog("TLS interno desativado")
+	}
+	return result, nil
+}
+
 func (a *App) Reload(ctx context.Context) (ApplyResult, error) {
 	cfg, err := a.Store.Load()
 	if err != nil {
@@ -257,7 +289,15 @@ func (a *App) apply(ctx context.Context, cfg domain.Config, validate, reload boo
 	if err := a.ensureProjectAccess(ctx, cfg); err != nil {
 		return ApplyResult{}, err
 	}
-	windows, err := caddy.RenderWindows(cfg)
+	windowsConfig := cfg
+	if windowsConfig.TLSEnabled && windowsConfig.LANAddress == "auto" {
+		address, addressErr := platform.LANAddress()
+		if addressErr != nil {
+			return ApplyResult{}, fmt.Errorf("resolver IP LAN para certificado TLS: %w", addressErr)
+		}
+		windowsConfig.LANAddress = address
+	}
+	windows, err := caddy.RenderWindows(windowsConfig)
 	if err != nil {
 		return ApplyResult{}, err
 	}
@@ -498,7 +538,7 @@ func (a *App) URL(ctx context.Context, projectName string) (string, error) {
 			host = "localhost"
 		}
 	}
-	return resolved.URL(host, cfg.WindowsPort), nil
+	return resolved.URL(host, cfg.WindowsPort, cfg.HTTPSPort, cfg.TLSEnabled), nil
 }
 
 func (a *App) URLs(ctx context.Context) ([]string, error) {
@@ -523,7 +563,7 @@ func (a *App) URLs(ctx context.Context) ([]string, error) {
 	}
 	urls := make([]string, 0, len(resolved))
 	for _, item := range resolved {
-		urls = append(urls, item.URL(host, cfg.WindowsPort))
+		urls = append(urls, item.URL(host, cfg.WindowsPort, cfg.HTTPSPort, cfg.TLSEnabled))
 	}
 	return urls, nil
 }

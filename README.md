@@ -26,7 +26,7 @@ O MVP será focado em projetos PHP, principalmente Laravel. Depois, a ferramenta
 Dispositivo na LAN
        │
        ▼
-Caddy no Windows :80
+Caddy no Windows :80 / :443 opcional
        │ localhost / integração WSL
        ▼
 Caddy no WSL :8181
@@ -45,14 +45,17 @@ devlan park /home/silver/dev
 devlan link financeiro /home/silver/dev/financeiro
 devlan status
 devlan doctor
+devlan secure
 devlan open financeiro
 ```
 
 Resultado:
 
 ```text
-http://192.168.1.50/financeiro
+https://192.168.1.50/financeiro
 ```
+
+Sem `devlan secure`, a URL permanece `http://192.168.1.50/financeiro`.
 
 ## Documentos
 
@@ -66,7 +69,7 @@ http://192.168.1.50/financeiro
 
 - Interface gráfica ou menu na tray.
 - Servidores JavaScript sob demanda.
-- HTTPS e DNS interno.
+- DNS interno e distribuição automática da CA para outros dispositivos.
 - Múltiplas versões de PHP.
 - Containers e bancos de dados.
 - Instalação automática de dependências dos projetos.
@@ -78,7 +81,10 @@ O MVP está implementado como uma CLI Go em `cmd/devlan`. O núcleo cobre:
 - registro explícito com `link` e descoberta de filhos Laravel por `park`;
 - resolução `modo do projeto > park > padrão global`;
 - detecção sem executar scripts, exigindo `artisan` e `public/index.php`;
-- Caddyfiles Windows/WSL determinísticos, com rota por subpath e `X-Forwarded-Prefix`;
+- Caddyfiles Windows/WSL determinísticos, com rota por subpath e contexto
+  FastCGI compatível com redirects e rotas Laravel;
+- HTTPS opcional por CA interna com `devlan secure` e retorno a HTTP com
+  `devlan unsecure`;
 - aplicação por arquivo temporário, validação quando o Caddy está disponível e rollback da última configuração funcional;
 - `install`, `uninstall`, `status`, `reload`, `doctor`, `logs`, `open` e os comandos de registro;
 - regra de firewall DevLAN limitada ao perfil privado e à sub-rede local.

@@ -43,14 +43,34 @@ func RenderWindows(cfg domain.Config) (string, error) {
 	if err := cfg.Validate(); err != nil {
 		return "", err
 	}
-	port := fmt.Sprintf(":%d", cfg.WindowsPort)
 	var b strings.Builder
 	b.WriteString(generatedHeader)
 	b.WriteString("{\n")
 	fmt.Fprintf(&b, "    admin %s\n", windowsAdminAddress)
 	b.WriteString("    auto_https off\n")
 	b.WriteString("}\n\n")
-	fmt.Fprintf(&b, "%s {\n", port)
+	if cfg.TLSEnabled {
+		fmt.Fprintf(&b, "http://:%d {\n", cfg.WindowsPort)
+		b.WriteString("    bind 0.0.0.0\n")
+		if cfg.HTTPSPort == 443 {
+			b.WriteString("    redir https://{http.request.host}{http.request.uri} 308\n")
+		} else {
+			fmt.Fprintf(&b, "    redir https://{http.request.host}:%d{http.request.uri} 308\n", cfg.HTTPSPort)
+		}
+		b.WriteString("}\n\n")
+		host := cfg.LANAddress
+		if host == "" || host == "auto" {
+			host = "localhost"
+		}
+		fmt.Fprintf(&b, "https://%s:%d {\n", host, cfg.HTTPSPort)
+		b.WriteString("    bind 0.0.0.0\n")
+		b.WriteString("    tls internal\n")
+		b.WriteString("    encode gzip\n")
+		fmt.Fprintf(&b, "    reverse_proxy 127.0.0.1:%d\n", cfg.WSLPort)
+		b.WriteString("}\n")
+		return b.String(), nil
+	}
+	fmt.Fprintf(&b, ":%d {\n", cfg.WindowsPort)
 	b.WriteString("    bind 0.0.0.0\n")
 	b.WriteString("    encode gzip\n")
 	fmt.Fprintf(&b, "    reverse_proxy 127.0.0.1:%d\n", cfg.WSLPort)

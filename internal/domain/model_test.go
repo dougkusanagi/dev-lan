@@ -80,3 +80,13 @@ func TestDirectChildParkOnlyMatchesOneLevel(t *testing.T) {
 		t.Fatalf("filho aninhado não deveria herdar park: %#v", nested)
 	}
 }
+
+func TestResolvedProjectURLUsesTLSState(t *testing.T) {
+	project := ResolvedProject{Project: Project{Name: "financeiro"}}
+	if got := project.URL("192.168.10.77", 80, 443, false); got != "http://192.168.10.77/financeiro" {
+		t.Fatalf("URL HTTP inesperada: %s", got)
+	}
+	if got := project.URL("192.168.10.77", 80, 443, true); got != "https://192.168.10.77/financeiro" {
+		t.Fatalf("URL HTTPS inesperada: %s", got)
+	}
+}

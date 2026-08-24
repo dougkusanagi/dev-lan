@@ -10,6 +10,10 @@ devlan unlink financeiro
 devlan links
 ```
 
+`links` exibe as colunas `PROJETO`, `MODO`, `ORIGEM`, `SSL`, `URL` e
+`CAMINHO`. Como todos os projetos compartilham a mesma borda IP/porta, `SSL`
+reflete uma política global e aparece como `on` ou `off` em todas as linhas.
+
 Uma CLI Linux está planejada para a Fase 1.1. Depois de instalada pelo
 bootstrap, permitirá executar no WSL:
 
@@ -108,11 +112,37 @@ devlan unpark PATH              remove a pasta estacionada
 devlan status                   mostra componentes, projetos e URLs
 devlan open [NAME]              abre projeto ou dashboard textual
 devlan reload                   valida e aplica configurações
+devlan secure                   ativa HTTPS e redireciona HTTP para HTTPS
+devlan unsecure                 desativa HTTPS e volta a publicar por HTTP
 devlan doctor [NAME]            diagnóstico completo ou por projeto
 devlan logs [COMPONENT]         exibe logs relevantes
 devlan mode default php         define padrão do MVP
 devlan mode NAME php|inherit    sobrescreve ou restaura herança
 ```
+
+## HTTPS na LAN
+
+```powershell
+devlan secure
+devlan links
+devlan unsecure
+```
+
+`secure` habilita a porta 443 no Caddy do Windows, emite um certificado para o
+IP LAN usando a CA interna do Caddy e mantém a porta HTTP apenas para redirect.
+O comando tenta atualizar a regra de firewall e confiar na CA no Windows. Se o
+PowerShell atual não for administrativo, ele mantém a configuração aplicada e
+avisa quais etapas exigem executar `devlan secure` novamente como Administrador.
+
+Certificados de uma CA interna não são confiados automaticamente por outros
+computadores e celulares. Em cada cliente da LAN, importe como autoridade raiz
+confiável o arquivo `%APPDATA%\Caddy\pki\authorities\local\root.crt` gerado na
+máquina do DevLAN. Distribua esse arquivo apenas por um canal confiável e nunca
+distribua a chave privada ao lado dele.
+
+`unsecure` remove o listener HTTPS e o redirect, preservando projetos, parks e
+dados. A configuração gerenciada registra `tls_enabled` e `https_port`; a porta
+HTTPS padrão é 443.
 
 Para instalar Go, WSL/Ubuntu, Caddy, PHP-FPM, extensões Laravel e Composer em
 uma máquina limpa, use `scripts/install.ps1` conforme [o guia de instalação](INSTALL.md).

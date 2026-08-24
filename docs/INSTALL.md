@@ -57,6 +57,18 @@ extensões, Composer e Caddy são verificados antes de executar `apt update` ou
 `apt install`. A CLI é recompilada e os arquivos gerenciados são sincronizados
 para aplicar atualizações do DevLAN.
 
+Depois da instalação, HTTPS é opcional:
+
+```powershell
+devlan secure
+```
+
+Execute esse comando em PowerShell como Administrador na primeira ativação para
+permitir a porta 443 no firewall e confiar na CA interna no Windows. O uso
+normal da CLI continua sem elevação. Outros dispositivos precisam importar o
+certificado raiz `%APPDATA%\Caddy\pki\authorities\local\root.crt`; consulte
+[CLI e configuração](CLI-AND-CONFIG.md#https-na-lan).
+
 O script não executa `composer install` nos projetos e não instala bancos,
 Node ou dependências de aplicação. Esses passos continuam explícitos e fora do
 MVP.

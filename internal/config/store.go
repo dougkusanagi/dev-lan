@@ -125,6 +125,8 @@ func renderTOMLConfig(cfg domain.Config) string {
 	fmt.Fprintf(&b, "default_mode = %s\n", strconv.Quote(string(cfg.DefaultMode)))
 	fmt.Fprintf(&b, "lan_address = %s\n", strconv.Quote(cfg.LANAddress))
 	fmt.Fprintf(&b, "windows_port = %d\n", cfg.WindowsPort)
+	fmt.Fprintf(&b, "https_port = %d\n", cfg.HTTPSPort)
+	fmt.Fprintf(&b, "tls_enabled = %t\n", cfg.TLSEnabled)
 	fmt.Fprintf(&b, "wsl_port = %d\n", cfg.WSLPort)
 	fmt.Fprintf(&b, "php_fpm_socket = %s\n", strconv.Quote(cfg.PHPFPMOsocket))
 	return b.String()
@@ -162,6 +164,18 @@ func parseTOMLConfig(data []byte, cfg *domain.Config) error {
 				return fmt.Errorf("linha %d: wsl_port inválida", lineNumber+1)
 			}
 			cfg.WSLPort = parsed
+		case "https_port":
+			parsed, err := strconv.Atoi(value)
+			if err != nil {
+				return fmt.Errorf("linha %d: https_port inválida", lineNumber+1)
+			}
+			cfg.HTTPSPort = parsed
+		case "tls_enabled":
+			parsed, err := strconv.ParseBool(value)
+			if err != nil {
+				return fmt.Errorf("linha %d: tls_enabled inválido", lineNumber+1)
+			}
+			cfg.TLSEnabled = parsed
 		case "default_mode":
 			parsed, err := parseTOMLString(value)
 			if err != nil {
