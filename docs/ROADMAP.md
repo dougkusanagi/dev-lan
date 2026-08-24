@@ -7,14 +7,15 @@ O repositório contém a fundação Go da Fase 0 e o núcleo operacional da Fase
 - registro, herança, detecção Laravel e fixtures unitárias;
 - geração determinística e aplicação segura com rollback;
 - CLI de registro, operação e diagnóstico;
+- bootstrap reproduzível via `curl`/PowerShell para Go, WSL/Ubuntu, PHP-FPM,
+  Composer, Caddy e a CLI compilada;
 - adaptadores sem shell concatenado para `wsl.exe`, Caddy, navegador e
   firewall Windows.
 
-O aceite ponta a ponta em outro dispositivo ainda exige Caddy e PHP-FPM
-instalados no Windows/WSL. O comando `install` prepara o estado, a
-configuração e a regra de firewall, mas não instala pacotes de runtime
-automaticamente. Essa última integração deve ser concluída antes de marcar o
-aceite de LAN como verificado em uma máquina limpa.
+O bootstrap instala os runtimes e prepara os serviços, mas o aceite ponta a
+ponta em outro dispositivo ainda precisa ser executado em uma máquina limpa.
+`devlan install` continua sendo a etapa idempotente do núcleo e não instala
+dependências dos projetos.
 
 As etapas são cumulativas. Uma fase termina somente quando seus critérios de aceite e documentação estiverem concluídos.
 

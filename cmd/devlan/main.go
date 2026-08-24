@@ -47,10 +47,15 @@ func run(args []string) error {
 
 	switch command {
 	case "install":
-		if len(args) != 0 {
-			return fmt.Errorf("uso: devlan install")
+		configureFirewall := true
+		for _, argument := range args {
+			if argument == "--no-firewall" {
+				configureFirewall = false
+				continue
+			}
+			return fmt.Errorf("uso: devlan install [--no-firewall]")
 		}
-		result, err := service.Install(ctx)
+		result, err := service.InstallWithOptions(ctx, configureFirewall)
 		printWarnings(result.Warnings)
 		if err != nil {
 			return err
@@ -353,7 +358,7 @@ Uso:
   devlan [--data-dir DIR] COMANDO [ARGUMENTOS]
 
 Fundação e registro:
-  install                    inicializa arquivos gerenciados
+  install [--no-firewall]   inicializa arquivos gerenciados
   uninstall                  remove arquivos gerenciados, preserva projetos
   link NAME PATH             registra um projeto Laravel
   unlink NAME                remove registro e rota

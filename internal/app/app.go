@@ -44,6 +44,10 @@ type ApplyResult struct {
 }
 
 func (a *App) Install(ctx context.Context) (ApplyResult, error) {
+	return a.InstallWithOptions(ctx, true)
+}
+
+func (a *App) InstallWithOptions(ctx context.Context, configureFirewall bool) (ApplyResult, error) {
 	cfg, err := a.Store.Load()
 	if err != nil {
 		return ApplyResult{}, err
@@ -56,8 +60,10 @@ func (a *App) Install(ctx context.Context) (ApplyResult, error) {
 		_ = a.Store.RollbackGenerated()
 		return result, err
 	}
-	if err := platform.EnsureFirewall(ctx, cfg.WindowsPort); err != nil && runtime.GOOS == "windows" {
-		result.Warnings = append(result.Warnings, "não foi possível criar a regra de firewall DevLAN; execute install como administrador")
+	if configureFirewall {
+		if err := platform.EnsureFirewall(ctx, cfg.WindowsPort); err != nil && runtime.GOOS == "windows" {
+			result.Warnings = append(result.Warnings, "não foi possível criar a regra de firewall DevLAN; execute install como administrador")
+		}
 	}
 	if err := a.WindowsCaddy.Available(ctx); err != nil {
 		result.Warnings = append(result.Warnings, "Caddy Windows não encontrado; instale-o e execute devlan doctor")
@@ -66,7 +72,7 @@ func (a *App) Install(ctx context.Context) (ApplyResult, error) {
 		result.Warnings = append(result.Warnings, "Caddy no WSL não encontrado; instale-o e execute devlan doctor")
 	}
 	phpFound := false
-	for _, command := range []string{"php-fpm", "php-fpm8.3", "php-fpm8.2", "php-fpm8.1"} {
+	for _, command := range []string{"php-fpm", "php-fpm8.5", "php-fpm8.4", "php-fpm8.3", "php-fpm8.2", "php-fpm8.1"} {
 		found, _ := a.WSL.HasCommand(ctx, command)
 		if found {
 			phpFound = true
@@ -392,7 +398,7 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 		checks = append(checks, Check{"Caddy WSL", "OK", "disponível"})
 	}
 
-	phpCommands := []string{"php-fpm", "php-fpm8.3", "php-fpm8.2", "php-fpm8.1"}
+	phpCommands := []string{"php-fpm", "php-fpm8.5", "php-fpm8.4", "php-fpm8.3", "php-fpm8.2", "php-fpm8.1"}
 	phpFound := false
 	for _, command := range phpCommands {
 		found, _ := a.WSL.HasCommand(ctx, command)

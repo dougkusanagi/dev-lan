@@ -88,7 +88,7 @@ route.mode           path      default
 ## Comandos do MVP
 
 ```text
-devlan install                  bootstrap de Caddy, PHP-FPM e firewall
+devlan install [--no-firewall]  prepara Caddy, PHP-FPM e firewall
 devlan uninstall                remove componentes gerenciados, preserva projetos
 devlan link NAME PATH           registra um projeto Laravel
 devlan unlink NAME              remove o registro e a rota
@@ -102,6 +102,12 @@ devlan logs [COMPONENT]         exibe logs relevantes
 devlan mode default php         define padrão do MVP
 devlan mode NAME php|inherit    sobrescreve ou restaura herança
 ```
+
+Para instalar Go, WSL/Ubuntu, Caddy, PHP-FPM, extensões Laravel e Composer em
+uma máquina limpa, use `scripts/install.ps1` conforme [o guia de instalação](INSTALL.md).
+O comando `devlan install` é a etapa idempotente do núcleo: cria/atualiza os
+arquivos gerenciados e a regra de firewall, mas não instala dependências de um
+projeto específico.
 
 O binário aceita `--data-dir DIR` antes do comando. Sem essa opção, usa
 `%LOCALAPPDATA%/DevLAN` no Windows ou `~/.devlan` em outros sistemas. O

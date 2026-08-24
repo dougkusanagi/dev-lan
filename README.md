@@ -58,6 +58,7 @@ http://192.168.1.50/financeiro
 
 - [Arquitetura](docs/ARCHITECTURE.md)
 - [CLI e configuração](docs/CLI-AND-CONFIG.md)
+- [Instalação](docs/INSTALL.md)
 - [Roadmap](docs/ROADMAP.md)
 - [Decisões técnicas](docs/DECISIONS.md)
 
@@ -82,7 +83,17 @@ O MVP está implementado como uma CLI Go em `cmd/devlan`. O núcleo cobre:
 - `install`, `uninstall`, `status`, `reload`, `doctor`, `logs`, `open` e os comandos de registro;
 - regra de firewall DevLAN limitada ao perfil privado e à sub-rede local.
 
-`install` prepara os arquivos gerenciados e tenta criar a regra de firewall. Caddy e PHP-FPM são detectados no Windows/WSL; a instalação dos runtimes fica deliberadamente explícita para não instalar pacotes ou alterar o WSL sem autorização. Execute `devlan doctor` para ver o que falta.
+`devlan install` prepara os arquivos gerenciados e tenta criar a regra de firewall. Para uma máquina limpa, use o [bootstrap de instalação](docs/INSTALL.md): ele instala Go, WSL/Ubuntu, Caddy, PHP-FPM, extensões Laravel e Composer, compila a CLI e executa `devlan install`. Dependências dos projetos continuam explícitas; o bootstrap não executa `composer install` automaticamente.
+
+## Instalação rápida via curl
+
+Como este repositório ainda é privado, o comando abaixo usa o token da sessão do `gh`:
+
+```powershell
+$env:GH_TOKEN = gh auth token; $p = Join-Path $env:TEMP 'devlan-install.ps1'; curl.exe -fsSL -H "Authorization: Bearer $env:GH_TOKEN" https://raw.githubusercontent.com/dougkusanagi/dev-lan/master/scripts/install.ps1 -o $p; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p
+```
+
+O fluxo completo, opções e a variante para repositório público estão em [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Desenvolvimento
 

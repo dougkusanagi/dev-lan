@@ -106,6 +106,16 @@ gerados pelo núcleo. O caminho Windows é convertido para `/mnt/<drive>/...`
 quando o Caddy do WSL é validado ou recarregado, evitando concatenação de
 comandos shell.
 
+### Bootstrap da máquina
+
+`scripts/install.ps1` é um adaptador de instalação, separado do domínio. Ele
+baixa o código-fonte, instala Go e Caddy no Windows, chama
+`scripts/install-wsl.sh` com argumentos separados para instalar PHP-FPM,
+Composer, extensões Laravel e Caddy no WSL, compila `devlan.exe` e delega a
+configuração final para o comando `devlan install`. A seleção de versões é
+explícita; o script não instala dependências de projetos nem executa scripts
+encontrados nos diretórios registrados.
+
 ## Aplicação segura de configuração
 
 Toda mudança segue:

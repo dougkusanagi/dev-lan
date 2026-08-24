@@ -12,6 +12,15 @@ Go será usado para CLI, domínio, instalação, diagnósticos e processos. Moti
 
 O domínio não deve importar Wails, Cobra, Caddy ou detalhes de PowerShell diretamente. Essas integrações ficam em adaptadores para permitir testes e evolução.
 
+## Bootstrap e versão PHP do MVP
+
+O bootstrap é PowerShell no Windows e usa um script Bash fixo no WSL. Go é
+baixado da lista oficial de releases estáveis quando não está no PATH; Caddy
+usa o pacote oficial/distribuição ou o release oficial com checksum. PHP não
+tem uma modalidade LTS oficial: o MVP adota 8.4 por padrão, permite 8.3/8.5 e
+detecta a versão efetivamente instalada. O instalador não executa `composer
+install` nem qualquer script de projeto.
+
 ## Wails para a interface
 
 Wails ocupa para Go um papel semelhante ao Tauri para Rust: backend nativo e interface feita com tecnologias web, renderizada pela WebView do sistema.
