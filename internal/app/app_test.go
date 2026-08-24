@@ -55,3 +55,32 @@ func TestLinkRequiresLaravelMarkers(t *testing.T) {
 		t.Fatal("link deveria exigir markers Laravel")
 	}
 }
+
+func TestSetProjectTLSFindsParkedProject(t *testing.T) {
+	service := New(t.TempDir())
+	service.Detector = detect.Detector{Inspector: detect.StaticInspector{
+		Directories: map[string]bool{"/home/dev": true},
+		Children:    map[string][]string{"/home/dev": {"/home/dev/financeiro"}},
+		Files: map[string]bool{
+			"/home/dev/financeiro/artisan":          true,
+			"/home/dev/financeiro/public/index.php": true,
+		},
+	}}
+	service.WindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
+	service.WSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
+	if _, _, err := service.Park(context.Background(), "/home/dev"); err != nil {
+		t.Fatal(err)
+	}
+	if _, name, err := service.SetProjectTLS(context.Background(), "financeiro", false); err != nil {
+		t.Fatal(err)
+	} else if name != "financeiro" {
+		t.Fatalf("projeto inesperado: %s", name)
+	}
+	cfg, err := service.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Projects) != 1 || cfg.Projects[0].Secure == nil || *cfg.Projects[0].Secure {
+		t.Fatalf("preferência TLS não persistida: %#v", cfg.Projects)
+	}
+}

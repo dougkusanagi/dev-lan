@@ -60,7 +60,7 @@ para aplicar atualizações do DevLAN.
 Depois da instalação, HTTPS é opcional:
 
 ```powershell
-devlan secure
+devlan secure NAME|PATH
 ```
 
 Execute esse comando em PowerShell como Administrador na primeira ativação para

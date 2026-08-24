@@ -13,6 +13,7 @@ import (
 
 	"github.com/dougkusanagi/dev-lan/internal/app"
 	"github.com/dougkusanagi/dev-lan/internal/domain"
+	"github.com/dougkusanagi/dev-lan/internal/platform"
 )
 
 const version = "0.1.0-mvp"
@@ -47,6 +48,10 @@ func run(args []string) error {
 	defer cancel()
 	command := commandArgs[0]
 	args = commandArgs[1:]
+	if containsHelp(args) {
+		printCommandUsage(command)
+		return nil
+	}
 
 	switch command {
 	case "install":
@@ -181,20 +186,20 @@ func run(args []string) error {
 		return nil
 
 	case "secure", "unsecure":
-		if len(args) != 0 {
-			return fmt.Errorf("uso: devlan %s", command)
+		if len(args) != 1 {
+			return fmt.Errorf("uso: devlan %s NAME|PATH", command)
 		}
 		enabled := command == "secure"
-		result, err := service.SetTLS(ctx, enabled)
+		result, projectName, err := service.SetProjectTLS(ctx, args[0], enabled)
 		printWarnings(result.Warnings)
 		if err != nil {
 			return err
 		}
 		if enabled {
-			fmt.Println("SSL ativado com a CA interna do Caddy; HTTP agora redireciona para HTTPS.")
+			fmt.Printf("SSL ativado para %s com a CA interna do Caddy.\n", projectName)
 			fmt.Println("Outros dispositivos da LAN precisam confiar na CA local do DevLAN.")
 		} else {
-			fmt.Println("SSL desativado; os projetos voltaram a usar HTTP.")
+			fmt.Printf("SSL desativado para %s.\n", projectName)
 		}
 		return nil
 
@@ -326,30 +331,30 @@ func printProjects(service *app.App) error {
 	if err != nil {
 		return err
 	}
-	urls, err := service.URLs(context.Background())
-	if err != nil {
-		return err
-	}
 	effective, err := service.EffectiveConfig(context.Background(), cfg)
 	if err != nil {
 		return err
+	}
+	host := cfg.LANAddress
+	if host == "auto" {
+		host, err = platform.LANAddress()
+		if err != nil {
+			host = "localhost"
+		}
 	}
 	if len(effective.Projects) == 0 {
 		fmt.Println("Nenhum projeto registrado.")
 		return nil
 	}
 	rows := make([]projectRow, 0, len(effective.Projects))
-	for index, project := range effective.Projects {
+	for _, project := range effective.Projects {
 		resolved, err := effective.Resolve(project.Name)
 		if err != nil {
 			return err
 		}
-		url := "-"
-		if index < len(urls) {
-			url = urls[index]
-		}
+		url := resolved.URL(host, cfg.WindowsPort, cfg.HTTPSPort, effective.SecureProject(project))
 		rows = append(rows, projectRow{
-			Name: project.Name, Mode: string(resolved.Mode), Source: string(resolved.Source), SSL: sslState(cfg.TLSEnabled), URL: url, Path: project.Path,
+			Name: project.Name, Mode: string(resolved.Mode), Source: string(resolved.Source), SSL: sslState(cfg.SecureProject(project)), URL: url, Path: project.Path,
 		})
 	}
 	return writeProjectTable(os.Stdout, rows)
@@ -423,8 +428,8 @@ Uso:
 
 Fundação e registro:
   install [--no-firewall] [--windows-port PORT]
-                              inicializa arquivos gerenciados
-  uninstall                  remove arquivos gerenciados, preserva projetos
+                              inicializa arquivos gerenciados (Administrador*)
+  uninstall                  remove arquivos gerenciados, preserva projetos (Administrador*)
   link NAME PATH             registra um projeto Laravel
   unlink NAME                remove registro e rota
   links                      lista projetos registrados
@@ -435,8 +440,8 @@ Fundação e registro:
 Operação:
   status                     mostra componentes, projetos e URLs
   reload                     valida/aplica configurações e recarrega Caddy
-  secure                     ativa HTTPS com a CA interna do Caddy
-  unsecure                   desativa HTTPS e volta a usar HTTP
+  secure NAME|PATH           ativa HTTPS para um projeto (Administrador*)
+  unsecure NAME|PATH         desativa HTTPS para um projeto
   doctor [NAME]              diagnostica host, runtime e projeto
   logs [COMPONENT]           mostra logs gerenciados
   open [NAME]                abre URL ou mostra o dashboard textual
@@ -445,5 +450,49 @@ Operação:
 
 Variável de ambiente:
   DEVLAN_HOME                diretório de dados (padrão: %LOCALAPPDATA%\DevLAN)
+
+* Administrador é necessário para criar/remover regras de firewall e confiar
+  na CA interna. Os demais comandos funcionam normalmente sem elevação.
 `)
+}
+
+func containsHelp(args []string) bool {
+	for _, argument := range args {
+		if argument == "-h" || argument == "--help" {
+			return true
+		}
+	}
+	return false
+}
+
+func printCommandUsage(command string) {
+	usages := map[string]string{
+		"install":   "uso: devlan install [--no-firewall] [--windows-port PORT]",
+		"uninstall": "uso: devlan uninstall",
+		"link":      "uso: devlan link NAME PATH",
+		"unlink":    "uso: devlan unlink NAME",
+		"links":     "uso: devlan links",
+		"park":      "uso: devlan park PATH",
+		"unpark":    "uso: devlan unpark PATH",
+		"parked":    "uso: devlan parked",
+		"status":    "uso: devlan status",
+		"reload":    "uso: devlan reload",
+		"secure":    "uso: devlan secure NAME|PATH",
+		"unsecure":  "uso: devlan unsecure NAME|PATH",
+		"doctor":    "uso: devlan doctor [NAME]",
+		"logs":      "uso: devlan logs [COMPONENT]",
+		"open":      "uso: devlan open [NAME]",
+		"mode":      "uso: devlan mode default MODE | devlan mode NAME MODE|inherit",
+	}
+	if usage, ok := usages[command]; ok {
+		fmt.Printf("%s\n\nOpções:\n  -h, --help    mostra esta ajuda\n", usage)
+		switch command {
+		case "install", "uninstall":
+			fmt.Println("\nAdministrador: necessário para criar ou remover a regra de firewall.")
+		case "secure":
+			fmt.Println("\nAdministrador: necessário na primeira ativação para liberar a porta HTTPS no firewall e confiar na CA interna.")
+		}
+		return
+	}
+	printUsage()
 }

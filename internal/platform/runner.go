@@ -115,6 +115,18 @@ func (r WSLRunner) Exists(ctx context.Context, path string) (bool, error) {
 	return false, nil
 }
 
+// LaravelMarkers checks both Laravel marker files in one WSL process. Starting
+// wsl.exe is comparatively expensive, so callers that discover many projects
+// should prefer this over two individual Exists calls.
+func (r WSLRunner) LaravelMarkers(ctx context.Context, projectPath string) (bool, bool, error) {
+	output, err := r.Run(ctx, "/bin/sh", "-c", `if [ -f "$1/artisan" ]; then printf 1; else printf 0; fi; if [ -f "$1/public/index.php" ]; then printf 1; else printf 0; fi`, "devlan", projectPath)
+	if err != nil {
+		return false, false, err
+	}
+	markers := strings.TrimSpace(output)
+	return len(markers) == 2 && markers[0] == '1', len(markers) == 2 && markers[1] == '1', nil
+}
+
 func (r WSLRunner) IsSocket(ctx context.Context, path string) (bool, error) {
 	_, err := r.Run(ctx, "/usr/bin/test", "-S", path)
 	if err == nil {

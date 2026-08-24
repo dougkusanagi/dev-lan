@@ -112,8 +112,8 @@ devlan unpark PATH              remove a pasta estacionada
 devlan status                   mostra componentes, projetos e URLs
 devlan open [NAME]              abre projeto ou dashboard textual
 devlan reload                   valida e aplica configurações
-devlan secure                   ativa HTTPS e redireciona HTTP para HTTPS
-devlan unsecure                 desativa HTTPS e volta a publicar por HTTP
+devlan secure NAME|PATH         ativa HTTPS para um projeto
+devlan unsecure NAME|PATH       desativa HTTPS para um projeto
 devlan doctor [NAME]            diagnóstico completo ou por projeto
 devlan logs [COMPONENT]         exibe logs relevantes
 devlan mode default php         define padrão do MVP
@@ -123,9 +123,9 @@ devlan mode NAME php|inherit    sobrescreve ou restaura herança
 ## HTTPS na LAN
 
 ```powershell
-devlan secure
+devlan secure NAME|PATH
 devlan links
-devlan unsecure
+devlan unsecure NAME|PATH
 ```
 
 `secure` habilita a porta 443 no Caddy do Windows, emite um certificado para o

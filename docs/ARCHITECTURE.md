@@ -86,8 +86,8 @@ GET http://IP/financeiro/clientes
 Quando `tls_enabled = true`, a primeira etapa ocorre em
 `https://IP/financeiro/clientes`; uma requisição HTTP recebe redirect 308. TLS
 é global porque a negociação do certificado acontece antes de o Caddy conhecer
-o subpath do projeto. Por isso `secure`/`unsecure` não recebem um nome de
-projeto e a coluna SSL de `links` repete o estado efetivo da borda.
+o subpath do projeto. Ainda assim, `secure`/`unsecure` recebem o nome ou caminho
+do projeto e controlam os redirects e a URL anunciada para cada rota.
 
 O Caddy armazena a CA e a chave privada no perfil do usuário Windows. Somente o
 certificado raiz público pode ser copiado para clientes LAN. A chave privada e

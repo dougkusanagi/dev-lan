@@ -42,6 +42,9 @@ func TestRenderWSLIsDeterministicAndSorted(t *testing.T) {
 	if !strings.Contains(first, "env SCRIPT_NAME /alpha/index.php") {
 		t.Fatal("subdiretório FastCGI ausente")
 	}
+	if !strings.Contains(first, "env HTTPS {http.request.header.X-DevLAN-HTTPS}") {
+		t.Fatal("protocolo HTTPS original não é propagado ao FastCGI")
+	}
 	if !strings.Contains(first, "header_down Location ^/alpha/(.*)$ /$1") ||
 		!strings.Contains(first, "header_down Location ^/(.*)$ /alpha/$1") {
 		t.Fatal("normalização de redirects relativos ausente")
@@ -74,12 +77,33 @@ func TestRenderWindowsWithInternalTLS(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, expected := range []string{
-		"http://:80", "https://192.168.10.77:443", "tls internal",
+		"default_sni 192.168.10.77", "http://:80", "https://192.168.10.77:443", "tls internal",
 		"redir https://{http.request.host}{http.request.uri} 308",
+		"header_up X-DevLAN-HTTPS on", "header_up -X-DevLAN-HTTPS",
 	} {
 		if !strings.Contains(result, expected) {
 			t.Fatalf("configuração TLS não contém %q:\n%s", expected, result)
 		}
+	}
+}
+
+func TestRenderWindowsRedirectsOnlyProjectsWithTLSPreference(t *testing.T) {
+	cfg := domain.NewConfig()
+	cfg.TLSEnabled = true
+	secure := true
+	cfg.Projects = []domain.Project{
+		{Name: "secure", Path: "/home/dev/secure", Secure: &secure},
+		{Name: "plain", Path: "/home/dev/plain"},
+	}
+	result, err := RenderWindows(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, "@devlan_secure_0 path /secure /secure/*") {
+		t.Fatalf("redirect do projeto seguro ausente:\n%s", result)
+	}
+	if strings.Contains(result, "path /plain /plain/*") {
+		t.Fatalf("projeto sem preferência TLS não deveria receber redirect:\n%s", result)
 	}
 }
 

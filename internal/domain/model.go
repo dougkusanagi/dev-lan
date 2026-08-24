@@ -47,9 +47,10 @@ const (
 )
 
 type Project struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
-	Mode *Mode  `json:"mode,omitempty"`
+	Name   string `json:"name"`
+	Path   string `json:"path"`
+	Mode   *Mode  `json:"mode,omitempty"`
+	Secure *bool  `json:"secure,omitempty"`
 }
 
 type Park struct {
@@ -75,6 +76,27 @@ type ResolvedProject struct {
 	Mode    Mode
 	Source  ModeSource
 	Park    *Park
+}
+
+func (r ResolvedProject) Secure(global bool) bool {
+	if r.Project.Secure != nil {
+		return *r.Project.Secure
+	}
+	return global
+}
+
+// SecureProject supports the legacy global TLS flag while allowing a config
+// containing project-level preferences to opt in one project at a time.
+func (c Config) SecureProject(project Project) bool {
+	for _, candidate := range c.Projects {
+		if candidate.Secure != nil {
+			return project.Secure != nil && *project.Secure
+		}
+	}
+	if project.Secure != nil {
+		return *project.Secure
+	}
+	return c.TLSEnabled
 }
 
 var projectNamePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
@@ -380,7 +402,7 @@ func (r ResolvedProject) URL(host string, httpPort, httpsPort int, secure bool) 
 	if address == "" || address == "auto" {
 		address = "localhost"
 	}
-	if secure {
+	if r.Secure(secure) {
 		if httpsPort == 443 {
 			return fmt.Sprintf("https://%s/%s", address, r.Project.Name)
 		}

@@ -29,9 +29,16 @@ type Detector struct {
 	Inspector Inspector
 }
 
+type LaravelInspector interface {
+	DetectLaravel(ctx context.Context, projectPath string) (LaravelResult, error)
+}
+
 func (d Detector) Detect(ctx context.Context, projectPath string) (LaravelResult, error) {
 	if d.Inspector == nil {
 		return LaravelResult{}, fmt.Errorf("detector sem inspector configurado")
+	}
+	if inspector, ok := d.Inspector.(LaravelInspector); ok {
+		return inspector.DetectLaravel(ctx, projectPath)
 	}
 	artisan, err := d.Inspector.Exists(ctx, projectPath, "artisan")
 	if err != nil {
@@ -126,6 +133,28 @@ func (s SmartInspector) ListDirectories(ctx context.Context, projectPath string)
 		return s.WSL.ListDirectories(ctx, projectPath)
 	}
 	return s.Local.ListDirectories(ctx, projectPath)
+}
+
+func (s SmartInspector) DetectLaravel(ctx context.Context, projectPath string) (LaravelResult, error) {
+	if s.usesWSL(projectPath) {
+		artisan, index, err := s.WSL.LaravelMarkers(ctx, projectPath)
+		if err != nil {
+			return LaravelResult{}, err
+		}
+		result := LaravelResult{ProjectPath: projectPath, Artisan: artisan, PublicIndex: index}
+		if artisan && index {
+			return result, nil
+		}
+		missing := make([]string, 0, 2)
+		if !artisan {
+			missing = append(missing, "artisan")
+		}
+		if !index {
+			missing = append(missing, "public/index.php")
+		}
+		return result, fmt.Errorf("projeto não parece Laravel; ausente: %s", strings.Join(missing, ", "))
+	}
+	return Detector{Inspector: s.Local}.Detect(ctx, projectPath)
 }
 
 // StaticInspector makes service tests independent of the host filesystem.

@@ -47,16 +47,46 @@ func RenderWindows(cfg domain.Config) (string, error) {
 	b.WriteString(generatedHeader)
 	b.WriteString("{\n")
 	fmt.Fprintf(&b, "    admin %s\n", windowsAdminAddress)
-	b.WriteString("    auto_https off\n")
+	if cfg.TLSEnabled {
+		// Keep certificate automation enabled for `tls internal`, while leaving
+		// HTTP-to-HTTPS redirects under DevLAN's per-project routing policy.
+		b.WriteString("    auto_https disable_redirects\n")
+	} else {
+		b.WriteString("    auto_https off\n")
+	}
+	if cfg.TLSEnabled {
+		host := cfg.LANAddress
+		if host == "" || host == "auto" {
+			host = "localhost"
+		}
+		// Clients connecting to an IP address generally omit SNI. Without a
+		// default, Caddy cannot select the internally-issued certificate.
+		fmt.Fprintf(&b, "    default_sni %s\n", host)
+	}
 	b.WriteString("}\n\n")
 	if cfg.TLSEnabled {
 		fmt.Fprintf(&b, "http://:%d {\n", cfg.WindowsPort)
 		b.WriteString("    bind 0.0.0.0\n")
-		if cfg.HTTPSPort == 443 {
-			b.WriteString("    redir https://{http.request.host}{http.request.uri} 308\n")
+		secureNames := secureProjectNames(cfg)
+		if len(secureNames) == 0 {
+			if cfg.HTTPSPort == 443 {
+				b.WriteString("    redir https://{http.request.host}{http.request.uri} 308\n")
+			} else {
+				fmt.Fprintf(&b, "    redir https://{http.request.host}:%d{http.request.uri} 308\n", cfg.HTTPSPort)
+			}
 		} else {
-			fmt.Fprintf(&b, "    redir https://{http.request.host}:%d{http.request.uri} 308\n", cfg.HTTPSPort)
+			for index, name := range secureNames {
+				fmt.Fprintf(&b, "    @devlan_secure_%d path /%s /%s/*\n", index, name, name)
+				if cfg.HTTPSPort == 443 {
+					fmt.Fprintf(&b, "    redir @devlan_secure_%d https://{http.request.host}{http.request.uri} 308\n", index)
+				} else {
+					fmt.Fprintf(&b, "    redir @devlan_secure_%d https://{http.request.host}:%d{http.request.uri} 308\n", index, cfg.HTTPSPort)
+				}
+			}
 		}
+		fmt.Fprintf(&b, "    reverse_proxy 127.0.0.1:%d {\n", cfg.WSLPort)
+		b.WriteString("        header_up -X-DevLAN-HTTPS\n")
+		b.WriteString("    }\n")
 		b.WriteString("}\n\n")
 		host := cfg.LANAddress
 		if host == "" || host == "auto" {
@@ -66,7 +96,9 @@ func RenderWindows(cfg domain.Config) (string, error) {
 		b.WriteString("    bind 0.0.0.0\n")
 		b.WriteString("    tls internal\n")
 		b.WriteString("    encode gzip\n")
-		fmt.Fprintf(&b, "    reverse_proxy 127.0.0.1:%d\n", cfg.WSLPort)
+		fmt.Fprintf(&b, "    reverse_proxy 127.0.0.1:%d {\n", cfg.WSLPort)
+		b.WriteString("        header_up X-DevLAN-HTTPS on\n")
+		b.WriteString("    }\n")
 		b.WriteString("}\n")
 		return b.String(), nil
 	}
@@ -76,6 +108,28 @@ func RenderWindows(cfg domain.Config) (string, error) {
 	fmt.Fprintf(&b, "    reverse_proxy 127.0.0.1:%d\n", cfg.WSLPort)
 	b.WriteString("}\n")
 	return b.String(), nil
+}
+
+func secureProjectNames(cfg domain.Config) []string {
+	if len(cfg.Projects) == 0 {
+		return nil
+	}
+	hasPreference := false
+	for _, project := range cfg.Projects {
+		if project.Secure != nil {
+			hasPreference = true
+		}
+	}
+	if !hasPreference {
+		return nil // legacy global TLS configuration
+	}
+	names := make([]string, 0, len(cfg.Projects))
+	for _, project := range cfg.Projects {
+		if project.Secure != nil && *project.Secure {
+			names = append(names, project.Name)
+		}
+	}
+	return names
 }
 
 // RenderWSL generates one deterministic route per explicitly registered
@@ -107,6 +161,7 @@ func RenderWSL(cfg domain.Config) (string, error) {
 		fmt.Fprintf(&b, "        php_fastcgi unix/%s {\n", cfg.PHPFPMOsocket)
 		fmt.Fprintf(&b, "            env REQUEST_URI /%s{vars.devlan_request_uri}\n", name)
 		fmt.Fprintf(&b, "            env SCRIPT_NAME /%s/index.php\n", name)
+		b.WriteString("            env HTTPS {http.request.header.X-DevLAN-HTTPS}\n")
 		fmt.Fprintf(&b, "            header_down Location ^/%s/(.*)$ /$1\n", name)
 		fmt.Fprintf(&b, "            header_down Location ^/(.*)$ /%s/$1\n", name)
 		b.WriteString("        }\n")
@@ -127,6 +182,7 @@ func RenderWSL(cfg domain.Config) (string, error) {
 		fmt.Fprintf(&b, "        php_fastcgi unix/%s {\n", cfg.PHPFPMOsocket)
 		fmt.Fprintf(&b, "            env REQUEST_URI /%s{vars.devlan_request_uri}\n", name)
 		fmt.Fprintf(&b, "            env SCRIPT_NAME /%s/index.php\n", name)
+		b.WriteString("            env HTTPS {http.request.header.X-DevLAN-HTTPS}\n")
 		fmt.Fprintf(&b, "            header_down Location ^/%s/(.*)$ /$1\n", name)
 		fmt.Fprintf(&b, "            header_down Location ^/(.*)$ /%s/$1\n", name)
 		b.WriteString("        }\n")

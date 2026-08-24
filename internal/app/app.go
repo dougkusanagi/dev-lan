@@ -256,6 +256,80 @@ func (a *App) SetTLS(ctx context.Context, enabled bool) (ApplyResult, error) {
 	return result, nil
 }
 
+// SetProjectTLS changes the HTTPS preference of one registered project. The
+// Windows edge still owns the certificate, but the project selector keeps the
+// command and the advertised URL scoped to the requested project.
+func (a *App) SetProjectTLS(ctx context.Context, selector string, enabled bool) (ApplyResult, string, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return ApplyResult{}, "", err
+	}
+	selector = strings.TrimSpace(selector)
+	effective, err := a.EffectiveConfig(ctx, cfg)
+	if err != nil {
+		return ApplyResult{}, "", err
+	}
+	selected, found := projectBySelector(effective.Projects, selector)
+	if !found {
+		return ApplyResult{}, "", fmt.Errorf("projeto não encontrado: %s", selector)
+	}
+	projectIndex := -1
+	for i := range cfg.Projects {
+		if cfg.Projects[i].Name == selected.Name || cfg.Projects[i].Path == selected.Path {
+			projectIndex = i
+			break
+		}
+	}
+	if projectIndex < 0 {
+		// A parked project is discovered rather than stored. Persist it once its
+		// security preference becomes explicit, so the choice survives later
+		// commands and does not require a separate `link` step.
+		cfg.Projects = append(cfg.Projects, selected)
+		projectIndex = len(cfg.Projects) - 1
+	}
+	cfg.Projects[projectIndex].Secure = &enabled
+	if enabled {
+		cfg.TLSEnabled = true
+	} else {
+		cfg.TLSEnabled = false
+		for _, project := range cfg.Projects {
+			if project.Secure != nil && *project.Secure {
+				cfg.TLSEnabled = true
+				break
+			}
+		}
+	}
+	result, err := a.saveAndApply(ctx, cfg, true)
+	if err != nil {
+		return result, cfg.Projects[projectIndex].Name, err
+	}
+	if enabled {
+		if err := platform.EnsureFirewall(ctx, cfg.WindowsPort, cfg.HTTPSPort); err != nil && runtime.GOOS == "windows" {
+			result.Warnings = append(result.Warnings, "não foi possível atualizar o firewall; execute o comando em PowerShell como Administrador")
+		}
+		if err := a.WindowsCaddy.Trust(ctx); err != nil {
+			result.Warnings = append(result.Warnings, "não foi possível confiar na CA local automaticamente; execute `caddy trust` como Administrador")
+		}
+	}
+	return result, cfg.Projects[projectIndex].Name, nil
+}
+
+func projectBySelector(projects []domain.Project, selector string) (domain.Project, bool) {
+	for _, project := range projects {
+		if project.Name == selector || project.Path == selector {
+			return project, true
+		}
+	}
+	if normalized, err := domain.NormalizePath(selector); err == nil {
+		for _, project := range projects {
+			if project.Path == normalized {
+				return project, true
+			}
+		}
+	}
+	return domain.Project{}, false
+}
+
 func (a *App) Reload(ctx context.Context) (ApplyResult, error) {
 	cfg, err := a.Store.Load()
 	if err != nil {
@@ -538,7 +612,7 @@ func (a *App) URL(ctx context.Context, projectName string) (string, error) {
 			host = "localhost"
 		}
 	}
-	return resolved.URL(host, cfg.WindowsPort, cfg.HTTPSPort, cfg.TLSEnabled), nil
+	return resolved.URL(host, cfg.WindowsPort, cfg.HTTPSPort, cfg.SecureProject(resolved.Project)), nil
 }
 
 func (a *App) URLs(ctx context.Context) ([]string, error) {
@@ -563,7 +637,7 @@ func (a *App) URLs(ctx context.Context) ([]string, error) {
 	}
 	urls := make([]string, 0, len(resolved))
 	for _, item := range resolved {
-		urls = append(urls, item.URL(host, cfg.WindowsPort, cfg.HTTPSPort, cfg.TLSEnabled))
+		urls = append(urls, item.URL(host, cfg.WindowsPort, cfg.HTTPSPort, effective.SecureProject(item.Project)))
 	}
 	return urls, nil
 }

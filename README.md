@@ -45,7 +45,7 @@ devlan park /home/silver/dev
 devlan link financeiro /home/silver/dev/financeiro
 devlan status
 devlan doctor
-devlan secure
+devlan secure financeiro
 devlan open financeiro
 ```
 
@@ -55,7 +55,7 @@ Resultado:
 https://192.168.1.50/financeiro
 ```
 
-Sem `devlan secure`, a URL permanece `http://192.168.1.50/financeiro`.
+Sem `devlan secure financeiro`, a URL permanece `http://192.168.1.50/financeiro`.
 
 ## Documentos
 
@@ -83,8 +83,8 @@ O MVP está implementado como uma CLI Go em `cmd/devlan`. O núcleo cobre:
 - detecção sem executar scripts, exigindo `artisan` e `public/index.php`;
 - Caddyfiles Windows/WSL determinísticos, com rota por subpath e contexto
   FastCGI compatível com redirects e rotas Laravel;
-- HTTPS opcional por CA interna com `devlan secure` e retorno a HTTP com
-  `devlan unsecure`;
+- HTTPS opcional por CA interna, selecionando o projeto com `devlan secure
+  NAME|PATH`, e retorno a HTTP com `devlan unsecure NAME|PATH`;
 - aplicação por arquivo temporário, validação quando o Caddy está disponível e rollback da última configuração funcional;
 - `install`, `uninstall`, `status`, `reload`, `doctor`, `logs`, `open` e os comandos de registro;
 - regra de firewall DevLAN limitada ao perfil privado e à sub-rede local.

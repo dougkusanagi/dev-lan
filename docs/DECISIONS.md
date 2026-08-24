@@ -77,13 +77,13 @@ Manter dois Caddys preserva fronteiras:
 
 O Caddy do Windows deve ter configuração quase estática. O do WSL pode ser regenerado conforme os projetos.
 
-## TLS global por CA interna
+## TLS por projeto na borda, com CA interna
 
 No modo de rota por IP e subpath, TLS é propriedade da borda Windows, não de
-um projeto. `devlan secure` portanto ativa HTTPS globalmente, usa `tls internal`
-do Caddy e muda todas as URLs anunciadas para `https`; `devlan unsecure`
-restaura HTTP. Uma coluna por projeto continua útil para tornar o estado
-visível, mas não representa certificados independentes por path.
+um projeto. `devlan secure NAME|PATH` ativa HTTPS para aquele projeto e
+`devlan unsecure NAME|PATH` restaura HTTP. O listener e a CA continuam globais
+no Caddy da borda, mas redirects e URLs anunciadas são por projeto; isso não
+representa certificados independentes por path.
 
 Uma autoridade pública não é pressuposta para IPs privados. A CA interna
 permite criptografia na LAN, porém cada dispositivo cliente precisa confiar no
