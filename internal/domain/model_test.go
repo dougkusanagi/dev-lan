@@ -1,6 +1,9 @@
 package domain
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestResolveModePriority(t *testing.T) {
 	parkMode := ModeDev
@@ -186,4 +189,115 @@ func TestStaticDocumentRootAndSPAFallback(t *testing.T) {
 		t.Fatal("SPA fallback configurado deveria ser false")
 	}
 }
+
+func TestRouteModeResolutionAndURL(t *testing.T) {
+	cfg := NewConfig()
+	portMode := RouteModePort
+	hostMode := RouteModeHost
+	customPort := 8085
+	customHost := "painel.local"
+
+	cfg.Projects = []Project{
+		{Name: "subpath-app", Path: "/home/dev/subpath-app"},
+		{Name: "port-app", Path: "/home/dev/port-app", RouteMode: &portMode, RoutePort: &customPort},
+		{Name: "host-app", Path: "/home/dev/host-app", RouteMode: &hostMode, RouteHost: &customHost},
+		{Name: "auto-host", Path: "/home/dev/auto-host", RouteMode: &hostMode},
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+
+	p1, err := cfg.Resolve("subpath-app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p1.RouteMode != RouteModePath {
+		t.Fatalf("esperado route mode path: %s", p1.RouteMode)
+	}
+	if got := p1.URL("192.168.1.50", 80, 443, false); got != "http://192.168.1.50/subpath-app" {
+		t.Fatalf("URL path inesperada: %s", got)
+	}
+
+	p2, err := cfg.Resolve("port-app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p2.RouteMode != RouteModePort || p2.RoutePort != 8085 {
+		t.Fatalf("esperado route mode port 8085: %s, %d", p2.RouteMode, p2.RoutePort)
+	}
+	if got := p2.URL("192.168.1.50", 80, 443, false); got != "http://192.168.1.50:8085/" {
+		t.Fatalf("URL port inesperada: %s", got)
+	}
+
+	p3, err := cfg.Resolve("host-app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p3.RouteMode != RouteModeHost || p3.RouteHost != "painel.local" {
+		t.Fatalf("esperado route mode host painel.local: %s, %s", p3.RouteMode, p3.RouteHost)
+	}
+	if got := p3.URL("192.168.1.50", 80, 443, false); got != "http://painel.local/" {
+		t.Fatalf("URL host inesperada: %s", got)
+	}
+
+	p4, err := cfg.Resolve("auto-host")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p4.RouteHost != "auto-host.lan" {
+		t.Fatalf("esperado route host auto-host.lan: %s", p4.RouteHost)
+	}
+}
+
+func TestAllowlistNormalizationAndEffective(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Allowlist = []string{"192.168.1.0/24", "10.0.0.1"}
+	cfg.Projects = []Project{
+		{Name: "app1", Path: "/home/dev/app1"},
+		{Name: "app2", Path: "/home/dev/app2", Allowlist: []string{"172.16.0.0/16"}},
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Allowlist[0] != "10.0.0.1/32" && cfg.Allowlist[1] != "10.0.0.1/32" {
+		t.Fatalf("normalização de IP único falhou: %#v", cfg.Allowlist)
+	}
+	app1, _ := cfg.Project("app1")
+	app2, _ := cfg.Project("app2")
+	if len(cfg.EffectiveAllowlist(app1)) != 2 {
+		t.Fatalf("app1 deveria herdar allowlist global: %#v", cfg.EffectiveAllowlist(app1))
+	}
+	if got := cfg.EffectiveAllowlist(app2); len(got) != 1 || got[0] != "172.16.0.0/16" {
+		t.Fatalf("app2 deveria ter sua própria allowlist: %#v", got)
+	}
+}
+
+func TestExposureExpiration(t *testing.T) {
+	cfg := NewConfig()
+	future := "2030-01-01T00:00:00Z"
+	past := "2020-01-01T00:00:00Z"
+	cfg.Projects = []Project{
+		{Name: "future-app", Path: "/home/dev/future-app", ExposedUntil: &future},
+		{Name: "past-app", Path: "/home/dev/past-app", ExposedUntil: &past},
+		{Name: "permanent-app", Path: "/home/dev/permanent-app"},
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 24, 18, 0, 0, 0, time.UTC)
+	futureApp, _ := cfg.Project("future-app")
+	pastApp, _ := cfg.Project("past-app")
+	permApp, _ := cfg.Project("permanent-app")
+
+	if cfg.IsExposureExpired(futureApp, now) {
+		t.Fatal("future-app não deveria estar expirado")
+	}
+	if !cfg.IsExposureExpired(pastApp, now) {
+		t.Fatal("past-app deveria estar expirado")
+	}
+	if cfg.IsExposureExpired(permApp, now) {
+		t.Fatal("permanent-app não deveria estar expirado")
+	}
+}
+
 

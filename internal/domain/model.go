@@ -3,6 +3,7 @@ package domain
 import (
 	"errors"
 	"fmt"
+	"net"
 	pathpkg "path"
 	"regexp"
 	"sort"
@@ -39,6 +40,36 @@ func ParseMode(value string) (Mode, error) {
 	return mode, nil
 }
 
+type RouteMode string
+
+const (
+	RouteModePath RouteMode = "path"
+	RouteModePort RouteMode = "port"
+	RouteModeHost RouteMode = "host"
+)
+
+func (r RouteMode) Valid() bool {
+	switch r {
+	case RouteModePath, RouteModePort, RouteModeHost:
+		return true
+	default:
+		return false
+	}
+}
+
+func ParseRouteMode(value string) (RouteMode, error) {
+	mode := RouteMode(strings.ToLower(strings.TrimSpace(value)))
+	if !mode.Valid() {
+		return "", fmt.Errorf("modo de rota inválido %q (use path, port ou host)", value)
+	}
+	return mode, nil
+}
+
+type AuthUser struct {
+	Username     string `json:"username"`
+	PasswordHash string `json:"password_hash"`
+}
+
 type ModeSource string
 
 const (
@@ -64,37 +95,54 @@ type Project struct {
 	DevFramework        *string              `json:"dev_framework,omitempty"`
 	PackageManager      *string              `json:"package_manager,omitempty"`
 	IdleTimeout         *string              `json:"idle_timeout,omitempty"`
+	RouteMode           *RouteMode           `json:"route_mode,omitempty"`
+	RoutePort           *int                 `json:"route_port,omitempty"`
+	RouteHost           *string              `json:"route_host,omitempty"`
+	Allowlist           []string             `json:"allowlist,omitempty"`
+	ExposedUntil        *string              `json:"exposed_until,omitempty"`
+	AuthEnabled         *bool                `json:"auth_enabled,omitempty"`
+	AuthUsers           []AuthUser           `json:"auth_users,omitempty"`
 }
 
 type Park struct {
-	Path string `json:"path"`
-	Mode *Mode  `json:"mode,omitempty"`
+	Path      string     `json:"path"`
+	Mode      *Mode      `json:"mode,omitempty"`
+	RouteMode *RouteMode `json:"route_mode,omitempty"`
+	Allowlist []string   `json:"allowlist,omitempty"`
 }
 
 type Config struct {
-	Version           int                `json:"version"`
-	DefaultMode       Mode               `json:"default_mode"`
-	LANAddress        string             `json:"lan_address"`
-	WindowsPort       int                `json:"windows_port"`
-	HTTPSPort         int                `json:"https_port"`
-	TLSEnabled        bool               `json:"tls_enabled"`
-	WSLPort           int                `json:"wsl_port"`
-	PHPFPMOsocket     string             `json:"php_fpm_socket"`
-	PHPDefaultVersion string             `json:"php_default_version"`
-	PHPVersions       []PHPVersionConfig `json:"php_versions"`
-	PHPFPMPool        PHPFPMPoolConfig   `json:"php_fpm_pool"`
-	Composer          ComposerConfig     `json:"composer"`
-	DevBasePort       int                `json:"dev_base_port,omitempty"`
-	DefaultIdleTimeout string            `json:"default_idle_timeout,omitempty"`
-	Projects          []Project          `json:"projects"`
-	Parks             []Park             `json:"parks"`
+	Version            int                `json:"version"`
+	DefaultMode        Mode               `json:"default_mode"`
+	DefaultRouteMode   RouteMode          `json:"default_route_mode,omitempty"`
+	RouteBasePort      int                `json:"route_base_port,omitempty"`
+	DomainSuffix       string             `json:"domain_suffix,omitempty"`
+	LANAddress         string             `json:"lan_address"`
+	WindowsPort        int                `json:"windows_port"`
+	HTTPSPort          int                `json:"https_port"`
+	TLSEnabled         bool               `json:"tls_enabled"`
+	WSLPort            int                `json:"wsl_port"`
+	PHPFPMOsocket      string             `json:"php_fpm_socket"`
+	PHPDefaultVersion  string             `json:"php_default_version"`
+	PHPVersions        []PHPVersionConfig `json:"php_versions"`
+	PHPFPMPool         PHPFPMPoolConfig   `json:"php_fpm_pool"`
+	Composer           ComposerConfig     `json:"composer"`
+	DevBasePort        int                `json:"dev_base_port,omitempty"`
+	DefaultIdleTimeout string             `json:"default_idle_timeout,omitempty"`
+	Allowlist          []string           `json:"allowlist,omitempty"`
+	AuthUsers          []AuthUser         `json:"auth_users,omitempty"`
+	Projects           []Project          `json:"projects"`
+	Parks              []Park             `json:"parks"`
 }
 
 type ResolvedProject struct {
-	Project Project
-	Mode    Mode
-	Source  ModeSource
-	Park    *Park
+	Project   Project
+	Mode      Mode
+	Source    ModeSource
+	Park      *Park
+	RouteMode RouteMode
+	RoutePort int
+	RouteHost string
 }
 
 func (r ResolvedProject) Secure(global bool) bool {
@@ -312,20 +360,56 @@ func uniqueStrings(values []string) []string {
 	return result
 }
 
+func NormalizeCIDR(value string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", errors.New("CIDR ou endereço IP não pode ser vazio")
+	}
+	candidate := trimmed
+	if !strings.Contains(candidate, "/") {
+		if strings.Contains(candidate, ":") {
+			candidate += "/128"
+		} else {
+			candidate += "/32"
+		}
+	}
+	_, ipNet, err := net.ParseCIDR(candidate)
+	if err != nil {
+		return "", fmt.Errorf("CIDR ou endereço IP inválido: %q", value)
+	}
+	return ipNet.String(), nil
+}
+
+func NormalizeHost(value string) (string, error) {
+	host := strings.ToLower(strings.TrimSpace(value))
+	if host == "" {
+		return "", errors.New("hostname não pode ser vazio")
+	}
+	if strings.ContainsAny(host, "/\\: \t\r\n") {
+		return "", fmt.Errorf("hostname contém caracteres inválidos: %q", value)
+	}
+	return host, nil
+}
+
 func NewConfig() Config {
 	return Config{
-		Version:           1,
-		DefaultMode:       ModePHP,
-		LANAddress:        "auto",
-		WindowsPort:       80,
-		HTTPSPort:         443,
-		WSLPort:           8181,
-		PHPFPMOsocket:     "/run/php/php-fpm.sock",
-		PHPDefaultVersion: "8.5",
-		PHPFPMPool:        DefaultPHPFPMPoolConfig(),
-		Composer:          ComposerConfig{Environment: ComposerPerVersion, Binary: "composer"},
-		Projects:          []Project{},
-		Parks:             []Park{},
+		Version:            1,
+		DefaultMode:        ModePHP,
+		DefaultRouteMode:   RouteModePath,
+		RouteBasePort:      8080,
+		DomainSuffix:       "lan",
+		LANAddress:         "auto",
+		WindowsPort:        80,
+		HTTPSPort:          443,
+		WSLPort:            8181,
+		PHPFPMOsocket:      "/run/php/php-fpm.sock",
+		PHPDefaultVersion:  "8.5",
+		PHPFPMPool:         DefaultPHPFPMPoolConfig(),
+		Composer:           ComposerConfig{Environment: ComposerPerVersion, Binary: "composer"},
+		Allowlist:          []string{},
+		AuthUsers:          []AuthUser{},
+		Projects:           []Project{},
+		Parks:              []Park{},
 	}
 }
 
@@ -338,6 +422,15 @@ func (c *Config) Normalize() error {
 	}
 	if c.DefaultMode == "" {
 		c.DefaultMode = ModePHP
+	}
+	if c.DefaultRouteMode == "" {
+		c.DefaultRouteMode = RouteModePath
+	}
+	if c.RouteBasePort == 0 {
+		c.RouteBasePort = 8080
+	}
+	if c.DomainSuffix == "" {
+		c.DomainSuffix = "lan"
 	}
 	if c.LANAddress == "" {
 		c.LANAddress = "auto"
@@ -369,6 +462,12 @@ func (c *Config) Normalize() error {
 	if !c.DefaultMode.Valid() {
 		return fmt.Errorf("modo global inválido %q", c.DefaultMode)
 	}
+	if !c.DefaultRouteMode.Valid() {
+		return fmt.Errorf("modo de rota global inválido %q", c.DefaultRouteMode)
+	}
+	if c.RouteBasePort < 1024 || c.RouteBasePort > 65000 {
+		return fmt.Errorf("porta base de rota inválida: %d", c.RouteBasePort)
+	}
 	if c.WindowsPort < 1 || c.WindowsPort > 65535 {
 		return fmt.Errorf("porta Windows inválida: %d", c.WindowsPort)
 	}
@@ -395,6 +494,22 @@ func (c *Config) Normalize() error {
 	}
 	if _, err := normalizePHPBinary(c.Composer.Binary, "composer_binary"); err != nil {
 		return err
+	}
+
+	for i, cidr := range c.Allowlist {
+		norm, err := NormalizeCIDR(cidr)
+		if err != nil {
+			return fmt.Errorf("allowlist global: %w", err)
+		}
+		c.Allowlist[i] = norm
+	}
+	sort.Strings(c.Allowlist)
+	c.Allowlist = uniqueStrings(c.Allowlist)
+
+	for _, user := range c.AuthUsers {
+		if strings.TrimSpace(user.Username) == "" || strings.TrimSpace(user.PasswordHash) == "" {
+			return fmt.Errorf("usuário de autenticação global inválido")
+		}
 	}
 
 	seenPHPVersions := map[string]struct{}{}
@@ -434,6 +549,7 @@ func (c *Config) Normalize() error {
 	seenNames := map[string]struct{}{}
 	seenPaths := map[string]struct{}{}
 	seenDevPorts := map[int]string{}
+	seenRoutePorts := map[int]string{}
 	for i := range c.Projects {
 		project := &c.Projects[i]
 		name, err := NormalizeName(project.Name)
@@ -456,6 +572,48 @@ func (c *Config) Normalize() error {
 		if err := validateOptionalMode(project.Mode); err != nil {
 			return fmt.Errorf("projeto %q: %w", project.Name, err)
 		}
+		if project.RouteMode != nil && !project.RouteMode.Valid() {
+			return fmt.Errorf("projeto %q: modo de rota inválido %q", project.Name, *project.RouteMode)
+		}
+		if project.RoutePort != nil {
+			port := *project.RoutePort
+			if port < 1024 || port > 65535 {
+				return fmt.Errorf("projeto %q: porta de rota inválida: %d", project.Name, port)
+			}
+			if existingName, exists := seenRoutePorts[port]; exists {
+				return fmt.Errorf("porta de rota %d em conflito entre %q e %q", port, existingName, project.Name)
+			}
+			seenRoutePorts[port] = project.Name
+		}
+		if project.RouteHost != nil && *project.RouteHost != "" {
+			normHost, err := NormalizeHost(*project.RouteHost)
+			if err != nil {
+				return fmt.Errorf("projeto %q: %w", project.Name, err)
+			}
+			*project.RouteHost = normHost
+		}
+		for j, cidr := range project.Allowlist {
+			norm, err := NormalizeCIDR(cidr)
+			if err != nil {
+				return fmt.Errorf("projeto %q: allowlist: %w", project.Name, err)
+			}
+			project.Allowlist[j] = norm
+		}
+		sort.Strings(project.Allowlist)
+		project.Allowlist = uniqueStrings(project.Allowlist)
+
+		if project.ExposedUntil != nil && strings.TrimSpace(*project.ExposedUntil) != "" {
+			if _, err := time.Parse(time.RFC3339, strings.TrimSpace(*project.ExposedUntil)); err != nil {
+				return fmt.Errorf("projeto %q: exposed_until inválido (esperado RFC3339): %q", project.Name, *project.ExposedUntil)
+			}
+		}
+
+		for _, user := range project.AuthUsers {
+			if strings.TrimSpace(user.Username) == "" || strings.TrimSpace(user.PasswordHash) == "" {
+				return fmt.Errorf("projeto %q: usuário de autenticação inválido", project.Name)
+			}
+		}
+
 		if project.DevPort != nil {
 			port := *project.DevPort
 			if port < 1024 || port > 65535 {
@@ -516,6 +674,18 @@ func (c *Config) Normalize() error {
 		if err := validateOptionalMode(park.Mode); err != nil {
 			return fmt.Errorf("park %q: %w", park.Path, err)
 		}
+		if park.RouteMode != nil && !park.RouteMode.Valid() {
+			return fmt.Errorf("park %q: modo de rota inválido %q", park.Path, *park.RouteMode)
+		}
+		for j, cidr := range park.Allowlist {
+			norm, err := NormalizeCIDR(cidr)
+			if err != nil {
+				return fmt.Errorf("park %q: allowlist: %w", park.Path, err)
+			}
+			park.Allowlist[j] = norm
+		}
+		sort.Strings(park.Allowlist)
+		park.Allowlist = uniqueStrings(park.Allowlist)
 	}
 
 	sort.Slice(c.Projects, func(i, j int) bool { return c.Projects[i].Name < c.Projects[j].Name })
@@ -1068,13 +1238,225 @@ func (c Config) ProjectIdleTimeout(project Project) time.Duration {
 	return 15 * time.Minute
 }
 
+func (c Config) ResolvedRouteMode(project Project) (RouteMode, ModeSource) {
+	if project.RouteMode != nil {
+		return *project.RouteMode, SourceProject
+	}
+	var selected *Park
+	for i := range c.Parks {
+		if isDirectChild(c.Parks[i].Path, project.Path) && (selected == nil || len(c.Parks[i].Path) > len(selected.Path)) {
+			selected = &c.Parks[i]
+		}
+	}
+	if selected != nil && selected.RouteMode != nil {
+		return *selected.RouteMode, SourcePark
+	}
+	return c.DefaultRouteMode, SourceGlobal
+}
+
+func (c Config) EffectiveRouteMode(project Project) RouteMode {
+	mode, _ := c.ResolvedRouteMode(project)
+	return mode
+}
+
+func (c Config) EffectiveRoutePort(project Project) int {
+	if project.RoutePort != nil && *project.RoutePort > 0 {
+		return *project.RoutePort
+	}
+	base := c.RouteBasePort
+	if base == 0 {
+		base = 8080
+	}
+	allocated := map[int]bool{
+		c.WindowsPort: true,
+		c.HTTPSPort:   true,
+		c.WSLPort:     true,
+	}
+	for _, p := range c.Projects {
+		if p.RoutePort != nil && *p.RoutePort > 0 {
+			allocated[*p.RoutePort] = true
+		}
+		if p.DevPort != nil && *p.DevPort > 0 {
+			allocated[*p.DevPort] = true
+		}
+	}
+	for index, p := range c.Projects {
+		if p.Name == project.Name {
+			candidate := base + index
+			for allocated[candidate] {
+				candidate++
+			}
+			return candidate
+		}
+	}
+	return base
+}
+
+func (c Config) EffectiveRouteHost(project Project) string {
+	if project.RouteHost != nil && strings.TrimSpace(*project.RouteHost) != "" {
+		return strings.TrimSpace(*project.RouteHost)
+	}
+	suffix := c.DomainSuffix
+	if suffix == "" {
+		suffix = "lan"
+	}
+	return fmt.Sprintf("%s.%s", project.Name, suffix)
+}
+
+func (c Config) EffectiveAllowlist(project Project) []string {
+	if len(project.Allowlist) > 0 {
+		return project.Allowlist
+	}
+	for i := range c.Parks {
+		if isDirectChild(c.Parks[i].Path, project.Path) {
+			if len(c.Parks[i].Allowlist) > 0 {
+				return c.Parks[i].Allowlist
+			}
+		}
+	}
+	return c.Allowlist
+}
+
+func (c Config) EffectiveAuth(project Project) (bool, []AuthUser) {
+	if project.AuthEnabled != nil {
+		if !*project.AuthEnabled {
+			return false, nil
+		}
+		if len(project.AuthUsers) > 0 {
+			return true, project.AuthUsers
+		}
+		return len(c.AuthUsers) > 0, c.AuthUsers
+	}
+	if len(project.AuthUsers) > 0 {
+		return true, project.AuthUsers
+	}
+	return len(c.AuthUsers) > 0, c.AuthUsers
+}
+
+func (c Config) IsExposureExpired(project Project, now time.Time) bool {
+	if project.ExposedUntil == nil || strings.TrimSpace(*project.ExposedUntil) == "" {
+		return false
+	}
+	t, err := time.Parse(time.RFC3339, strings.TrimSpace(*project.ExposedUntil))
+	if err != nil {
+		return false
+	}
+	return now.After(t)
+}
+
+func (c *Config) SetDefaultRouteMode(mode RouteMode) error {
+	if !mode.Valid() {
+		return fmt.Errorf("modo de rota inválido: %s", mode)
+	}
+	c.DefaultRouteMode = mode
+	return c.Normalize()
+}
+
+func (c *Config) SetProjectRouteMode(name string, mode *RouteMode, port *int, host *string) error {
+	normalizedName, err := NormalizeName(name)
+	if err != nil {
+		return err
+	}
+	for i := range c.Projects {
+		if c.Projects[i].Name == normalizedName {
+			if mode != nil && !mode.Valid() {
+				return fmt.Errorf("modo de rota inválido: %s", *mode)
+			}
+			c.Projects[i].RouteMode = mode
+			if port != nil {
+				if *port <= 0 {
+					c.Projects[i].RoutePort = nil
+				} else {
+					c.Projects[i].RoutePort = port
+				}
+			}
+			if host != nil {
+				if strings.TrimSpace(*host) == "" || *host == "inherit" {
+					c.Projects[i].RouteHost = nil
+				} else {
+					h := strings.TrimSpace(*host)
+					c.Projects[i].RouteHost = &h
+				}
+			}
+			return c.Normalize()
+		}
+	}
+	return fmt.Errorf("projeto não encontrado: %s", normalizedName)
+}
+
+func (c *Config) SetGlobalAllowlist(cidrs []string) error {
+	c.Allowlist = append([]string(nil), cidrs...)
+	return c.Normalize()
+}
+
+func (c *Config) SetProjectAllowlist(name string, cidrs []string) error {
+	normalizedName, err := NormalizeName(name)
+	if err != nil {
+		return err
+	}
+	for i := range c.Projects {
+		if c.Projects[i].Name == normalizedName {
+			c.Projects[i].Allowlist = append([]string(nil), cidrs...)
+			return c.Normalize()
+		}
+	}
+	return fmt.Errorf("projeto não encontrado: %s", normalizedName)
+}
+
+func (c *Config) SetProjectExposure(name string, until *string) error {
+	normalizedName, err := NormalizeName(name)
+	if err != nil {
+		return err
+	}
+	for i := range c.Projects {
+		if c.Projects[i].Name == normalizedName {
+			c.Projects[i].ExposedUntil = until
+			return c.Normalize()
+		}
+	}
+	return fmt.Errorf("projeto não encontrado: %s", normalizedName)
+}
+
+func (c *Config) SetGlobalAuth(users []AuthUser) error {
+	c.AuthUsers = append([]AuthUser(nil), users...)
+	return c.Normalize()
+}
+
+func (c *Config) SetProjectAuth(name string, enabled *bool, users []AuthUser) error {
+	normalizedName, err := NormalizeName(name)
+	if err != nil {
+		return err
+	}
+	for i := range c.Projects {
+		if c.Projects[i].Name == normalizedName {
+			c.Projects[i].AuthEnabled = enabled
+			if users != nil {
+				c.Projects[i].AuthUsers = append([]AuthUser(nil), users...)
+			}
+			return c.Normalize()
+		}
+	}
+	return fmt.Errorf("projeto não encontrado: %s", normalizedName)
+}
+
 func (c Config) Resolve(name string) (ResolvedProject, error) {
 	project, found := c.Project(name)
 	if !found {
 		return ResolvedProject{}, fmt.Errorf("projeto não encontrado: %s", name)
 	}
+	routeMode, _ := c.ResolvedRouteMode(project)
+	routePort := c.EffectiveRoutePort(project)
+	routeHost := c.EffectiveRouteHost(project)
+
 	if project.Mode != nil {
-		return ResolvedProject{Project: project, Mode: *project.Mode, Source: SourceProject}, nil
+		return ResolvedProject{
+			Project:   project,
+			Mode:      *project.Mode,
+			Source:    SourceProject,
+			RouteMode: routeMode,
+			RoutePort: routePort,
+			RouteHost: routeHost,
+		}, nil
 	}
 
 	var selected *Park
@@ -1084,9 +1466,25 @@ func (c Config) Resolve(name string) (ResolvedProject, error) {
 		}
 	}
 	if selected != nil && selected.Mode != nil {
-		return ResolvedProject{Project: project, Mode: *selected.Mode, Source: SourcePark, Park: selected}, nil
+		return ResolvedProject{
+			Project:   project,
+			Mode:      *selected.Mode,
+			Source:    SourcePark,
+			Park:      selected,
+			RouteMode: routeMode,
+			RoutePort: routePort,
+			RouteHost: routeHost,
+		}, nil
 	}
-	return ResolvedProject{Project: project, Mode: c.DefaultMode, Source: SourceGlobal, Park: selected}, nil
+	return ResolvedProject{
+		Project:   project,
+		Mode:      c.DefaultMode,
+		Source:    SourceGlobal,
+		Park:      selected,
+		RouteMode: routeMode,
+		RoutePort: routePort,
+		RouteHost: routeHost,
+	}, nil
 }
 
 func isDirectChild(parent, child string) bool {
@@ -1131,16 +1529,43 @@ func (r ResolvedProject) URL(host string, httpPort, httpsPort int, secure bool) 
 	if address == "" || address == "auto" {
 		address = "localhost"
 	}
-	if r.Secure(secure) {
-		if httpsPort == 443 {
-			return fmt.Sprintf("https://%s/%s", address, r.Project.Name)
+	isSecure := r.Secure(secure)
+
+	switch r.RouteMode {
+	case RouteModePort:
+		if isSecure {
+			return fmt.Sprintf("https://%s:%d/", address, r.RoutePort)
 		}
-		return fmt.Sprintf("https://%s:%d/%s", address, httpsPort, r.Project.Name)
+		return fmt.Sprintf("http://%s:%d/", address, r.RoutePort)
+
+	case RouteModeHost:
+		targetHost := r.RouteHost
+		if targetHost == "" {
+			targetHost = r.Project.Name + ".lan"
+		}
+		if isSecure {
+			if httpsPort == 443 {
+				return fmt.Sprintf("https://%s/", targetHost)
+			}
+			return fmt.Sprintf("https://%s:%d/", targetHost, httpsPort)
+		}
+		if httpPort == 80 {
+			return fmt.Sprintf("http://%s/", targetHost)
+		}
+		return fmt.Sprintf("http://%s:%d/", targetHost, httpPort)
+
+	default: // RouteModePath
+		if isSecure {
+			if httpsPort == 443 {
+				return fmt.Sprintf("https://%s/%s", address, r.Project.Name)
+			}
+			return fmt.Sprintf("https://%s:%d/%s", address, httpsPort, r.Project.Name)
+		}
+		if httpPort == 80 {
+			return fmt.Sprintf("http://%s/%s", address, r.Project.Name)
+		}
+		return fmt.Sprintf("http://%s:%d/%s", address, httpPort, r.Project.Name)
 	}
-	if httpPort == 80 {
-		return fmt.Sprintf("http://%s/%s", address, r.Project.Name)
-	}
-	return fmt.Sprintf("http://%s:%d/%s", address, httpPort, r.Project.Name)
 }
 
 var ErrUnsupportedMode = errors.New("modo ainda não implementado")

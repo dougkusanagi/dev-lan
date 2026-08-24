@@ -32,16 +32,26 @@ type App struct {
 	Now          func() time.Time
 }
 
+type mockRunner struct{}
+
+func (mockRunner) Run(context.Context, ...string) (string, error) { return "", nil }
+
 func New(dataDir string) *App {
 	wsl := platform.NewWSLRunner("wsl.exe", "")
+	winCaddy := platform.NewLocalCaddy("")
+	wslCaddy := platform.NewWSLCaddy(wsl)
+	if os.Getenv("DEVLAN_TEST_MOCK") == "1" {
+		winCaddy = platform.CaddyClient{Runner: mockRunner{}}
+		wslCaddy = platform.CaddyClient{Runner: mockRunner{}, WSL: true}
+	}
 	return &App{
 		Store:        config.NewStore(dataDir),
 		Detector:     detect.Detector{Inspector: detect.SmartInspector{WSL: wsl}},
 		WSL:          wsl,
 		PHP:          platform.NewWSLPHPManager(wsl),
 		Dev:          platform.NewWSLDevManager(wsl),
-		WindowsCaddy: platform.NewLocalCaddy(""),
-		WSLCaddy:     platform.NewWSLCaddy(wsl),
+		WindowsCaddy: winCaddy,
+		WSLCaddy:     wslCaddy,
 		Now:          time.Now,
 	}
 }
@@ -1116,6 +1126,18 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 		}
 	}
 
+	if isPublic, netDetail, _ := platform.NetworkProfile(ctx); isPublic {
+		checks = append(checks, Check{"Rede Pública", "WARN", netDetail})
+	} else {
+		checks = append(checks, Check{"Perfil de Rede", "OK", "Privada / confiável"})
+	}
+
+	if len(cfg.Allowlist) > 0 {
+		checks = append(checks, Check{"Allowlist Global", "OK", strings.Join(cfg.Allowlist, ", ")})
+	} else {
+		checks = append(checks, Check{"Allowlist Global", "OK", "aberto para sub-rede privada"})
+	}
+
 	if firewall, err := platform.FirewallRule(ctx, "DevLAN"); err != nil {
 		checks = append(checks, Check{"Firewall", "WARN", "regra DevLAN não confirmada"})
 	} else if firewall {
@@ -1136,23 +1158,36 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 		}
 		projects = []domain.Project{project}
 	}
+	now := time.Now()
 	for _, project := range projects {
 		resolved, err := effective.Resolve(project.Name)
 		if err != nil {
 			return nil, err
 		}
+
+		routeDetail := string(resolved.RouteMode)
+		if resolved.RouteMode == domain.RouteModePort {
+			routeDetail = fmt.Sprintf("port :%d", resolved.RoutePort)
+		} else if resolved.RouteMode == domain.RouteModeHost {
+			routeDetail = fmt.Sprintf("host %s", resolved.RouteHost)
+		}
+
+		if effective.IsExposureExpired(project, now) {
+			checks = append(checks, Check{"Projeto " + project.Name + " (Exposição)", "WARN", "exposição temporária expirada"})
+		}
+
 		switch resolved.Mode {
 		case domain.ModePHP:
 			detected, detectErr := a.Detector.DetectPHP(ctx, project.Path)
 			if detectErr != nil {
 				checks = append(checks, Check{"Projeto " + project.Name, "FAIL", detectErr.Error()})
 			} else {
-				checks = append(checks, Check{"Projeto " + project.Name, "OK", fmt.Sprintf("%s, preset=%s, PHP=%s, pool=%s", detected.DocumentRoot, effective.PHPProjectPreset(project), effective.EffectivePHPVersion(project), phpconfig.PoolSummary(effective, project))})
+				checks = append(checks, Check{"Projeto " + project.Name, "OK", fmt.Sprintf("%s, rota=%s, preset=%s, PHP=%s, pool=%s", detected.DocumentRoot, routeDetail, effective.PHPProjectPreset(project), effective.EffectivePHPVersion(project), phpconfig.PoolSummary(effective, project))})
 			}
 		case domain.ModeStatic:
 			staticRoot := effective.StaticDocumentRoot(project)
 			spa := effective.SPAFallback(project)
-			checks = append(checks, Check{"Projeto " + project.Name, "OK", fmt.Sprintf("estático: %s (spa_fallback=%t)", staticRoot, spa)})
+			checks = append(checks, Check{"Projeto " + project.Name, "OK", fmt.Sprintf("estático: %s (rota=%s, spa_fallback=%t)", staticRoot, routeDetail, spa)})
 		case domain.ModeDev:
 			devPort := effective.DevPort(project)
 			devCmd := effective.DevCommand(project)
@@ -1162,7 +1197,7 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 				st, _ := a.Dev.Status(ctx, project, devPort)
 				statusStr = string(st.State)
 			}
-			checks = append(checks, Check{"Projeto " + project.Name, "OK", fmt.Sprintf("dev server: %s (porta %d, pm=%s, status=%s)", devCmd, devPort, pm, statusStr)})
+			checks = append(checks, Check{"Projeto " + project.Name, "OK", fmt.Sprintf("dev server: %s (porta dev %d, rota=%s, pm=%s, status=%s)", devCmd, devPort, routeDetail, pm, statusStr)})
 		}
 	}
 	return checks, nil
@@ -1501,4 +1536,319 @@ func (a *App) SetProjectPackageManager(ctx context.Context, selector, pm string)
 		_ = a.appendLog("package_manager %s %s", name, pm)
 	}
 	return result, err
+}
+
+func (a *App) SetRouteMode(ctx context.Context, selector string, mode *domain.RouteMode, port *int, host *string) (ApplyResult, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	cfg, name, _, err := a.materializeProject(ctx, cfg, selector)
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	if err := cfg.SetProjectRouteMode(name, mode, port, host); err != nil {
+		return ApplyResult{}, err
+	}
+	result, err := a.saveAndApply(ctx, cfg, true)
+	if err == nil {
+		_ = a.appendLog("modo de rota %s: mode=%v port=%v host=%v", name, mode, port, host)
+		_ = a.Store.AppendSecurityAudit("ROUTE_MODE_CHANGE", fmt.Sprintf("project=%s mode=%v port=%v host=%v", name, mode, port, host))
+	}
+	return result, err
+}
+
+func (a *App) SetDefaultRouteMode(ctx context.Context, mode domain.RouteMode) (ApplyResult, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	if err := cfg.SetDefaultRouteMode(mode); err != nil {
+		return ApplyResult{}, err
+	}
+	result, err := a.saveAndApply(ctx, cfg, true)
+	if err == nil {
+		_ = a.appendLog("modo de rota padrão global %s", mode)
+		_ = a.Store.AppendSecurityAudit("DEFAULT_ROUTE_MODE_CHANGE", fmt.Sprintf("mode=%s", mode))
+	}
+	return result, err
+}
+
+func (a *App) SetAllowlist(ctx context.Context, selector string, cidrs []string) (ApplyResult, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	if selector == "default" || selector == "" {
+		if err := cfg.SetGlobalAllowlist(cidrs); err != nil {
+			return ApplyResult{}, err
+		}
+	} else {
+		cfg, name, _, err := a.materializeProject(ctx, cfg, selector)
+		if err != nil {
+			return ApplyResult{}, err
+		}
+		if err := cfg.SetProjectAllowlist(name, cidrs); err != nil {
+			return ApplyResult{}, err
+		}
+	}
+	result, err := a.saveAndApply(ctx, cfg, true)
+	if err == nil {
+		_ = a.appendLog("allowlist %s atualizada (%d CIDRs)", selector, len(cidrs))
+		_ = a.Store.AppendSecurityAudit("ALLOWLIST_SET", fmt.Sprintf("target=%s cidrs=%v", selector, cidrs))
+	}
+	return result, err
+}
+
+func (a *App) AddAllowlist(ctx context.Context, selector string, cidrs []string) (ApplyResult, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	var current []string
+	if selector == "default" || selector == "" {
+		current = append([]string(nil), cfg.Allowlist...)
+	} else {
+		cfg, name, idx, err := a.materializeProject(ctx, cfg, selector)
+		if err != nil {
+			return ApplyResult{}, err
+		}
+		current = append([]string(nil), cfg.Projects[idx].Allowlist...)
+		selector = name
+	}
+	current = append(current, cidrs...)
+	return a.SetAllowlist(ctx, selector, current)
+}
+
+func (a *App) RemoveAllowlist(ctx context.Context, selector string, cidrs []string) (ApplyResult, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	toRemove := map[string]bool{}
+	for _, c := range cidrs {
+		norm, _ := domain.NormalizeCIDR(c)
+		if norm != "" {
+			toRemove[norm] = true
+		}
+		toRemove[c] = true
+	}
+	var current []string
+	if selector == "default" || selector == "" {
+		current = cfg.Allowlist
+	} else {
+		cfg, name, idx, err := a.materializeProject(ctx, cfg, selector)
+		if err != nil {
+			return ApplyResult{}, err
+		}
+		current = cfg.Projects[idx].Allowlist
+		selector = name
+	}
+	var filtered []string
+	for _, item := range current {
+		if !toRemove[item] {
+			filtered = append(filtered, item)
+		}
+	}
+	return a.SetAllowlist(ctx, selector, filtered)
+}
+
+func (a *App) ClearAllowlist(ctx context.Context, selector string) (ApplyResult, error) {
+	return a.SetAllowlist(ctx, selector, []string{})
+}
+
+func (a *App) ExposeProject(ctx context.Context, selector string, duration time.Duration, mode *domain.RouteMode) (ApplyResult, string, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return ApplyResult{}, "", err
+	}
+	cfg, name, index, err := a.materializeProject(ctx, cfg, selector)
+	if err != nil {
+		return ApplyResult{}, "", err
+	}
+	if mode != nil {
+		cfg.Projects[index].RouteMode = mode
+	}
+	var untilStr *string
+	if duration > 0 {
+		exp := time.Now().Add(duration).UTC().Format(time.RFC3339)
+		untilStr = &exp
+	}
+	cfg.Projects[index].ExposedUntil = untilStr
+	result, err := a.saveAndApply(ctx, cfg, true)
+	if err == nil {
+		_ = a.appendLog("expose %s duration=%v mode=%v", name, duration, mode)
+		_ = a.Store.AppendSecurityAudit("EXPOSE_PROJECT", fmt.Sprintf("project=%s duration=%v until=%v mode=%v", name, duration, untilStr, mode))
+	}
+	return result, name, err
+}
+
+func (a *App) UnexposeProject(ctx context.Context, selector string) (ApplyResult, string, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return ApplyResult{}, "", err
+	}
+	cfg, name, index, err := a.materializeProject(ctx, cfg, selector)
+	if err != nil {
+		return ApplyResult{}, "", err
+	}
+	past := time.Now().Add(-1 * time.Minute).UTC().Format(time.RFC3339)
+	cfg.Projects[index].ExposedUntil = &past
+	result, err := a.saveAndApply(ctx, cfg, true)
+	if err == nil {
+		_ = a.appendLog("unexpose %s", name)
+		_ = a.Store.AppendSecurityAudit("UNEXPOSE_PROJECT", fmt.Sprintf("project=%s", name))
+	}
+	return result, name, err
+}
+
+func (a *App) SetAuth(ctx context.Context, selector string, enabled bool, username, password string) (ApplyResult, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	var hash string
+	if password != "" {
+		if a.WindowsCaddy.Runner != nil {
+			h, err := a.WindowsCaddy.HashPassword(ctx, password)
+			if err == nil && h != "" {
+				hash = strings.TrimSpace(h)
+			}
+		}
+		if hash == "" {
+			hash = password
+		}
+	}
+	user := domain.AuthUser{Username: username, PasswordHash: hash}
+	if selector == "default" || selector == "" {
+		if username != "" {
+			cfg.AuthUsers = []domain.AuthUser{user}
+		}
+	} else {
+		cfg, name, index, err := a.materializeProject(ctx, cfg, selector)
+		if err != nil {
+			return ApplyResult{}, err
+		}
+		cfg.Projects[index].AuthEnabled = &enabled
+		if username != "" {
+			cfg.Projects[index].AuthUsers = []domain.AuthUser{user}
+		}
+		selector = name
+	}
+	result, err := a.saveAndApply(ctx, cfg, true)
+	if err == nil {
+		_ = a.appendLog("auth %s enabled=%t user=%s", selector, enabled, username)
+		_ = a.Store.AppendSecurityAudit("AUTH_SET", fmt.Sprintf("target=%s enabled=%t user=%s", selector, enabled, username))
+	}
+	return result, err
+}
+
+func (a *App) DisableAuth(ctx context.Context, selector string) (ApplyResult, error) {
+	disabled := false
+	return a.SetAuth(ctx, selector, disabled, "", "")
+}
+
+func (a *App) CAInfo(ctx context.Context) (map[string]string, error) {
+	path := platform.FindCARootCertPath()
+	info := map[string]string{
+		"path": path,
+	}
+	if path != "" {
+		if data, err := os.ReadFile(path); err == nil {
+			info["exists"] = "true"
+			info["size"] = fmt.Sprintf("%d bytes", len(data))
+		} else {
+			info["exists"] = "false"
+		}
+	} else {
+		info["exists"] = "false"
+	}
+	return info, nil
+}
+
+func (a *App) ExportCA(ctx context.Context, targetPath string) (string, error) {
+	src := platform.FindCARootCertPath()
+	if src == "" {
+		return "", fmt.Errorf("certificado raiz da CA do Caddy não encontrado no sistema")
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return "", fmt.Errorf("ler CA raiz (%s): %w", src, err)
+	}
+	if targetPath == "" {
+		targetPath = filepath.Join(a.Store.Paths().Dir, "devlan-ca-root.crt")
+	}
+	if err := os.WriteFile(targetPath, data, 0o644); err != nil {
+		return "", fmt.Errorf("gravar certificado em %s: %w", targetPath, err)
+	}
+	_ = a.Store.AppendSecurityAudit("CA_EXPORT", fmt.Sprintf("target=%s", targetPath))
+	return targetPath, nil
+}
+
+func (a *App) RotateCA(ctx context.Context) (ApplyResult, error) {
+	result := ApplyResult{}
+	if a.WindowsCaddy.Runner != nil {
+		_ = a.WindowsCaddy.Trust(ctx)
+	}
+	_ = a.Store.AppendSecurityAudit("CA_ROTATE", "rotação de CA solicitada")
+	reloadResult, err := a.Reload(ctx)
+	result.Warnings = append(result.Warnings, reloadResult.Warnings...)
+	return result, err
+}
+
+func (a *App) HostsEntries(ctx context.Context) (string, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return "", err
+	}
+	effective, err := a.EffectiveConfig(ctx, cfg)
+	if err != nil {
+		return "", err
+	}
+	host := cfg.LANAddress
+	if host == "" || host == "auto" {
+		host, _ = platform.LANAddress()
+		if host == "" {
+			host = "127.0.0.1"
+		}
+	}
+	hostnames := make([]string, 0)
+	for _, project := range effective.Projects {
+		hostnames = append(hostnames, effective.EffectiveRouteHost(project))
+	}
+	return platform.GenerateHostsBlock(host, hostnames), nil
+}
+
+func (a *App) SyncHosts(ctx context.Context) (ApplyResult, error) {
+	block, err := a.HostsEntries(ctx)
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	hostsPath := platform.HostsPath()
+	data, err := os.ReadFile(hostsPath)
+	if err != nil {
+		return ApplyResult{}, fmt.Errorf("ler arquivo hosts (%s): %w; execute como Administrador", hostsPath, err)
+	}
+	content := string(data)
+	startMarker := "# DevLAN internal DNS mapping - START"
+	endMarker := "# DevLAN internal DNS mapping - END"
+	if strings.Contains(content, startMarker) && strings.Contains(content, endMarker) {
+		startIndex := strings.Index(content, startMarker)
+		endIndex := strings.Index(content, endMarker) + len(endMarker)
+		content = content[:startIndex] + block + content[endIndex:]
+	} else {
+		if !strings.HasSuffix(content, "\n") {
+			content += "\n"
+		}
+		content += "\n" + block
+	}
+	if err := os.WriteFile(hostsPath, []byte(content), 0o644); err != nil {
+		return ApplyResult{}, fmt.Errorf("gravar arquivo hosts (%s): %w; execute como Administrador", hostsPath, err)
+	}
+	_ = a.Store.AppendSecurityAudit("DNS_SYNC", fmt.Sprintf("path=%s", hostsPath))
+	return ApplyResult{}, nil
+}
+
+func (a *App) SecurityAuditLogs(ctx context.Context, lines int) (string, error) {
+	return a.Store.ReadSecurityAudit(lines)
 }

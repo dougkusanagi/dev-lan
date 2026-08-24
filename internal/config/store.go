@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/dougkusanagi/dev-lan/internal/domain"
 )
@@ -33,6 +34,7 @@ type Paths struct {
 	WindowsPrevious string
 	WSLPrevious     string
 	LogsDir         string
+	SecurityLog     string
 }
 
 func NewStore(dir string) Store { return Store{Dir: dir} }
@@ -52,6 +54,7 @@ func (s Store) Paths() Paths {
 		WindowsPrevious: filepath.Join(generated, "Caddyfile.windows.previous"),
 		WSLPrevious:     filepath.Join(generated, "Caddyfile.wsl.previous"),
 		LogsDir:         filepath.Join(s.Dir, "logs"),
+		SecurityLog:     filepath.Join(s.Dir, "logs", "security.log"),
 	}
 }
 
@@ -67,6 +70,8 @@ func (s Store) Ensure() error {
 
 type stateFile struct {
 	Version     int                       `json:"version"`
+	Allowlist   []string                  `json:"allowlist,omitempty"`
+	AuthUsers   []domain.AuthUser         `json:"auth_users,omitempty"`
 	Projects    []domain.Project          `json:"projects"`
 	Parks       []domain.Park             `json:"parks"`
 	PHPVersions []domain.PHPVersionConfig `json:"php_versions,omitempty"`
@@ -93,6 +98,12 @@ func (s Store) Load() (domain.Config, error) {
 		cfg.Projects = state.Projects
 		cfg.Parks = state.Parks
 		cfg.PHPVersions = state.PHPVersions
+		if len(state.Allowlist) > 0 {
+			cfg.Allowlist = state.Allowlist
+		}
+		if len(state.AuthUsers) > 0 {
+			cfg.AuthUsers = state.AuthUsers
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return domain.Config{}, fmt.Errorf("ler %s: %w", paths.State, err)
 	}
@@ -114,7 +125,14 @@ func (s Store) Save(cfg domain.Config) error {
 	if err := atomicWrite(paths.Config, []byte(renderTOMLConfig(cfg)), 0o644); err != nil {
 		return fmt.Errorf("gravar %s: %w", paths.Config, err)
 	}
-	state := stateFile{Version: cfg.Version, Projects: cfg.Projects, Parks: cfg.Parks, PHPVersions: cfg.PHPVersions}
+	state := stateFile{
+		Version:     cfg.Version,
+		Allowlist:   cfg.Allowlist,
+		AuthUsers:   cfg.AuthUsers,
+		Projects:    cfg.Projects,
+		Parks:       cfg.Parks,
+		PHPVersions: cfg.PHPVersions,
+	}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return fmt.Errorf("serializar estado: %w", err)
@@ -126,11 +144,47 @@ func (s Store) Save(cfg domain.Config) error {
 	return nil
 }
 
+func (s Store) AppendSecurityAudit(event string, details string) error {
+	if err := s.Ensure(); err != nil {
+		return err
+	}
+	stamp := time.Now().UTC().Format(time.RFC3339)
+	line := fmt.Sprintf("[%s] EVENT=%s %s\n", stamp, event, details)
+	file, err := os.OpenFile(s.Paths().SecurityLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	_, err = file.WriteString(line)
+	return err
+}
+
+func (s Store) ReadSecurityAudit(maxLines int) (string, error) {
+	data, err := os.ReadFile(s.Paths().SecurityLog)
+	if errors.Is(err, os.ErrNotExist) {
+		return "(nenhum log de segurança registrado)\n", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if maxLines <= 0 {
+		return string(data), nil
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
+	}
+	return strings.Join(lines, "\n") + "\n", nil
+}
+
 func renderTOMLConfig(cfg domain.Config) string {
 	var b strings.Builder
 	b.WriteString("# DevLAN configuration. Managed by the CLI.\n")
 	fmt.Fprintf(&b, "version = %d\n", cfg.Version)
 	fmt.Fprintf(&b, "default_mode = %s\n", strconv.Quote(string(cfg.DefaultMode)))
+	fmt.Fprintf(&b, "default_route_mode = %s\n", strconv.Quote(string(cfg.DefaultRouteMode)))
+	fmt.Fprintf(&b, "route_base_port = %d\n", cfg.RouteBasePort)
+	fmt.Fprintf(&b, "domain_suffix = %s\n", strconv.Quote(cfg.DomainSuffix))
 	fmt.Fprintf(&b, "lan_address = %s\n", strconv.Quote(cfg.LANAddress))
 	fmt.Fprintf(&b, "windows_port = %d\n", cfg.WindowsPort)
 	fmt.Fprintf(&b, "https_port = %d\n", cfg.HTTPSPort)
@@ -143,6 +197,13 @@ func renderTOMLConfig(cfg domain.Config) string {
 	fmt.Fprintf(&b, "php_pool_max_requests = %d\n", cfg.PHPFPMPool.MaxRequests)
 	fmt.Fprintf(&b, "composer_environment = %s\n", strconv.Quote(string(cfg.Composer.Environment)))
 	fmt.Fprintf(&b, "composer_binary = %s\n", strconv.Quote(cfg.Composer.Binary))
+	if len(cfg.Allowlist) > 0 {
+		quoted := make([]string, len(cfg.Allowlist))
+		for i, a := range cfg.Allowlist {
+			quoted[i] = strconv.Quote(a)
+		}
+		fmt.Fprintf(&b, "allowlist = [%s]\n", strings.Join(quoted, ", "))
+	}
 	return b.String()
 }
 
@@ -200,6 +261,34 @@ func parseTOMLConfig(data []byte, cfg *domain.Config) error {
 				return fmt.Errorf("linha %d: %w", lineNumber+1, err)
 			}
 			cfg.DefaultMode = mode
+		case "default_route_mode":
+			parsed, err := parseTOMLString(value)
+			if err != nil {
+				return fmt.Errorf("linha %d: default_route_mode inválido: %w", lineNumber+1, err)
+			}
+			routeMode, err := domain.ParseRouteMode(parsed)
+			if err != nil {
+				return fmt.Errorf("linha %d: %w", lineNumber+1, err)
+			}
+			cfg.DefaultRouteMode = routeMode
+		case "route_base_port":
+			parsed, err := strconv.Atoi(value)
+			if err != nil {
+				return fmt.Errorf("linha %d: route_base_port inválida", lineNumber+1)
+			}
+			cfg.RouteBasePort = parsed
+		case "domain_suffix":
+			parsed, err := parseTOMLString(value)
+			if err != nil {
+				return fmt.Errorf("linha %d: domain_suffix inválido: %w", lineNumber+1, err)
+			}
+			cfg.DomainSuffix = parsed
+		case "allowlist":
+			list, err := parseTOMLStringList(value)
+			if err != nil {
+				return fmt.Errorf("linha %d: allowlist inválida: %w", lineNumber+1, err)
+			}
+			cfg.Allowlist = list
 		case "lan_address":
 			parsed, err := parseTOMLString(value)
 			if err != nil {
@@ -264,6 +353,30 @@ func parseTOMLString(value string) (string, error) {
 		return "", err
 	}
 	return parsed, nil
+}
+
+func parseTOMLStringList(value string) ([]string, error) {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(value, "[") && strings.HasSuffix(value, "]") {
+		value = value[1 : len(value)-1]
+	}
+	if strings.TrimSpace(value) == "" {
+		return []string{}, nil
+	}
+	parts := strings.Split(value, ",")
+	res := make([]string, 0, len(parts))
+	for _, part := range parts {
+		p := strings.TrimSpace(part)
+		if p == "" {
+			continue
+		}
+		unquoted, err := parseTOMLString(p)
+		if err != nil {
+			unquoted = p
+		}
+		res = append(res, unquoted)
+	}
+	return res, nil
 }
 
 // ApplyGenerated validates temporary files before replacing the last known

@@ -111,25 +111,25 @@ Objetivo: servir builds estáticos e iniciar servidores dev sob demanda.
 
 ---
 
-## Fase 4 — Rotas e Segurança (Próxima)
+## Fase 4 — Rotas e Segurança — Implementada
 
 Objetivo: atender projetos incompatíveis com subpath e reduzir exposição acidental.
 
-- [ ] Modo de rota por caminho, porta ou hostname
-- [ ] Recomendação automática conforme framework
-- [ ] Allowlist de sub-redes
-- [ ] Exposição temporária com expiração
-- [ ] Detecção de rede pública
-- [ ] Autenticação HTTP opcional
-- [ ] Distribuição assistida da CA interna e rotação de certificados
-- [ ] Suporte a DNS interno
-- [ ] Auditoria local de alterações de segurança
+- [x] Modo de rota por caminho, porta ou hostname
+- [x] Recomendação automática conforme framework
+- [x] Allowlist de sub-redes
+- [x] Exposição temporária com expiração
+- [x] Detecção de rede pública
+- [x] Autenticação HTTP opcional
+- [x] Distribuição assistida da CA interna e rotação de certificados
+- [x] Suporte a DNS interno
+- [x] Auditoria local de alterações de segurança
 
 **Critério de aceite:** Projetos com HMR ou OAuth funcionam sem ajustes de base path, respeitando a política de allowlist e expiração configurada.
 
 ---
 
-## Fase 5 — Interface Wails
+## Fase 5 — Interface Wails (Próxima)
 
 Objetivo: oferecer operação visual sem duplicar o núcleo.
 

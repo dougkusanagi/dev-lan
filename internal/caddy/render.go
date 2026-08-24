@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/dougkusanagi/dev-lan/internal/domain"
 )
@@ -17,9 +18,12 @@ const (
 )
 
 type Route struct {
-	Project domain.Project
-	Mode    domain.Mode
-	Preset  domain.PHPPreset
+	Project   domain.Project
+	Mode      domain.Mode
+	Preset    domain.PHPPreset
+	RouteMode domain.RouteMode
+	RoutePort int
+	RouteHost string
 }
 
 func Routes(cfg domain.Config) ([]Route, error) {
@@ -31,11 +35,22 @@ func Routes(cfg domain.Config) ([]Route, error) {
 	for _, item := range resolved {
 		switch item.Mode {
 		case domain.ModePHP:
-			routes = append(routes, Route{Project: item.Project, Mode: item.Mode, Preset: cfg.PHPProjectPreset(item.Project)})
-		case domain.ModeStatic:
-			routes = append(routes, Route{Project: item.Project, Mode: item.Mode})
-		case domain.ModeDev:
-			routes = append(routes, Route{Project: item.Project, Mode: item.Mode})
+			routes = append(routes, Route{
+				Project:   item.Project,
+				Mode:      item.Mode,
+				Preset:    cfg.PHPProjectPreset(item.Project),
+				RouteMode: item.RouteMode,
+				RoutePort: item.RoutePort,
+				RouteHost: item.RouteHost,
+			})
+		case domain.ModeStatic, domain.ModeDev:
+			routes = append(routes, Route{
+				Project:   item.Project,
+				Mode:      item.Mode,
+				RouteMode: item.RouteMode,
+				RoutePort: item.RoutePort,
+				RouteHost: item.RouteHost,
+			})
 		default:
 			return nil, fmt.Errorf("projeto %q resolve para modo %q: %w", item.Project.Name, item.Mode, domain.ErrUnsupportedMode)
 		}
@@ -43,10 +58,13 @@ func Routes(cfg domain.Config) ([]Route, error) {
 	return routes, nil
 }
 
-// RenderWindows creates the stable LAN edge. It intentionally contains no
-// project-specific values, so most project changes only affect the WSL file.
+// RenderWindows creates the stable LAN edge.
 func RenderWindows(cfg domain.Config) (string, error) {
 	if err := cfg.Validate(); err != nil {
+		return "", err
+	}
+	routes, err := Routes(cfg)
+	if err != nil {
 		return "", err
 	}
 	var b strings.Builder
@@ -54,8 +72,6 @@ func RenderWindows(cfg domain.Config) (string, error) {
 	b.WriteString("{\n")
 	fmt.Fprintf(&b, "    admin %s\n", windowsAdminAddress)
 	if cfg.TLSEnabled {
-		// Keep certificate automation enabled for `tls internal`, while leaving
-		// HTTP-to-HTTPS redirects under DevLAN's per-project routing policy.
 		b.WriteString("    auto_https disable_redirects\n")
 	} else {
 		b.WriteString("    auto_https off\n")
@@ -65,11 +81,10 @@ func RenderWindows(cfg domain.Config) (string, error) {
 		if host == "" || host == "auto" {
 			host = "localhost"
 		}
-		// Clients connecting to an IP address generally omit SNI. Without a
-		// default, Caddy cannot select the internally-issued certificate.
 		fmt.Fprintf(&b, "    default_sni %s\n", host)
 	}
 	b.WriteString("}\n\n")
+
 	if cfg.TLSEnabled {
 		fmt.Fprintf(&b, "http://:%d {\n", cfg.WindowsPort)
 		b.WriteString("    bind 0.0.0.0\n")
@@ -95,6 +110,7 @@ func RenderWindows(cfg domain.Config) (string, error) {
 		b.WriteString("        header_up -X-DevLAN-HTTPS\n")
 		b.WriteString("    }\n")
 		b.WriteString("}\n\n")
+
 		host := cfg.LANAddress
 		if host == "" || host == "auto" {
 			host = "localhost"
@@ -138,13 +154,43 @@ func RenderWindows(cfg domain.Config) (string, error) {
 			b.WriteString("    }\n")
 		}
 		b.WriteString("}\n")
-		return b.String(), nil
+	} else {
+		fmt.Fprintf(&b, ":%d {\n", cfg.WindowsPort)
+		b.WriteString("    bind 0.0.0.0\n")
+		b.WriteString("    encode gzip\n")
+		fmt.Fprintf(&b, "    reverse_proxy 127.0.0.1:%d\n", cfg.WSLPort)
+		b.WriteString("}\n")
 	}
-	fmt.Fprintf(&b, ":%d {\n", cfg.WindowsPort)
-	b.WriteString("    bind 0.0.0.0\n")
-	b.WriteString("    encode gzip\n")
-	fmt.Fprintf(&b, "    reverse_proxy 127.0.0.1:%d\n", cfg.WSLPort)
-	b.WriteString("}\n")
+
+	// Render dedicated port forwarders for projects configured in 'port' mode
+	for _, route := range routes {
+		if route.RouteMode == domain.RouteModePort {
+			port := route.RoutePort
+			b.WriteString("\n")
+			if cfg.TLSEnabled && cfg.SecureProject(route.Project) {
+				fmt.Fprintf(&b, "https://:%d {\n", port)
+				b.WriteString("    bind 0.0.0.0\n")
+				b.WriteString("    tls internal\n")
+				b.WriteString("    encode gzip\n")
+				fmt.Fprintf(&b, "    reverse_proxy 127.0.0.1:%d {\n", cfg.WSLPort)
+				fmt.Fprintf(&b, "        header_up X-DevLAN-Port %d\n", port)
+				fmt.Fprintf(&b, "        header_up X-DevLAN-Project %s\n", route.Project.Name)
+				b.WriteString("        header_up X-DevLAN-HTTPS on\n")
+				b.WriteString("    }\n")
+				b.WriteString("}\n")
+			} else {
+				fmt.Fprintf(&b, ":%d {\n", port)
+				b.WriteString("    bind 0.0.0.0\n")
+				b.WriteString("    encode gzip\n")
+				fmt.Fprintf(&b, "    reverse_proxy 127.0.0.1:%d {\n", cfg.WSLPort)
+				fmt.Fprintf(&b, "        header_up X-DevLAN-Port %d\n", port)
+				fmt.Fprintf(&b, "        header_up X-DevLAN-Project %s\n", route.Project.Name)
+				b.WriteString("    }\n")
+				b.WriteString("}\n")
+			}
+		}
+	}
+
 	return b.String(), nil
 }
 
@@ -180,7 +226,7 @@ func hasProjectTLSPreferences(cfg domain.Config) bool {
 	return false
 }
 
-// RenderWSL generates deterministic routes for PHP, static, and dev projects.
+// RenderWSL generates deterministic routes for PHP, static, and dev projects across all route modes.
 func RenderWSL(cfg domain.Config) (string, error) {
 	routes, err := Routes(cfg)
 	if err != nil {
@@ -192,95 +238,72 @@ func RenderWSL(cfg domain.Config) (string, error) {
 	fmt.Fprintf(&b, "    admin %s\n", wslAdminAddress)
 	b.WriteString("    auto_https off\n")
 	b.WriteString("}\n\n")
+
+	// Main listener in WSL handles all requests forwarded from Windows edge
 	fmt.Fprintf(&b, ":%d {\n", cfg.WSLPort)
 	b.WriteString("    encode gzip\n")
 	b.WriteString("    @devlan_health path /__devlan/health\n")
 	b.WriteString("    respond @devlan_health \"ok\" 200\n\n")
 
+	now := time.Now()
+
+	// 1. Port-based routes (matched by X-DevLAN-Port header forwarded from Windows edge)
 	for _, route := range routes {
-		name := route.Project.Name
-		fmt.Fprintf(&b, "    redir /%s /%s/ 308\n", name, name)
-		fmt.Fprintf(&b, "    handle_path /%s/* {\n", name)
-
-		switch route.Mode {
-		case domain.ModePHP:
-			publicRoot := cfg.PHPDocumentRoot(route.Project)
-			socket := cfg.PHPSocket(route.Project)
-			fmt.Fprintf(&b, "        root * %s\n", quoteCaddy(publicRoot))
-			b.WriteString("        vars devlan_request_uri {http.request.uri}\n")
-			fmt.Fprintf(&b, "        php_fastcgi unix/%s {\n", socket)
-			fmt.Fprintf(&b, "            env REQUEST_URI /%s{vars.devlan_request_uri}\n", name)
-			fmt.Fprintf(&b, "            env SCRIPT_NAME /%s/index.php\n", name)
-			b.WriteString("            env HTTPS {http.request.header.X-DevLAN-HTTPS}\n")
-			fmt.Fprintf(&b, "            header_down Location ^/%s/(.*)$ /$1\n", name)
-			fmt.Fprintf(&b, "            header_down Location ^/(.*)$ /%s/$1\n", name)
-			b.WriteString("        }\n")
-			b.WriteString("        file_server\n")
-
-		case domain.ModeStatic:
-			staticRoot := cfg.StaticDocumentRoot(route.Project)
-			fmt.Fprintf(&b, "        root * %s\n", quoteCaddy(staticRoot))
-			if cfg.SPAFallback(route.Project) {
-				b.WriteString("        try_files {path} {path}/ /index.html\n")
+		if route.RouteMode == domain.RouteModePort {
+			name := route.Project.Name
+			fmt.Fprintf(&b, "    @devlan_port_%s header X-DevLAN-Port %d\n", name, route.RoutePort)
+			fmt.Fprintf(&b, "    handle @devlan_port_%s {\n", name)
+			if cfg.IsExposureExpired(route.Project, now) {
+				b.WriteString("        respond \"Acesso expirado\" 403\n")
+			} else {
+				renderProjectServing(&b, cfg, route, true)
 			}
-			b.WriteString("        file_server\n")
-
-		case domain.ModeDev:
-			devPort := cfg.DevPort(route.Project)
-			fmt.Fprintf(&b, "        reverse_proxy 127.0.0.1:%d {\n", devPort)
-			b.WriteString("            header_up Host {http.request.host}\n")
-			b.WriteString("            header_up X-Forwarded-Host {http.request.host}\n")
-			fmt.Fprintf(&b, "            header_up X-DevLAN-Prefix /%s\n", name)
-			b.WriteString("            header_up Upgrade {http.request.header.Upgrade}\n")
-			b.WriteString("            header_up Connection {http.request.header.Connection}\n")
-			b.WriteString("        }\n")
+			b.WriteString("    }\n\n")
 		}
-
-		b.WriteString("    }\n\n")
 	}
 
-	// Frontends compiled for the domain root can still emit /login, /build/...,
-	// /@vite/client, /_next/..., etc. Route those requests back to the project
-	// identified by the same-origin Referer.
-	for index, route := range routes {
+	// 2. Host-based routes (matched by Host header)
+	for _, route := range routes {
+		if route.RouteMode == domain.RouteModeHost {
+			name := route.Project.Name
+			fmt.Fprintf(&b, "    @devlan_host_%s header_regexp Host ^%s(?::\\d+)?$\n", name, regexp.QuoteMeta(route.RouteHost))
+			fmt.Fprintf(&b, "    handle @devlan_host_%s {\n", name)
+			if cfg.IsExposureExpired(route.Project, now) {
+				b.WriteString("        respond \"Acesso expirado\" 403\n")
+			} else {
+				renderProjectServing(&b, cfg, route, true)
+			}
+			b.WriteString("    }\n\n")
+		}
+	}
+
+	// 3. Subpath routes (path mode)
+	pathRoutes := make([]Route, 0)
+	for _, route := range routes {
+		if route.RouteMode == domain.RouteModePath {
+			pathRoutes = append(pathRoutes, route)
+			name := route.Project.Name
+			fmt.Fprintf(&b, "    redir /%s /%s/ 308\n", name, name)
+			fmt.Fprintf(&b, "    handle_path /%s/* {\n", name)
+			if cfg.IsExposureExpired(route.Project, now) {
+				b.WriteString("        respond \"Acesso expirado\" 403\n")
+			} else {
+				renderProjectServing(&b, cfg, route, false)
+			}
+			b.WriteString("    }\n\n")
+		}
+	}
+
+	// 4. Referer compatibility matchers for path mode frontends
+	for index, route := range pathRoutes {
 		name := route.Project.Name
 		fmt.Fprintf(&b, "    @devlan_compat_%d header_regexp Referer ^https?://[^/]+/%s(?:/|$)\n", index, regexp.QuoteMeta(name))
 		fmt.Fprintf(&b, "    handle @devlan_compat_%d {\n", index)
-
-		switch route.Mode {
-		case domain.ModePHP:
-			publicRoot := cfg.PHPDocumentRoot(route.Project)
-			socket := cfg.PHPSocket(route.Project)
-			fmt.Fprintf(&b, "        root * %s\n", quoteCaddy(publicRoot))
-			b.WriteString("        vars devlan_request_uri {http.request.uri}\n")
-			fmt.Fprintf(&b, "        php_fastcgi unix/%s {\n", socket)
-			fmt.Fprintf(&b, "            env REQUEST_URI /%s{vars.devlan_request_uri}\n", name)
-			fmt.Fprintf(&b, "            env SCRIPT_NAME /%s/index.php\n", name)
-			b.WriteString("            env HTTPS {http.request.header.X-DevLAN-HTTPS}\n")
-			fmt.Fprintf(&b, "            header_down Location ^/%s/(.*)$ /$1\n", name)
-			fmt.Fprintf(&b, "            header_down Location ^/(.*)$ /%s/$1\n", name)
-			b.WriteString("        }\n")
-			b.WriteString("        file_server\n")
-
-		case domain.ModeStatic:
-			staticRoot := cfg.StaticDocumentRoot(route.Project)
-			fmt.Fprintf(&b, "        root * %s\n", quoteCaddy(staticRoot))
-			if cfg.SPAFallback(route.Project) {
-				b.WriteString("        try_files {path} {path}/ /index.html\n")
-			}
-			b.WriteString("        file_server\n")
-
-		case domain.ModeDev:
-			devPort := cfg.DevPort(route.Project)
-			fmt.Fprintf(&b, "        reverse_proxy 127.0.0.1:%d {\n", devPort)
-			b.WriteString("            header_up Host {http.request.host}\n")
-			b.WriteString("            header_up X-Forwarded-Host {http.request.host}\n")
-			fmt.Fprintf(&b, "            header_up X-DevLAN-Prefix /%s\n", name)
-			b.WriteString("            header_up Upgrade {http.request.header.Upgrade}\n")
-			b.WriteString("            header_up Connection {http.request.header.Connection}\n")
-			b.WriteString("        }\n")
+		if cfg.IsExposureExpired(route.Project, now) {
+			b.WriteString("        respond \"Acesso expirado\" 403\n")
+		} else {
+			renderProjectServing(&b, cfg, route, false)
 		}
-
 		b.WriteString("    }\n\n")
 	}
 
@@ -289,8 +312,92 @@ func RenderWSL(cfg domain.Config) (string, error) {
 	return b.String(), nil
 }
 
+func renderProjectServing(b *strings.Builder, cfg domain.Config, route Route, isRoot bool) {
+	name := route.Project.Name
+
+	// Allowlist check
+	allowlist := cfg.EffectiveAllowlist(route.Project)
+	if len(allowlist) > 0 {
+		cidrs := strings.Join(allowlist, " ")
+		fmt.Fprintf(b, "        @devlan_denied_%s not remote_ip %s\n", name, cidrs)
+		fmt.Fprintf(b, "        respond @devlan_denied_%s \"Acesso bloqueado por allowlist\" 403\n", name)
+	}
+
+	// Basic Auth check
+	hasAuth, authUsers := cfg.EffectiveAuth(route.Project)
+	if hasAuth && len(authUsers) > 0 {
+		b.WriteString("        basicauth {\n")
+		for _, u := range authUsers {
+			fmt.Fprintf(b, "            %s %s\n", u.Username, u.PasswordHash)
+		}
+		b.WriteString("        }\n")
+	}
+
+	if isRoot {
+		switch route.Mode {
+		case domain.ModePHP:
+			publicRoot := cfg.PHPDocumentRoot(route.Project)
+			socket := cfg.PHPSocket(route.Project)
+			fmt.Fprintf(b, "        root * %s\n", quoteCaddy(publicRoot))
+			fmt.Fprintf(b, "        php_fastcgi unix/%s {\n", socket)
+			b.WriteString("            env HTTPS {http.request.header.X-DevLAN-HTTPS}\n")
+			b.WriteString("        }\n")
+			b.WriteString("        file_server\n")
+
+		case domain.ModeStatic:
+			staticRoot := cfg.StaticDocumentRoot(route.Project)
+			fmt.Fprintf(b, "        root * %s\n", quoteCaddy(staticRoot))
+			if cfg.SPAFallback(route.Project) {
+				b.WriteString("        try_files {path} {path}/ /index.html\n")
+			}
+			b.WriteString("        file_server\n")
+
+		case domain.ModeDev:
+			devPort := cfg.DevPort(route.Project)
+			fmt.Fprintf(b, "        reverse_proxy 127.0.0.1:%d {\n", devPort)
+			b.WriteString("            header_up Host {http.request.host}\n")
+			b.WriteString("            header_up X-Forwarded-Host {http.request.host}\n")
+			b.WriteString("            header_up Upgrade {http.request.header.Upgrade}\n")
+			b.WriteString("            header_up Connection {http.request.header.Connection}\n")
+			b.WriteString("        }\n")
+		}
+	} else {
+		switch route.Mode {
+		case domain.ModePHP:
+			publicRoot := cfg.PHPDocumentRoot(route.Project)
+			socket := cfg.PHPSocket(route.Project)
+			fmt.Fprintf(b, "        root * %s\n", quoteCaddy(publicRoot))
+			b.WriteString("        vars devlan_request_uri {http.request.uri}\n")
+			fmt.Fprintf(b, "        php_fastcgi unix/%s {\n", socket)
+			fmt.Fprintf(b, "            env REQUEST_URI /%s{vars.devlan_request_uri}\n", name)
+			fmt.Fprintf(b, "            env SCRIPT_NAME /%s/index.php\n", name)
+			b.WriteString("            env HTTPS {http.request.header.X-DevLAN-HTTPS}\n")
+			fmt.Fprintf(b, "            header_down Location ^/%s/(.*)$ /$1\n", name)
+			fmt.Fprintf(b, "            header_down Location ^/(.*)$ /%s/$1\n", name)
+			b.WriteString("        }\n")
+			b.WriteString("        file_server\n")
+
+		case domain.ModeStatic:
+			staticRoot := cfg.StaticDocumentRoot(route.Project)
+			fmt.Fprintf(b, "        root * %s\n", quoteCaddy(staticRoot))
+			if cfg.SPAFallback(route.Project) {
+				b.WriteString("        try_files {path} {path}/ /index.html\n")
+			}
+			b.WriteString("        file_server\n")
+
+		case domain.ModeDev:
+			devPort := cfg.DevPort(route.Project)
+			fmt.Fprintf(b, "        reverse_proxy 127.0.0.1:%d {\n", devPort)
+			b.WriteString("            header_up Host {http.request.host}\n")
+			b.WriteString("            header_up X-Forwarded-Host {http.request.host}\n")
+			fmt.Fprintf(b, "            header_up X-DevLAN-Prefix /%s\n", name)
+			b.WriteString("            header_up Upgrade {http.request.header.Upgrade}\n")
+			b.WriteString("            header_up Connection {http.request.header.Connection}\n")
+			b.WriteString("        }\n")
+		}
+	}
+}
+
 func quoteCaddy(value string) string {
-	// Caddyfile quoted strings use the same common escapes as JSON strings for
-	// the path characters that can reach this generator.
 	return strconv.Quote(value)
 }

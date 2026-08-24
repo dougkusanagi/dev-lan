@@ -5,8 +5,10 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dougkusanagi/dev-lan/internal/detect"
+	"github.com/dougkusanagi/dev-lan/internal/domain"
 	"github.com/dougkusanagi/dev-lan/internal/platform"
 )
 
@@ -312,6 +314,85 @@ func TestLinkStaticProject(t *testing.T) {
 	}
 	if project.StaticDir == nil || *project.StaticDir != "dist" {
 		t.Fatalf("static dir dist esperado: %#v", project)
+	}
+}
+
+func TestPhase4AppMethods(t *testing.T) {
+	t.Setenv("DEVLAN_TEST_MOCK", "1")
+	ctx := context.Background()
+	service := New(t.TempDir())
+	service.Detector = detect.Detector{Inspector: detect.StaticInspector{
+		Files: map[string]bool{
+			"/home/dev/app/dist/index.html": true,
+		},
+	}}
+	service.WindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
+	service.WSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
+
+	_, _, err := service.Link(ctx, "app", "/home/dev/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Test Route Mode
+	portMode := domain.RouteModePort
+	port := 8088
+	if _, err := service.SetRouteMode(ctx, "app", &portMode, &port, nil); err != nil {
+		t.Fatalf("SetRouteMode: %v", err)
+	}
+
+	// Test Allowlist
+	if _, err := service.SetAllowlist(ctx, "app", []string{"192.168.1.100"}); err != nil {
+		t.Fatalf("SetAllowlist: %v", err)
+	}
+	if _, err := service.AddAllowlist(ctx, "app", []string{"10.0.0.1"}); err != nil {
+		t.Fatalf("AddAllowlist: %v", err)
+	}
+	if _, err := service.RemoveAllowlist(ctx, "app", []string{"10.0.0.1"}); err != nil {
+		t.Fatalf("RemoveAllowlist: %v", err)
+	}
+
+	// Test Expose and Unexpose
+	if _, _, err := service.ExposeProject(ctx, "app", 10*time.Minute, nil); err != nil {
+		t.Fatalf("ExposeProject: %v", err)
+	}
+	if _, _, err := service.UnexposeProject(ctx, "app"); err != nil {
+		t.Fatalf("UnexposeProject: %v", err)
+	}
+
+	// Test Auth
+	if _, err := service.SetAuth(ctx, "app", true, "admin", "secret123"); err != nil {
+		t.Fatalf("SetAuth: %v", err)
+	}
+	if _, err := service.DisableAuth(ctx, "app"); err != nil {
+		t.Fatalf("DisableAuth: %v", err)
+	}
+
+	// Test CA info
+	caInfo, err := service.CAInfo(ctx)
+	if err != nil {
+		t.Fatalf("CAInfo: %v", err)
+	}
+	if _, found := caInfo["exists"]; !found {
+		t.Fatalf("caInfo missing exists key: %#v", caInfo)
+	}
+
+	// Test Hosts Entries
+	hosts, err := service.HostsEntries(ctx)
+	if err != nil {
+		t.Fatalf("HostsEntries: %v", err)
+	}
+	if !strings.Contains(hosts, "DevLAN internal DNS") {
+		t.Fatalf("Hosts block missing marker: %s", hosts)
+	}
+
+	// Test Security Audit
+	logs, err := service.SecurityAuditLogs(ctx, 10)
+	if err != nil {
+		t.Fatalf("SecurityAuditLogs: %v", err)
+	}
+	if !strings.Contains(logs, "ROUTE_MODE_CHANGE") {
+		t.Fatalf("Audit log missing event: %s", logs)
 	}
 }
 

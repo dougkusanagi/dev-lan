@@ -223,3 +223,82 @@ func TestRenderWSLUsesGenericDocumentRoot(t *testing.T) {
 		t.Fatalf("document root genérico inesperado:\n%s", result)
 	}
 }
+
+func TestRenderPhase4RouteModes(t *testing.T) {
+	cfg := domain.NewConfig()
+	portMode := domain.RouteModePort
+	hostMode := domain.RouteModeHost
+	devMode := domain.ModeDev
+	port := 8089
+	devPort := 9350
+	host := "meu-app.lan"
+
+	cfg.Projects = []domain.Project{
+		{Name: "port-proj", Path: "/home/dev/port-proj", RouteMode: &portMode, RoutePort: &port, Mode: &devMode, DevPort: &devPort},
+		{Name: "host-proj", Path: "/home/dev/host-proj", RouteMode: &hostMode, RouteHost: &host},
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+
+	winResult, err := RenderWindows(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(winResult, ":8089 {") || !strings.Contains(winResult, "header_up X-DevLAN-Port 8089") {
+		t.Fatalf("listener Windows para modo port ausente:\n%s", winResult)
+	}
+
+	wslResult, err := RenderWSL(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Check port mode handler in WSL
+	if !strings.Contains(wslResult, "@devlan_port_port-proj header X-DevLAN-Port 8089") || !strings.Contains(wslResult, "reverse_proxy 127.0.0.1:9350") {
+		t.Fatalf("handler WSL para modo port ausente:\n%s", wslResult)
+	}
+	// Check host mode in WSL
+	if !strings.Contains(wslResult, "@devlan_host_host-proj header_regexp Host ^meu-app\\.lan") {
+		t.Fatalf("matcher host mode em WSL ausente:\n%s", wslResult)
+	}
+}
+
+func TestRenderAllowlistAndBasicAuth(t *testing.T) {
+	cfg := domain.NewConfig()
+	cfg.Allowlist = []string{"192.168.1.0/24"}
+	cfg.AuthUsers = []domain.AuthUser{{Username: "admin", PasswordHash: "$2a$14$test"}}
+	cfg.Projects = []domain.Project{
+		{Name: "secure-app", Path: "/home/dev/secure-app"},
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	wslResult, err := RenderWSL(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(wslResult, "@devlan_denied_secure-app not remote_ip 192.168.1.0/24") {
+		t.Fatalf("allowlist matcher ausente:\n%s", wslResult)
+	}
+	if !strings.Contains(wslResult, "basicauth {") || !strings.Contains(wslResult, "admin $2a$14$test") {
+		t.Fatalf("basicauth block ausente:\n%s", wslResult)
+	}
+}
+
+func TestRenderExpiredProject(t *testing.T) {
+	cfg := domain.NewConfig()
+	past := "2020-01-01T00:00:00Z"
+	cfg.Projects = []domain.Project{
+		{Name: "expired-app", Path: "/home/dev/expired-app", ExposedUntil: &past},
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	wslResult, err := RenderWSL(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(wslResult, `respond "Acesso expirado" 403`) {
+		t.Fatalf("resposta de expiração ausente no Caddyfile:\n%s", wslResult)
+	}
+}

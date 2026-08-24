@@ -160,6 +160,30 @@ func (m WSLPHPManager) runAsRoot(ctx context.Context, args ...string) (string, e
 	return NewExecRunner(m.WSL.Binary).Run(ctx, commandArgs...)
 }
 
+func (m WSLPHPManager) EnsureRepository(ctx context.Context, version string) error {
+	// Check if package is already found in apt cache
+	if out, err := m.runAsRoot(ctx, "apt-cache", "show", "php"+version+"-fpm"); err == nil && strings.Contains(out, "Package: php"+version+"-fpm") {
+		return nil
+	}
+
+	// Ensure prerequisites
+	if found, _ := m.WSL.HasCommand(ctx, "add-apt-repository"); !found {
+		_, _ = m.runAsRoot(ctx, "apt-get", "update")
+		_, _ = m.runAsRoot(ctx, "apt-get", "install", "-y", "software-properties-common", "ca-certificates", "curl", "gnupg")
+	}
+
+	// Try adding ppa:ondrej/php
+	out, err := m.runAsRoot(ctx, "add-apt-repository", "-y", "ppa:ondrej/php")
+	if err != nil || strings.Contains(out, "404") || strings.Contains(out, "does not have a Release file") {
+		// If Launchpad PPA doesn't have a release file for this distribution codename, configure canonical packages.sury.org repository
+		suryScript := "if [ ! -f /etc/apt/trusted.gpg.d/php.gpg ]; then curl -sSLo /etc/apt/trusted.gpg.d/php.gpg https://packages.sury.org/php/apt.gpg 2>/dev/null || true; fi; " +
+			"if [ -f /etc/apt/trusted.gpg.d/php.gpg ] && [ ! -f /etc/apt/sources.list.d/php-sury.list ]; then echo 'deb [signed-by=/etc/apt/trusted.gpg.d/php.gpg] https://packages.sury.org/php/ trixie main' > /etc/apt/sources.list.d/php-sury.list; fi"
+		_, _ = m.runAsRoot(ctx, "bash", "-c", suryScript)
+	}
+	_, _ = m.runAsRoot(ctx, "apt-get", "update")
+	return nil
+}
+
 func (m WSLPHPManager) Install(ctx context.Context, version string, extensions []string) error {
 	version, err := normalizePHPVersion(version)
 	if err != nil {
@@ -169,16 +193,19 @@ func (m WSLPHPManager) Install(ctx context.Context, version string, extensions [
 	if err != nil {
 		return err
 	}
+
+	_ = m.EnsureRepository(ctx, version)
+
 	packages := []string{"php" + version + "-cli", "php" + version + "-fpm", "composer"}
 	for _, extension := range extensions {
 		packages = append(packages, "php"+version+"-"+packageExtensionName(extension))
 	}
-	if _, err := m.runAsRoot(ctx, "apt-get", "update"); err != nil {
-		return fmt.Errorf("atualizar índice de pacotes para PHP %s: %w", version, err)
-	}
 	args := append([]string{"apt-get", "install", "-y"}, packages...)
-	if _, err := m.runAsRoot(ctx, args...); err != nil {
-		return fmt.Errorf("instalar PHP %s: %w", version, err)
+	if out, err := m.runAsRoot(ctx, args...); err != nil {
+		if strings.Contains(out, "Unable to locate package") || strings.Contains(out, "Couldn't find any package") {
+			return fmt.Errorf("a versão PHP %s não está disponível nos repositórios da distribuição Linux instalada no WSL. Verifique se a versão é suportada pelo Ubuntu/Debian", version)
+		}
+		return fmt.Errorf("instalar PHP %s: %w (%s)", version, err, strings.TrimSpace(out))
 	}
 	return nil
 }

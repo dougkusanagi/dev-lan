@@ -110,3 +110,23 @@ func TestDetectStaticOnly(t *testing.T) {
 		t.Fatalf("projeto puramente estático deveria sugerir ModeStatic: %#v", detected)
 	}
 }
+
+func TestRecommendRouteMode(t *testing.T) {
+	nextProject := DetectedProject{
+		Kind: ProjectKindDev,
+		JS:   JSResult{Framework: "next", HasDevServer: true},
+	}
+	rec := RecommendRouteMode(nextProject)
+	if rec.RecommendedMode != domain.RouteModePort {
+		t.Fatalf("Next.js deveria recomendar RouteModePort: %#v", rec)
+	}
+
+	phpProject := DetectedProject{
+		Kind: ProjectKindPHP,
+		PHP:  PHPResult{Preset: domain.PHPPresetLaravel},
+	}
+	recPHP := RecommendRouteMode(phpProject)
+	if recPHP.RecommendedMode != domain.RouteModePath {
+		t.Fatalf("PHP deveria recomendar RouteModePath: %#v", recPHP)
+	}
+}

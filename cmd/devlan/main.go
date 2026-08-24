@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/dougkusanagi/dev-lan/internal/app"
+	"github.com/dougkusanagi/dev-lan/internal/detect"
 	"github.com/dougkusanagi/dev-lan/internal/domain"
 	"github.com/dougkusanagi/dev-lan/internal/platform"
 )
@@ -354,6 +355,30 @@ func run(args []string) error {
 			return fmt.Errorf("URL calculada, mas não foi possível abrir o navegador: %w", err)
 		}
 		return nil
+
+	case "route":
+		return runRoute(ctx, service, args)
+
+	case "expose":
+		return runExpose(ctx, service, args)
+
+	case "unexpose":
+		return runUnexpose(ctx, service, args)
+
+	case "allowlist":
+		return runAllowlist(ctx, service, args)
+
+	case "auth":
+		return runAuth(ctx, service, args)
+
+	case "ca":
+		return runCA(ctx, service, args)
+
+	case "dns":
+		return runDNS(ctx, service, args)
+
+	case "security":
+		return runSecurity(ctx, service, args)
 
 	default:
 		return fmt.Errorf("comando desconhecido %q; use `devlan help`", command)
@@ -996,6 +1021,20 @@ Operação:
   mode default MODE          define o modo global (php, dev, static, auto)
   mode NAME MODE|inherit     sobrescreve ou restaura herança
 
+Rotas e Segurança:
+  route [default|NAME] [MODE] [--port N] [--host DOMAIN]
+                             gerencia modo de rota (path, port, host)
+  expose NAME [--duration D] [--mode MODE]
+                             expõe projeto temporariamente
+  unexpose NAME              revoga exposição de projeto
+  allowlist [default|NAME] [set|add|remove|clear CIDR...]
+                             configura restrição de IPs/CIDRs
+  auth enable|disable [default|NAME] [USER PASS]
+                             configura autenticação HTTP básica
+  ca info|export|rotate      gerencia CA interna e certificados
+  dns entries|sync           gerencia mapeamentos do arquivo hosts
+  security posture|audit     auditoria e postura de segurança
+
 PHP:
   php list                   lista versões, extensões e estado
   php install VERSION        instala PHP-FPM, Composer e extensões
@@ -1055,6 +1094,14 @@ func printCommandUsage(command string) {
 		"logs":      "uso: devlan logs [COMPONENT]",
 		"open":      "uso: devlan open [NAME]",
 		"mode":      "uso: devlan mode default MODE | devlan mode NAME MODE|inherit",
+		"route":     "uso: devlan route [default|NAME] [path|port|host|inherit] [--port PORT] [--host HOST]",
+		"expose":    "uso: devlan expose NAME [--duration 30m|1h|2h] [--mode path|port|host]",
+		"unexpose":  "uso: devlan unexpose NAME",
+		"allowlist": "uso: devlan allowlist [default|NAME] [set|add|remove|clear CIDR...]",
+		"auth":      "uso: devlan auth enable default|NAME USERNAME PASSWORD | devlan auth disable default|NAME",
+		"ca":        "uso: devlan ca info | devlan ca export [PATH] | devlan ca rotate",
+		"dns":       "uso: devlan dns entries | devlan dns sync",
+		"security":  "uso: devlan security posture | devlan security audit [--lines N]",
 	}
 	if usage, ok := usages[command]; ok {
 		fmt.Printf("%s\n\nOpções:\n  -h, --help    mostra esta ajuda\n", usage)
@@ -1176,3 +1223,380 @@ Ajuda:
   devlan composer -h
 `)
 }
+
+func runRoute(ctx context.Context, service *app.App, args []string) error {
+	if len(args) == 0 {
+		cfg, err := service.Store.Load()
+		if err != nil {
+			return err
+		}
+		eff, err := service.EffectiveConfig(ctx, cfg)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Modo de rota padrão global: %s (base port: %d, domain suffix: .%s)\n\n", cfg.DefaultRouteMode, cfg.RouteBasePort, cfg.DomainSuffix)
+		writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(writer, "PROJETO\tROTA\tPORTA\tHOST\tFONTE")
+		for _, p := range eff.Projects {
+			source := "herdado"
+			if p.RouteMode != nil {
+				source = "projeto"
+			}
+			fmt.Fprintf(writer, "%s\t%s\t%d\t%s\t%s\n", p.Name, eff.EffectiveRouteMode(p), eff.EffectiveRoutePort(p), eff.EffectiveRouteHost(p), source)
+		}
+		return writer.Flush()
+	}
+	if args[0] == "default" {
+		if len(args) != 2 {
+			return fmt.Errorf("uso: devlan route default path|port|host")
+		}
+		m, err := domain.ParseRouteMode(args[1])
+		if err != nil {
+			return err
+		}
+		res, err := service.SetDefaultRouteMode(ctx, m)
+		printWarnings(res.Warnings)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Modo de rota padrão global alterado para %s.\n", m)
+		return nil
+	}
+	name := args[0]
+	if len(args) == 1 {
+		cfg, err := service.Store.Load()
+		if err != nil {
+			return err
+		}
+		eff, err := service.EffectiveConfig(ctx, cfg)
+		if err != nil {
+			return err
+		}
+		p, found := eff.Project(name)
+		if !found {
+			return fmt.Errorf("projeto não encontrado: %s", name)
+		}
+		detected, detErr := service.Detector.DetectProject(ctx, p.Path)
+		if detErr == nil {
+			rec := detect.RecommendRouteMode(detected)
+			fmt.Printf("Recomendação para %s: modo '%s' (%s)\n", name, rec.RecommendedMode, rec.Reason)
+		}
+		fmt.Printf("Configuração atual: modo=%s, porta=%d, host=%s\n", eff.EffectiveRouteMode(p), eff.EffectiveRoutePort(p), eff.EffectiveRouteHost(p))
+		return nil
+	}
+	var mode *domain.RouteMode
+	var port *int
+	var host *string
+	for i := 1; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--port" && i+1 < len(args) {
+			i++
+			p, err := strconv.Atoi(args[i])
+			if err != nil || p < 1 || p > 65535 {
+				return fmt.Errorf("porta inválida: %s", args[i])
+			}
+			port = &p
+		} else if arg == "--host" && i+1 < len(args) {
+			i++
+			h := args[i]
+			host = &h
+		} else if arg == "inherit" {
+			mode = nil
+		} else {
+			m, err := domain.ParseRouteMode(arg)
+			if err != nil {
+				return err
+			}
+			mode = &m
+		}
+	}
+	res, err := service.SetRouteMode(ctx, name, mode, port, host)
+	printWarnings(res.Warnings)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Rota do projeto %s atualizada.\n", name)
+	return nil
+}
+
+func runExpose(ctx context.Context, service *app.App, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("uso: devlan expose NAME [--duration 30m|1h|2h] [--mode path|port|host]")
+	}
+	name := args[0]
+	var duration time.Duration
+	var mode *domain.RouteMode
+	for i := 1; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--duration" && i+1 < len(args) {
+			i++
+			d, err := time.ParseDuration(args[i])
+			if err != nil {
+				return fmt.Errorf("duração inválida: %s", args[i])
+			}
+			duration = d
+		} else if arg == "--mode" && i+1 < len(args) {
+			i++
+			m, err := domain.ParseRouteMode(args[i])
+			if err != nil {
+				return err
+			}
+			mode = &m
+		} else {
+			return fmt.Errorf("opção desconhecida %s", arg)
+		}
+	}
+	res, projName, err := service.ExposeProject(ctx, name, duration, mode)
+	printWarnings(res.Warnings)
+	if err != nil {
+		return err
+	}
+	if duration > 0 {
+		fmt.Printf("Projeto %s exposto temporariamente por %v.\n", projName, duration)
+	} else {
+		fmt.Printf("Projeto %s exposto.\n", projName)
+	}
+	return nil
+}
+
+func runUnexpose(ctx context.Context, service *app.App, args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("uso: devlan unexpose NAME")
+	}
+	res, projName, err := service.UnexposeProject(ctx, args[0])
+	printWarnings(res.Warnings)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Exposição do projeto %s revogada.\n", projName)
+	return nil
+}
+
+func runAllowlist(ctx context.Context, service *app.App, args []string) error {
+	if len(args) == 0 {
+		cfg, err := service.Store.Load()
+		if err != nil {
+			return err
+		}
+		eff, err := service.EffectiveConfig(ctx, cfg)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Allowlist Global: %v\n\n", cfg.Allowlist)
+		writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(writer, "PROJETO\tALLOWLIST\tORIGEM")
+		for _, p := range eff.Projects {
+			origin := "herdada (global)"
+			if len(p.Allowlist) > 0 {
+				origin = "específica do projeto"
+			}
+			al := eff.EffectiveAllowlist(p)
+			fmt.Fprintf(writer, "%s\t%s\t%s\n", p.Name, strings.Join(al, ", "), origin)
+		}
+		return writer.Flush()
+	}
+	sub := args[0]
+	switch sub {
+	case "set":
+		if len(args) < 3 {
+			return fmt.Errorf("uso: devlan allowlist set default|NAME CIDR...")
+		}
+		res, err := service.SetAllowlist(ctx, args[1], args[2:])
+		printWarnings(res.Warnings)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Allowlist de %s atualizada.\n", args[1])
+		return nil
+	case "add":
+		if len(args) < 3 {
+			return fmt.Errorf("uso: devlan allowlist add default|NAME CIDR...")
+		}
+		res, err := service.AddAllowlist(ctx, args[1], args[2:])
+		printWarnings(res.Warnings)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("IPs/CIDRs adicionados à allowlist de %s.\n", args[1])
+		return nil
+	case "remove":
+		if len(args) < 3 {
+			return fmt.Errorf("uso: devlan allowlist remove default|NAME CIDR...")
+		}
+		res, err := service.RemoveAllowlist(ctx, args[1], args[2:])
+		printWarnings(res.Warnings)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("IPs/CIDRs removidos da allowlist de %s.\n", args[1])
+		return nil
+	case "clear":
+		if len(args) != 2 {
+			return fmt.Errorf("uso: devlan allowlist clear default|NAME")
+		}
+		res, err := service.ClearAllowlist(ctx, args[1])
+		printWarnings(res.Warnings)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Allowlist de %s limpa.\n", args[1])
+		return nil
+	default:
+		cfg, err := service.Store.Load()
+		if err != nil {
+			return err
+		}
+		eff, err := service.EffectiveConfig(ctx, cfg)
+		if err != nil {
+			return err
+		}
+		p, found := eff.Project(args[0])
+		if !found {
+			return fmt.Errorf("projeto não encontrado: %s", args[0])
+		}
+		fmt.Printf("Allowlist efetiva de %s: %s\n", p.Name, strings.Join(eff.EffectiveAllowlist(p), ", "))
+		return nil
+	}
+}
+
+func runAuth(ctx context.Context, service *app.App, args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("uso: devlan auth enable default|NAME USERNAME PASSWORD | devlan auth disable default|NAME")
+	}
+	action := args[0]
+	target := args[1]
+	switch action {
+	case "enable":
+		if len(args) != 4 {
+			return fmt.Errorf("uso: devlan auth enable default|NAME USERNAME PASSWORD")
+		}
+		res, err := service.SetAuth(ctx, target, true, args[2], args[3])
+		printWarnings(res.Warnings)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Autenticação HTTP ativada para %s (usuário: %s).\n", target, args[2])
+		return nil
+	case "disable":
+		res, err := service.DisableAuth(ctx, target)
+		printWarnings(res.Warnings)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Autenticação HTTP desativada para %s.\n", target)
+		return nil
+	default:
+		return fmt.Errorf("ação desconhecida: %s (use enable ou disable)", action)
+	}
+}
+
+func runCA(ctx context.Context, service *app.App, args []string) error {
+	if len(args) == 0 || args[0] == "info" {
+		info, err := service.CAInfo(ctx)
+		if err != nil {
+			return err
+		}
+		fmt.Println("=== Autoridade Certificadora (CA) DevLAN ===")
+		fmt.Printf("Caminho do certificado raiz: %s\n", info["path"])
+		fmt.Printf("Certificado existente: %s\n", info["exists"])
+		if s, ok := info["size"]; ok {
+			fmt.Printf("Tamanho: %s\n", s)
+		}
+		fmt.Println("\nPara instalar no Android/iOS/outro computador:")
+		fmt.Println("1. Exporte o arquivo: devlan ca export")
+		fmt.Println("2. Ou baixe direto pelo navegador na LAN: http://<LAN_IP>/__devlan/ca.crt")
+		return nil
+	}
+	switch args[0] {
+	case "export":
+		target := ""
+		if len(args) > 1 {
+			target = args[1]
+		}
+		savedPath, err := service.ExportCA(ctx, target)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Certificado raiz exportado com sucesso para: %s\n", savedPath)
+		return nil
+	case "rotate":
+		res, err := service.RotateCA(ctx)
+		printWarnings(res.Warnings)
+		if err != nil {
+			return err
+		}
+		fmt.Println("Rotação e recarregamento de certificados solicitados com sucesso.")
+		return nil
+	default:
+		return fmt.Errorf("subcomando de ca desconhecido: %s (use info, export, rotate)", args[0])
+	}
+}
+
+func runDNS(ctx context.Context, service *app.App, args []string) error {
+	if len(args) == 0 || args[0] == "entries" || args[0] == "show" {
+		entries, err := service.HostsEntries(ctx)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(entries) == "" {
+			fmt.Println("Nenhum projeto registrado no modo 'host'.")
+			return nil
+		}
+		fmt.Println(entries)
+		fmt.Println("# Adicione as linhas acima ao arquivo hosts das máquinas clientes ou execute `devlan dns sync` como Administrador.")
+		return nil
+	}
+	if args[0] == "sync" {
+		res, err := service.SyncHosts(ctx)
+		printWarnings(res.Warnings)
+		if err != nil {
+			return err
+		}
+		fmt.Println("Arquivo hosts do sistema sincronizado com sucesso.")
+		return nil
+	}
+	return fmt.Errorf("subcomando dns desconhecido: %s (use entries, show, sync)", args[0])
+}
+
+func runSecurity(ctx context.Context, service *app.App, args []string) error {
+	if len(args) == 0 || args[0] == "posture" {
+		cfg, err := service.Store.Load()
+		if err != nil {
+			return err
+		}
+		isPublic, netDetail, _ := platform.NetworkProfile(ctx)
+		fmt.Println("=== Postura de Segurança DevLAN ===")
+		if isPublic {
+			fmt.Printf("[ALERTA] Perfil de rede: %s (recomenda-se modo Privado ou uso de Allowlist/Auth)\n", netDetail)
+		} else {
+			fmt.Println("[OK] Perfil de rede: Privada / confiável")
+		}
+		if len(cfg.Allowlist) > 0 {
+			fmt.Printf("[OK] Allowlist global: %s\n", strings.Join(cfg.Allowlist, ", "))
+		} else {
+			fmt.Println("[INFO] Allowlist global: aberta na sub-rede")
+		}
+		if len(cfg.AuthUsers) > 0 {
+			fmt.Printf("[OK] Basic Auth global: ativada (%d usuários)\n", len(cfg.AuthUsers))
+		} else {
+			fmt.Println("[INFO] Basic Auth global: desativada")
+		}
+		return nil
+	}
+	if args[0] == "audit" {
+		lines := 50
+		if len(args) >= 3 && args[1] == "--lines" {
+			if l, err := strconv.Atoi(args[2]); err == nil && l > 0 {
+				lines = l
+			}
+		}
+		logs, err := service.SecurityAuditLogs(ctx, lines)
+		if err != nil {
+			return err
+		}
+		fmt.Print(logs)
+		return nil
+	}
+	return fmt.Errorf("subcomando security desconhecido: %s (use posture, audit)", args[0])
+}
+

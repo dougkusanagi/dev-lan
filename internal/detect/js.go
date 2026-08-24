@@ -259,3 +259,53 @@ func (d Detector) BatchDiscoverProjects(ctx context.Context, parentPath string) 
 	}
 	return results, nil
 }
+
+type RouteRecommendation struct {
+	RecommendedMode domain.RouteMode
+	Reason          string
+}
+
+// RecommendRouteMode advises the best route mode based on project architecture, framework, and runtime.
+func RecommendRouteMode(detected DetectedProject) RouteRecommendation {
+	switch detected.Kind {
+	case ProjectKindDev:
+		switch detected.JS.Framework {
+		case "next", "nuxt", "remix", "sveltekit":
+			return RouteRecommendation{
+				RecommendedMode: domain.RouteModePort,
+				Reason:          fmt.Sprintf("Framework %s utiliza roteamento na raiz e assets absolutos; o modo 'port' ou 'host' evita conflitos de subpath", detected.JS.Framework),
+			}
+		case "vite":
+			return RouteRecommendation{
+				RecommendedMode: domain.RouteModePort,
+				Reason:          "Vite com HMR/WebSocket opera de forma mais transparente em modo 'port' ou 'host'",
+			}
+		default:
+			return RouteRecommendation{
+				RecommendedMode: domain.RouteModePort,
+				Reason:          "Servidores de desenvolvimento JavaScript operam de forma ideal com porta dedicada (raiz /)",
+			}
+		}
+	case ProjectKindStatic:
+		if detected.JS.IsSPA {
+			return RouteRecommendation{
+				RecommendedMode: domain.RouteModePath,
+				Reason:          "Projetos estáticos SPA funcionam bem em 'path' com fallback ou em 'host'",
+			}
+		}
+		return RouteRecommendation{
+			RecommendedMode: domain.RouteModePath,
+			Reason:          "Projetos estáticos são compatíveis com modo 'path'",
+		}
+	case ProjectKindPHP:
+		return RouteRecommendation{
+			RecommendedMode: domain.RouteModePath,
+			Reason:          "Aplicações PHP são suportadas nativamente no modo 'path' com regravação de base URL",
+		}
+	default:
+		return RouteRecommendation{
+			RecommendedMode: domain.RouteModePath,
+			Reason:          "Modo padrão 'path' para compatibilidade LAN sem DNS",
+		}
+	}
+}

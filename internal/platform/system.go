@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -114,4 +116,75 @@ func OpenURL(url string) error {
 		return fmt.Errorf("abrir %s: %w", url, err)
 	}
 	return nil
+}
+
+func NetworkProfile(ctx context.Context) (isPublic bool, detail string, err error) {
+	if runtime.GOOS == "windows" {
+		out, runErr := NewExecRunner("powershell.exe").Run(ctx, "-NoProfile", "-NonInteractive", "-Command", "Get-NetConnectionProfile | Select-Object -ExpandProperty NetworkCategory")
+		if runErr == nil {
+			lines := strings.Split(strings.TrimSpace(out), "\n")
+			for _, line := range lines {
+				l := strings.ToLower(strings.TrimSpace(line))
+				if strings.Contains(l, "public") {
+					return true, "Public (rede pública detectada)", nil
+				}
+			}
+			return false, "Private", nil
+		}
+	}
+	ip, lanErr := LANAddress()
+	if lanErr == nil {
+		parsed := net.ParseIP(ip)
+		if parsed != nil && !isPrivateIPv4(parsed) {
+			return true, fmt.Sprintf("IP público na interface LAN (%s)", ip), nil
+		}
+	}
+	return false, "Private", nil
+}
+
+func HostsPath() string {
+	if runtime.GOOS == "windows" {
+		systemRoot := os.Getenv("SystemRoot")
+		if systemRoot == "" {
+			systemRoot = "C:\\Windows"
+		}
+		return filepath.Join(systemRoot, "System32", "drivers", "etc", "hosts")
+	}
+	return "/etc/hosts"
+}
+
+func GenerateHostsBlock(ip string, hostnames []string) string {
+	if len(hostnames) == 0 {
+		return ""
+	}
+	sorted := append([]string(nil), hostnames...)
+	sort.Strings(sorted)
+	var b strings.Builder
+	b.WriteString("# DevLAN internal DNS mapping - START\n")
+	for _, host := range sorted {
+		fmt.Fprintf(&b, "%s %s\n", ip, host)
+	}
+	b.WriteString("# DevLAN internal DNS mapping - END\n")
+	return b.String()
+}
+
+func FindCARootCertPath() string {
+	if appData := os.Getenv("APPDATA"); appData != "" {
+		p := filepath.Join(appData, "Caddy", "pki", "authorities", "local", "root.crt")
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates := []string{
+			filepath.Join(home, "AppData", "Roaming", "Caddy", "pki", "authorities", "local", "root.crt"),
+			filepath.Join(home, ".local", "share", "caddy", "pki", "authorities", "local", "root.crt"),
+		}
+		for _, candidate := range candidates {
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate
+			}
+		}
+	}
+	return ""
 }

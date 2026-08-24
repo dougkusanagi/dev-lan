@@ -120,3 +120,59 @@ func TestRollbackPHPFilesRestoresLastGeneratedPools(t *testing.T) {
 		t.Fatalf("pool PHP novo deveria ser removido: %v", err)
 	}
 }
+
+func TestStoreRoundTripPhase4FieldsAndAudit(t *testing.T) {
+	store := NewStore(t.TempDir())
+	cfg := domain.NewConfig()
+	portMode := domain.RouteModePort
+	port := 8090
+	host := "app.local"
+	cfg.DefaultRouteMode = domain.RouteModePath
+	cfg.RouteBasePort = 8080
+	cfg.DomainSuffix = "lan"
+	cfg.Allowlist = []string{"192.168.1.0/24"}
+	cfg.AuthUsers = []domain.AuthUser{{Username: "admin", PasswordHash: "secret_hash"}}
+	cfg.Projects = []domain.Project{
+		{
+			Name:         "spa",
+			Path:         "/home/dev/spa",
+			RouteMode:    &portMode,
+			RoutePort:    &port,
+			RouteHost:    &host,
+			Allowlist:    []string{"10.0.0.0/8"},
+			ExposedUntil: func() *string { s := "2029-01-01T00:00:00Z"; return &s }(),
+		},
+	}
+	if err := store.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Allowlist) != 1 || loaded.Allowlist[0] != "192.168.1.0/24" {
+		t.Fatalf("allowlist global não persistida: %#v", loaded.Allowlist)
+	}
+	if len(loaded.AuthUsers) != 1 || loaded.AuthUsers[0].Username != "admin" {
+		t.Fatalf("auth users globais não persistidos: %#v", loaded.AuthUsers)
+	}
+	p, found := loaded.Project("spa")
+	if !found || p.RouteMode == nil || *p.RouteMode != domain.RouteModePort || p.RoutePort == nil || *p.RoutePort != 8090 {
+		t.Fatalf("configuração de rota do projeto não persistida: %#v", p)
+	}
+	if len(p.Allowlist) != 1 || p.Allowlist[0] != "10.0.0.0/8" {
+		t.Fatalf("allowlist do projeto não persistida: %#v", p.Allowlist)
+	}
+
+	// Test security audit logging
+	if err := store.AppendSecurityAudit("TLS_ENABLE", "project=spa"); err != nil {
+		t.Fatal(err)
+	}
+	audit, err := store.ReadSecurityAudit(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(audit, "EVENT=TLS_ENABLE project=spa") {
+		t.Fatalf("log de auditoria não contém evento esperado: %s", audit)
+	}
+}

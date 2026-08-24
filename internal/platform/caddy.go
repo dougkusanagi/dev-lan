@@ -90,6 +90,23 @@ func (c CaddyClient) Trust(ctx context.Context) error {
 	return err
 }
 
+func (c CaddyClient) HashPassword(ctx context.Context, password string) (string, error) {
+	if c.Runner == nil {
+		return "", fmt.Errorf("%w: Caddy não configurado", ErrUnavailable)
+	}
+	var out string
+	var err error
+	if c.WSL {
+		out, err = c.Runner.Run(ctx, "caddy", "hash-password", "--plaintext", password)
+	} else {
+		out, err = c.Runner.Run(ctx, "hash-password", "--plaintext", password)
+	}
+	if err != nil {
+		return "", fmt.Errorf("gerar hash de senha pelo Caddy: %w", err)
+	}
+	return out, nil
+}
+
 // EnsureRunning reloads a running Caddy or starts the local Windows instance
 // after a reboot or a previously interrupted installation.
 func (c CaddyClient) EnsureRunning(ctx context.Context, configPath string) error {

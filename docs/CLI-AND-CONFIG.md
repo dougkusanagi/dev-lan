@@ -243,30 +243,106 @@ os arquivos gerados e só então tenta o reload. Se o reload falhar, restaura o
 par anterior. Quando Caddy ou PHP-FPM não estão instalados, a configuração
 continua sendo gerada e `doctor` informa a dependência ausente.
 
-## Comandos posteriores
+## Rotas e Segurança (Fase 4)
 
-```text
-devlan php install 8.5
-devlan php use NAME 8.5
-devlan deps install NAME
-devlan build NAME
-devlan start|stop|restart NAME
-devlan expose NAME --mode path|port|host
-devlan mode NAME auto|php|dev|static
-devlan ui
+### Modos de Rota (`path`, `port`, `host`)
+
+O DevLAN oferece três estratégias de roteamento para acomodar diferentes arquiteturas:
+
+- **`path` (padrão)**: subcaminho na interface LAN (`http://IP/projeto/`). Ideal para APIs, microserviços e compatibilidade direta sem alterar DNS.
+- **`port`**: porta dedicada na borda Windows (`http://IP:8080/`) encaminhada diretamente para a raiz `/` do projeto no WSL. Solução definitiva para SSR (Next.js, Nuxt, Remix), Vite com HMR e fluxos OAuth que esperam `/` como base URL.
+- **`host`**: domínio customizado (`http://projeto.lan/`) roteado pelo cabeçalho `Host` na raiz `/`.
+
+```powershell
+# Exibir status de rotas e recomendações
+devlan route
+devlan route [NAME]
+
+# Definir modo global padrão
+devlan route default port
+
+# Configurar rota de um projeto específico
+devlan route painel port --port 8085
+devlan route api host --host api.lan
+devlan route site path
+devlan route site inherit
 ```
 
-## Detecção JavaScript futura
+### Exposição Temporária e Expiração
 
-Prioridade inicial de lockfiles:
+Projetos podem ser expostos na LAN com tempo de vida limitado:
 
-```text
-bun.lock / bun.lockb → Bun
-pnpm-lock.yaml       → pnpm
-yarn.lock            → Yarn
-package-lock.json    → npm
+```powershell
+devlan expose painel --duration 1h --mode port
+devlan unexpose painel
 ```
 
-Se mais de um lockfile existir, `doctor` deve marcar ambiguidade em vez de escolher silenciosamente. `packageManager` no `package.json`, quando válido, pode resolver a ambiguidade.
+Após o tempo estipulado, qualquer requisição ao projeto é bloqueada com HTTP 403 Forbidden até que seja exposto novamente.
 
-O comando padrão vem de `scripts.dev`, mas pode ser sobrescrito explicitamente. Apenas projetos confiáveis e registrados podem iniciar processos.
+### Restrição de IPs e Sub-redes (Allowlist)
+
+Proteja projetos contra acesso indevido na LAN permitindo apenas IPs ou faixas CIDR autorizadas:
+
+```powershell
+# Visualizar allowlists ativas
+devlan allowlist
+
+# Definir ou atualizar allowlist global ou de projeto
+devlan allowlist set default 192.168.1.0/24 10.0.0.0/8
+devlan allowlist set painel 192.168.1.100 192.168.1.105
+devlan allowlist add painel 192.168.1.200
+devlan allowlist remove painel 192.168.1.200
+devlan allowlist clear painel
+```
+
+### Autenticação HTTP Básica
+
+Exija usuário e senha para acessar projetos sensíveis ou o ambiente todo:
+
+```powershell
+devlan auth enable default admin MinhaSenhaForte
+devlan auth enable painel tester 123456
+devlan auth disable painel
+```
+
+### Distribuição de CA e Rotação
+
+Facilite a instalação do certificado HTTPS nos dispositivos da rede:
+
+```powershell
+# Obter informações e caminho do certificado raiz
+devlan ca info
+
+# Exportar certificado raiz para distribuição
+devlan ca export C:\DevLAN\devlan-ca-root.crt
+
+# Solicitar rotação de certificados
+devlan ca rotate
+```
+
+*Dispositivos na LAN também podem baixar o certificado raiz diretamente via navegador acessando:* `http://<LAN_IP>/__devlan/ca.crt`
+
+### DNS Interno e Arquivo Hosts
+
+Para projetos no modo `host`:
+
+```powershell
+# Visualizar mapeamentos para o arquivo hosts
+devlan dns entries
+
+# Sincronizar automaticamente no arquivo hosts do Windows (Administrador)
+devlan dns sync
+```
+
+### Auditoria e Postura de Segurança
+
+Monitore alterações sensíveis e verifique o perfil de segurança da máquina:
+
+```powershell
+# Diagnóstico da postura de segurança (rede pública, allowlist, auth)
+devlan security posture
+
+# Visualizar trilha de auditoria local
+devlan security audit --lines 50
+```
+
