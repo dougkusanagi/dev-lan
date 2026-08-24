@@ -18,6 +18,7 @@ type Inspector interface {
 	Exists(ctx context.Context, projectPath, relativePath string) (bool, error)
 	Directory(ctx context.Context, projectPath string) (bool, error)
 	ListDirectories(ctx context.Context, projectPath string) ([]string, error)
+	ReadFile(ctx context.Context, projectPath, relativePath string) ([]byte, error)
 }
 
 type LaravelResult struct {
@@ -162,6 +163,11 @@ func (LocalInspector) Directory(_ context.Context, projectPath string) (bool, er
 	return info.IsDir(), nil
 }
 
+func (LocalInspector) ReadFile(_ context.Context, projectPath, relativePath string) ([]byte, error) {
+	file := filepath.FromSlash(pathpkg.Join(projectPath, relativePath))
+	return os.ReadFile(file)
+}
+
 func (l LocalInspector) ListDirectories(_ context.Context, projectPath string) ([]string, error) {
 	entries, err := os.ReadDir(filepath.FromSlash(projectPath))
 	if os.IsNotExist(err) {
@@ -210,6 +216,13 @@ func (s SmartInspector) Exists(ctx context.Context, projectPath, relativePath st
 	return s.Local.Exists(ctx, projectPath, relativePath)
 }
 
+func (s SmartInspector) ReadFile(ctx context.Context, projectPath, relativePath string) ([]byte, error) {
+	if s.usesWSL(projectPath) {
+		return s.WSL.ReadFile(ctx, pathpkg.Join(projectPath, relativePath))
+	}
+	return s.Local.ReadFile(ctx, projectPath, relativePath)
+}
+
 func (s SmartInspector) Directory(ctx context.Context, projectPath string) (bool, error) {
 	if s.usesWSL(projectPath) {
 		return s.WSL.Exists(ctx, projectPath)
@@ -226,12 +239,15 @@ func (s SmartInspector) ListDirectories(ctx context.Context, projectPath string)
 
 func (s SmartInspector) BatchDiscoverPHP(ctx context.Context, projectPath string) ([]PHPResult, error) {
 	if s.usesWSL(projectPath) {
-		discovered, err := s.WSL.DiscoverPHPProjects(ctx, projectPath)
+		raw, err := s.WSL.DiscoverAllProjects(ctx, projectPath)
 		if err != nil {
 			return nil, err
 		}
-		results := make([]PHPResult, 0, len(discovered))
-		for _, d := range discovered {
+		results := make([]PHPResult, 0, len(raw))
+		for _, d := range raw {
+			if !d.Artisan && !d.PublicIndex && !d.RootIndex && !d.Console {
+				continue
+			}
 			res := PHPResult{
 				ProjectPath:  d.Path,
 				Artisan:      d.Artisan,
@@ -261,6 +277,110 @@ func (s SmartInspector) BatchDiscoverPHP(ctx context.Context, projectPath string
 		return results, nil
 	}
 	return s.Local.BatchDiscoverPHP(ctx, projectPath)
+}
+
+func (s SmartInspector) BatchDiscoverAll(ctx context.Context, projectPath string) ([]DetectedProject, error) {
+	if s.usesWSL(projectPath) {
+		raw, err := s.WSL.DiscoverAllProjects(ctx, projectPath)
+		if err != nil {
+			return nil, err
+		}
+		results := make([]DetectedProject, 0, len(raw))
+		for _, r := range raw {
+			if (r.Artisan && r.PublicIndex) || (r.Console && r.PublicIndex) || r.PublicIndex || r.RootIndex {
+				phpRes := PHPResult{
+					ProjectPath:  r.Path,
+					Artisan:      r.Artisan,
+					PublicIndex:  r.PublicIndex,
+					RootIndex:    r.RootIndex,
+					Console:      r.Console,
+				}
+				switch {
+				case r.Artisan && r.PublicIndex:
+					phpRes.Preset = domain.PHPPresetLaravel
+					phpRes.DocumentRoot = pathpkg.Join(r.Path, "public")
+				case r.Console && r.PublicIndex:
+					phpRes.Preset = domain.PHPPresetSymfony
+					phpRes.DocumentRoot = pathpkg.Join(r.Path, "public")
+				case r.PublicIndex:
+					phpRes.Preset = domain.PHPPresetGeneric
+					phpRes.DocumentRoot = pathpkg.Join(r.Path, "public")
+				case r.RootIndex:
+					phpRes.Preset = domain.PHPPresetGeneric
+					phpRes.DocumentRoot = r.Path
+				}
+				results = append(results, DetectedProject{
+					ProjectPath:   r.Path,
+					Kind:          ProjectKindPHP,
+					SuggestedMode: domain.ModePHP,
+					PHP:           phpRes,
+				})
+				continue
+			}
+
+			if r.HasPackageJSON || r.DistHTML || r.DistDir || r.RootHTML {
+				pm := "npm"
+				switch {
+				case r.PnpmLock:
+					pm = "pnpm"
+				case r.YarnLock:
+					pm = "yarn"
+				case r.BunLock:
+					pm = "bun"
+				case r.NpmLock:
+					pm = "npm"
+				}
+
+				fw := "generic"
+				switch {
+				case r.Next:
+					fw = "next"
+				case r.Nuxt:
+					fw = "nuxt"
+				case r.Astro:
+					fw = "astro"
+				case r.Svelte:
+					fw = "sveltekit"
+				case r.Vite:
+					fw = "vite"
+				}
+
+				staticDir := ""
+				if r.DistHTML || r.DistDir {
+					staticDir = "dist"
+				}
+
+				jsRes := JSResult{
+					ProjectPath:    r.Path,
+					HasPackageJSON: r.HasPackageJSON,
+					PackageManager: pm,
+					Framework:      fw,
+					DevScript:      pmDevCommand(pm, "dev"),
+					BuildScript:    pmBuildCommand(pm, "build"),
+					StaticDir:      staticDir,
+					HasStaticBuild: r.DistHTML || r.DistDir || r.RootHTML,
+					IsSPA:          r.DistHTML || r.RootHTML,
+					HasDevServer:   r.HasPackageJSON,
+				}
+
+				kind := ProjectKindStatic
+				suggested := domain.ModeStatic
+				if r.HasPackageJSON {
+					kind = ProjectKindDev
+					suggested = domain.ModeDev
+				}
+
+				results = append(results, DetectedProject{
+					ProjectPath:   r.Path,
+					Kind:          kind,
+					SuggestedMode: suggested,
+					JS:            jsRes,
+				})
+			}
+		}
+		return results, nil
+	}
+	return (Detector{Inspector: s.Local}).BatchDiscoverProjects(ctx, projectPath)
 }
 
 func (s SmartInspector) DetectLaravel(ctx context.Context, projectPath string) (LaravelResult, error) {
@@ -332,13 +452,25 @@ func (s SmartInspector) DetectPHP(ctx context.Context, projectPath string) (PHPR
 
 // StaticInspector makes service tests independent of the host filesystem.
 type StaticInspector struct {
-	Directories map[string]bool
-	Files       map[string]bool
-	Children    map[string][]string
+	Directories  map[string]bool
+	Files        map[string]bool
+	FileContents map[string]string
+	Children     map[string][]string
 }
 
 func (s StaticInspector) Exists(_ context.Context, projectPath, relativePath string) (bool, error) {
 	return s.Files[pathpkg.Join(projectPath, relativePath)], nil
+}
+
+func (s StaticInspector) ReadFile(_ context.Context, projectPath, relativePath string) ([]byte, error) {
+	p := pathpkg.Join(projectPath, relativePath)
+	if content, ok := s.FileContents[p]; ok {
+		return []byte(content), nil
+	}
+	if s.Files[p] {
+		return []byte("{}"), nil
+	}
+	return nil, os.ErrNotExist
 }
 
 func (s StaticInspector) Directory(_ context.Context, projectPath string) (bool, error) {

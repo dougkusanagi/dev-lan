@@ -29,10 +29,16 @@ func Routes(cfg domain.Config) ([]Route, error) {
 	}
 	routes := make([]Route, 0, len(resolved))
 	for _, item := range resolved {
-		if item.Mode != domain.ModePHP {
+		switch item.Mode {
+		case domain.ModePHP:
+			routes = append(routes, Route{Project: item.Project, Mode: item.Mode, Preset: cfg.PHPProjectPreset(item.Project)})
+		case domain.ModeStatic:
+			routes = append(routes, Route{Project: item.Project, Mode: item.Mode})
+		case domain.ModeDev:
+			routes = append(routes, Route{Project: item.Project, Mode: item.Mode})
+		default:
 			return nil, fmt.Errorf("projeto %q resolve para modo %q: %w", item.Project.Name, item.Mode, domain.ErrUnsupportedMode)
 		}
-		routes = append(routes, Route{Project: item.Project, Mode: item.Mode, Preset: cfg.PHPProjectPreset(item.Project)})
 	}
 	return routes, nil
 }
@@ -174,9 +180,7 @@ func hasProjectTLSPreferences(cfg domain.Config) bool {
 	return false
 }
 
-// RenderWSL generates one deterministic route per explicitly registered
-// Laravel project. The exact and wildcard paths are both matched so /name and
-// /name/... behave consistently.
+// RenderWSL generates deterministic routes for PHP, static, and dev projects.
 func RenderWSL(cfg domain.Config) (string, error) {
 	routes, err := Routes(cfg)
 	if err != nil {
@@ -195,42 +199,88 @@ func RenderWSL(cfg domain.Config) (string, error) {
 
 	for _, route := range routes {
 		name := route.Project.Name
-		publicRoot := cfg.PHPDocumentRoot(route.Project)
-		socket := cfg.PHPSocket(route.Project)
 		fmt.Fprintf(&b, "    redir /%s /%s/ 308\n", name, name)
 		fmt.Fprintf(&b, "    handle_path /%s/* {\n", name)
-		fmt.Fprintf(&b, "        root * %s\n", quoteCaddy(publicRoot))
-		b.WriteString("        vars devlan_request_uri {http.request.uri}\n")
-		fmt.Fprintf(&b, "        php_fastcgi unix/%s {\n", socket)
-		fmt.Fprintf(&b, "            env REQUEST_URI /%s{vars.devlan_request_uri}\n", name)
-		fmt.Fprintf(&b, "            env SCRIPT_NAME /%s/index.php\n", name)
-		b.WriteString("            env HTTPS {http.request.header.X-DevLAN-HTTPS}\n")
-		fmt.Fprintf(&b, "            header_down Location ^/%s/(.*)$ /$1\n", name)
-		fmt.Fprintf(&b, "            header_down Location ^/(.*)$ /%s/$1\n", name)
-		b.WriteString("        }\n")
-		b.WriteString("        file_server\n")
+
+		switch route.Mode {
+		case domain.ModePHP:
+			publicRoot := cfg.PHPDocumentRoot(route.Project)
+			socket := cfg.PHPSocket(route.Project)
+			fmt.Fprintf(&b, "        root * %s\n", quoteCaddy(publicRoot))
+			b.WriteString("        vars devlan_request_uri {http.request.uri}\n")
+			fmt.Fprintf(&b, "        php_fastcgi unix/%s {\n", socket)
+			fmt.Fprintf(&b, "            env REQUEST_URI /%s{vars.devlan_request_uri}\n", name)
+			fmt.Fprintf(&b, "            env SCRIPT_NAME /%s/index.php\n", name)
+			b.WriteString("            env HTTPS {http.request.header.X-DevLAN-HTTPS}\n")
+			fmt.Fprintf(&b, "            header_down Location ^/%s/(.*)$ /$1\n", name)
+			fmt.Fprintf(&b, "            header_down Location ^/(.*)$ /%s/$1\n", name)
+			b.WriteString("        }\n")
+			b.WriteString("        file_server\n")
+
+		case domain.ModeStatic:
+			staticRoot := cfg.StaticDocumentRoot(route.Project)
+			fmt.Fprintf(&b, "        root * %s\n", quoteCaddy(staticRoot))
+			if cfg.SPAFallback(route.Project) {
+				b.WriteString("        try_files {path} {path}/ /index.html\n")
+			}
+			b.WriteString("        file_server\n")
+
+		case domain.ModeDev:
+			devPort := cfg.DevPort(route.Project)
+			fmt.Fprintf(&b, "        reverse_proxy 127.0.0.1:%d {\n", devPort)
+			b.WriteString("            header_up Host {http.request.host}\n")
+			b.WriteString("            header_up X-Forwarded-Host {http.request.host}\n")
+			fmt.Fprintf(&b, "            header_up X-DevLAN-Prefix /%s\n", name)
+			b.WriteString("            header_up Upgrade {http.request.header.Upgrade}\n")
+			b.WriteString("            header_up Connection {http.request.header.Connection}\n")
+			b.WriteString("        }\n")
+		}
+
 		b.WriteString("    }\n\n")
 	}
 
-	// Frontends compiled for the domain root can still emit /login, /build/...
-	// and similar URLs. Route those requests back to the project identified by
-	// the same-origin Referer, avoiding ambiguous global paths between projects.
+	// Frontends compiled for the domain root can still emit /login, /build/...,
+	// /@vite/client, /_next/..., etc. Route those requests back to the project
+	// identified by the same-origin Referer.
 	for index, route := range routes {
 		name := route.Project.Name
-		publicRoot := cfg.PHPDocumentRoot(route.Project)
-		socket := cfg.PHPSocket(route.Project)
 		fmt.Fprintf(&b, "    @devlan_compat_%d header_regexp Referer ^https?://[^/]+/%s(?:/|$)\n", index, regexp.QuoteMeta(name))
 		fmt.Fprintf(&b, "    handle @devlan_compat_%d {\n", index)
-		fmt.Fprintf(&b, "        root * %s\n", quoteCaddy(publicRoot))
-		b.WriteString("        vars devlan_request_uri {http.request.uri}\n")
-		fmt.Fprintf(&b, "        php_fastcgi unix/%s {\n", socket)
-		fmt.Fprintf(&b, "            env REQUEST_URI /%s{vars.devlan_request_uri}\n", name)
-		fmt.Fprintf(&b, "            env SCRIPT_NAME /%s/index.php\n", name)
-		b.WriteString("            env HTTPS {http.request.header.X-DevLAN-HTTPS}\n")
-		fmt.Fprintf(&b, "            header_down Location ^/%s/(.*)$ /$1\n", name)
-		fmt.Fprintf(&b, "            header_down Location ^/(.*)$ /%s/$1\n", name)
-		b.WriteString("        }\n")
-		b.WriteString("        file_server\n")
+
+		switch route.Mode {
+		case domain.ModePHP:
+			publicRoot := cfg.PHPDocumentRoot(route.Project)
+			socket := cfg.PHPSocket(route.Project)
+			fmt.Fprintf(&b, "        root * %s\n", quoteCaddy(publicRoot))
+			b.WriteString("        vars devlan_request_uri {http.request.uri}\n")
+			fmt.Fprintf(&b, "        php_fastcgi unix/%s {\n", socket)
+			fmt.Fprintf(&b, "            env REQUEST_URI /%s{vars.devlan_request_uri}\n", name)
+			fmt.Fprintf(&b, "            env SCRIPT_NAME /%s/index.php\n", name)
+			b.WriteString("            env HTTPS {http.request.header.X-DevLAN-HTTPS}\n")
+			fmt.Fprintf(&b, "            header_down Location ^/%s/(.*)$ /$1\n", name)
+			fmt.Fprintf(&b, "            header_down Location ^/(.*)$ /%s/$1\n", name)
+			b.WriteString("        }\n")
+			b.WriteString("        file_server\n")
+
+		case domain.ModeStatic:
+			staticRoot := cfg.StaticDocumentRoot(route.Project)
+			fmt.Fprintf(&b, "        root * %s\n", quoteCaddy(staticRoot))
+			if cfg.SPAFallback(route.Project) {
+				b.WriteString("        try_files {path} {path}/ /index.html\n")
+			}
+			b.WriteString("        file_server\n")
+
+		case domain.ModeDev:
+			devPort := cfg.DevPort(route.Project)
+			fmt.Fprintf(&b, "        reverse_proxy 127.0.0.1:%d {\n", devPort)
+			b.WriteString("            header_up Host {http.request.host}\n")
+			b.WriteString("            header_up X-Forwarded-Host {http.request.host}\n")
+			fmt.Fprintf(&b, "            header_up X-DevLAN-Prefix /%s\n", name)
+			b.WriteString("            header_up Upgrade {http.request.header.Upgrade}\n")
+			b.WriteString("            header_up Connection {http.request.header.Connection}\n")
+			b.WriteString("        }\n")
+		}
+
 		b.WriteString("    }\n\n")
 	}
 

@@ -248,6 +248,78 @@ func run(args []string) error {
 		}
 		return nil
 
+	case "start":
+		if len(args) != 1 {
+			return fmt.Errorf("uso: devlan start NAME")
+		}
+		if err := service.StartDev(ctx, args[0]); err != nil {
+			return err
+		}
+		fmt.Printf("Servidor dev iniciado para %s.\n", args[0])
+		return nil
+
+	case "stop":
+		if len(args) != 1 {
+			return fmt.Errorf("uso: devlan stop NAME")
+		}
+		if err := service.StopDev(ctx, args[0]); err != nil {
+			return err
+		}
+		fmt.Printf("Servidor dev parado para %s.\n", args[0])
+		return nil
+
+	case "restart":
+		if len(args) != 1 {
+			return fmt.Errorf("uso: devlan restart NAME")
+		}
+		if err := service.RestartDev(ctx, args[0]); err != nil {
+			return err
+		}
+		fmt.Printf("Servidor dev reiniciado para %s.\n", args[0])
+		return nil
+
+	case "build":
+		if len(args) != 1 {
+			return fmt.Errorf("uso: devlan build NAME")
+		}
+		out, err := service.BuildProject(ctx, args[0])
+		fmt.Print(out)
+		return err
+
+	case "deps":
+		if len(args) < 1 {
+			return fmt.Errorf("uso: devlan deps install NAME | devlan deps NAME")
+		}
+		name := args[0]
+		if args[0] == "install" {
+			if len(args) != 2 {
+				return fmt.Errorf("uso: devlan deps install NAME")
+			}
+			name = args[1]
+		}
+		out, err := service.InstallDeps(ctx, name)
+		fmt.Print(out)
+		return err
+
+	case "static":
+		if len(args) < 1 || len(args) > 2 {
+			return fmt.Errorf("uso: devlan static NAME [DIR]")
+		}
+		dir := ""
+		if len(args) == 2 {
+			dir = args[1]
+		}
+		res, err := service.SetProjectStaticDir(ctx, args[0], dir)
+		printWarnings(res.Warnings)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Diretório estático do projeto %s configurado.\n", args[0])
+		return nil
+
+	case "dev":
+		return runDevCommand(ctx, service, args)
+
 	case "logs":
 		if len(args) > 1 {
 			return fmt.Errorf("uso: devlan logs [COMPONENT]")
@@ -258,6 +330,12 @@ func run(args []string) error {
 		}
 		logs, err := service.Logs(component)
 		if err != nil {
+			// check if it's a dev project log
+			devLog, devErr := service.ProjectDevLogs(ctx, component, 100)
+			if devErr == nil && devLog != "" {
+				fmt.Print(devLog)
+				return nil
+			}
 			return err
 		}
 		fmt.Print(logs)
@@ -636,6 +714,82 @@ func runComposer(ctx context.Context, service *app.App, args []string) error {
 	return err
 }
 
+func runDevCommand(ctx context.Context, service *app.App, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("uso: devlan dev NAME [start|stop|restart|status|logs|--port PORT|--command CMD|--pm PM]")
+	}
+	name := args[0]
+	if len(args) == 1 {
+		return service.StartDev(ctx, name)
+	}
+	switch args[1] {
+	case "start":
+		return service.StartDev(ctx, name)
+	case "stop":
+		return service.StopDev(ctx, name)
+	case "restart":
+		return service.RestartDev(ctx, name)
+	case "status":
+		st, err := service.DevStatus(ctx, name)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Projeto: %s | Porta: %d | Estado: %s | PID: %d\n", st.ProjectName, st.Port, st.State, st.PID)
+		return nil
+	case "logs":
+		logs, err := service.ProjectDevLogs(ctx, name, 100)
+		if err != nil {
+			return err
+		}
+		fmt.Print(logs)
+		return nil
+	default:
+		// parse flags
+		for i := 1; i < len(args); i++ {
+			switch args[i] {
+			case "--port":
+				if i+1 >= len(args) {
+					return fmt.Errorf("--port exige um número de porta")
+				}
+				port, err := strconv.Atoi(args[i+1])
+				if err != nil || port < 1024 || port > 65535 {
+					return fmt.Errorf("porta dev inválida: %s", args[i+1])
+				}
+				res, err := service.SetProjectDevPort(ctx, name, port)
+				printWarnings(res.Warnings)
+				if err != nil {
+					return err
+				}
+				i++
+			case "--command", "--cmd":
+				if i+1 >= len(args) {
+					return fmt.Errorf("--command exige uma string de comando")
+				}
+				res, err := service.SetProjectDevCommand(ctx, name, args[i+1])
+				printWarnings(res.Warnings)
+				if err != nil {
+					return err
+				}
+				i++
+			case "--pm":
+				if i+1 >= len(args) {
+					return fmt.Errorf("--pm exige um gerenciador (npm, pnpm, yarn, bun)")
+				}
+				res, err := service.SetProjectPackageManager(ctx, name, args[i+1])
+				printWarnings(res.Warnings)
+				if err != nil {
+					return err
+				}
+				i++
+			default:
+				return fmt.Errorf("opção desconhecida: %s", args[i])
+			}
+		}
+		fmt.Printf("Configurações de dev do projeto %s atualizadas.\n", name)
+		return nil
+	}
+}
+
 func printProjects(service *app.App, filter string, asJSON bool) error {
 	cfg, err := service.Store.Load()
 	if err != nil {
@@ -671,17 +825,40 @@ func printProjects(service *app.App, filter string, asJSON bool) error {
 			return err
 		}
 		url := resolved.URL(host, cfg.WindowsPort, cfg.HTTPSPort, effective.SecureProject(project))
-		phpVersion := effective.EffectivePHPVersion(project)
-		preset := string(effective.PHPProjectPreset(project))
+		
+		runtimeStr := "-"
+		typeStr := string(resolved.Mode)
+		switch resolved.Mode {
+		case domain.ModePHP:
+			runtimeStr = effective.EffectivePHPVersion(project)
+			typeStr = string(effective.PHPProjectPreset(project))
+		case domain.ModeStatic:
+			staticDir := "root"
+			if project.StaticDir != nil && *project.StaticDir != "" {
+				staticDir = *project.StaticDir
+			}
+			runtimeStr = "-"
+			typeStr = "static (" + staticDir + ")"
+		case domain.ModeDev:
+			fw := "generic"
+			if project.DevFramework != nil {
+				fw = *project.DevFramework
+			}
+			port := effective.DevPort(project)
+			runtimeStr = fmt.Sprintf("%s :%d", fw, port)
+			pm := effective.PackageManager(project)
+			typeStr = "dev (" + pm + ")"
+		}
+
 		rows = append(rows, projectRow{
-			Name:   project.Name,
-			Mode:   string(resolved.Mode),
-			PHP:    phpVersion,
-			Preset: preset,
-			Source: string(resolved.Source),
-			SSL:    sslState(cfg.SecureProject(project)),
-			URL:    url,
-			Path:   project.Path,
+			Name:    project.Name,
+			Mode:    string(resolved.Mode),
+			Runtime: runtimeStr,
+			Type:    typeStr,
+			Source:  string(resolved.Source),
+			SSL:     sslState(cfg.SecureProject(project)),
+			URL:     url,
+			Path:    project.Path,
 		})
 	}
 	if asJSON {
@@ -701,26 +878,26 @@ func printProjects(service *app.App, filter string, asJSON bool) error {
 }
 
 type projectRow struct {
-	Name   string `json:"name"`
-	Mode   string `json:"mode"`
-	PHP    string `json:"php"`
-	Preset string `json:"preset"`
-	Source string `json:"source"`
-	SSL    string `json:"ssl"`
-	URL    string `json:"url"`
-	Path   string `json:"path"`
+	Name    string `json:"name"`
+	Mode    string `json:"mode"`
+	Runtime string `json:"runtime"`
+	Type    string `json:"type"`
+	Source  string `json:"source"`
+	SSL     string `json:"ssl"`
+	URL     string `json:"url"`
+	Path    string `json:"path"`
 }
 
 func writeProjectTable(output io.Writer, rows []projectRow) error {
 	writer := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(writer, "PROJETO\tMODO\tPHP\tTIPO\tORIGEM\tSSL\tURL\tCAMINHO"); err != nil {
+	if _, err := fmt.Fprintln(writer, "PROJETO\tMODO\tRUNTIME\tTIPO\tORIGEM\tSSL\tURL\tCAMINHO"); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(writer, "-------\t----\t---\t----\t------\t---\t---\t-------"); err != nil {
+	if _, err := fmt.Fprintln(writer, "-------\t----\t-------\t----\t------\t---\t---\t-------"); err != nil {
 		return err
 	}
 	for _, row := range rows {
-		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", row.Name, row.Mode, row.PHP, row.Preset, row.Source, row.SSL, row.URL, row.Path); err != nil {
+		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", row.Name, row.Mode, row.Runtime, row.Type, row.Source, row.SSL, row.URL, row.Path); err != nil {
 			return err
 		}
 	}
@@ -782,7 +959,7 @@ func printWarnings(warnings []string) {
 }
 
 func printUsage() {
-	fmt.Print(`DevLAN — publicar projetos Laravel do WSL na rede local
+	fmt.Print(`DevLAN — publicar projetos PHP, JavaScript e estáticos do WSL na rede local
 
 Uso:
   devlan [--data-dir DIR] COMANDO [ARGUMENTOS]
@@ -791,12 +968,21 @@ Fundação e registro:
   install [--no-firewall] [--windows-port PORT]
                               inicializa arquivos gerenciados (Administrador*)
   uninstall                  remove arquivos gerenciados, preserva projetos (Administrador*)
-  link NAME PATH             registra um projeto Laravel
+  link NAME PATH             registra um projeto (PHP, Vite, Next, estático)
   unlink NAME                remove registro e rota
   links [FILTRO] [--json]    lista projetos registrados e descobertos
   park PATH                  registra uma pasta de projetos
   unpark PATH                remove uma pasta estacionada
   parked                     lista pastas estacionadas
+
+Servidores Dev e Estáticos:
+  start NAME                 inicia o servidor de desenvolvimento do projeto
+  stop NAME                  para o servidor de desenvolvimento do projeto
+  restart NAME               reinicia o servidor de desenvolvimento
+  build NAME                 executa build do projeto
+  deps install NAME          instala dependências do projeto
+  static NAME [DIR]          configura pasta de arquivos estáticos
+  dev NAME [OPÇÕES]          configura ou gerencia servidor dev
 
 Operação:
   status                     mostra componentes, projetos e URLs
@@ -807,8 +993,8 @@ Operação:
   doctor [NAME]              diagnostica host, runtime e projeto
   logs [COMPONENT]           mostra logs gerenciados
   open [NAME]                abre URL ou mostra o dashboard textual
-  mode default php           define o modo global
-  mode NAME php|inherit      sobrescreve ou restaura herança
+  mode default MODE          define o modo global (php, dev, static, auto)
+  mode NAME MODE|inherit     sobrescreve ou restaura herança
 
 PHP:
   php list                   lista versões, extensões e estado

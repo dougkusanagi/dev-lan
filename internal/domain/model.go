@@ -57,6 +57,13 @@ type Project struct {
 	PHPIsolatedPool     *bool                `json:"php_isolated_pool,omitempty"`
 	PHPFPMPool          *PHPFPMPoolConfig    `json:"php_fpm_pool,omitempty"`
 	ComposerEnvironment *ComposerEnvironment `json:"composer_environment,omitempty"`
+	StaticDir           *string              `json:"static_dir,omitempty"`
+	SPAFallback         *bool                `json:"spa_fallback,omitempty"`
+	DevCommand          *string              `json:"dev_command,omitempty"`
+	DevPort             *int                 `json:"dev_port,omitempty"`
+	DevFramework        *string              `json:"dev_framework,omitempty"`
+	PackageManager      *string              `json:"package_manager,omitempty"`
+	IdleTimeout         *string              `json:"idle_timeout,omitempty"`
 }
 
 type Park struct {
@@ -77,6 +84,8 @@ type Config struct {
 	PHPVersions       []PHPVersionConfig `json:"php_versions"`
 	PHPFPMPool        PHPFPMPoolConfig   `json:"php_fpm_pool"`
 	Composer          ComposerConfig     `json:"composer"`
+	DevBasePort       int                `json:"dev_base_port,omitempty"`
+	DefaultIdleTimeout string            `json:"default_idle_timeout,omitempty"`
 	Projects          []Project          `json:"projects"`
 	Parks             []Park             `json:"parks"`
 }
@@ -409,8 +418,22 @@ func (c *Config) Normalize() error {
 		}
 	}
 
+	if c.DevBasePort == 0 {
+		c.DevBasePort = 9100
+	}
+	if c.DefaultIdleTimeout == "" {
+		c.DefaultIdleTimeout = "15m"
+	}
+	if c.DevBasePort < 1024 || c.DevBasePort > 65000 {
+		return fmt.Errorf("porta base dev inválida: %d", c.DevBasePort)
+	}
+	if _, err := time.ParseDuration(c.DefaultIdleTimeout); err != nil {
+		return fmt.Errorf("idle timeout padrão inválido: %q", c.DefaultIdleTimeout)
+	}
+
 	seenNames := map[string]struct{}{}
 	seenPaths := map[string]struct{}{}
+	seenDevPorts := map[int]string{}
 	for i := range c.Projects {
 		project := &c.Projects[i]
 		name, err := NormalizeName(project.Name)
@@ -432,6 +455,26 @@ func (c *Config) Normalize() error {
 		seenPaths[project.Path] = struct{}{}
 		if err := validateOptionalMode(project.Mode); err != nil {
 			return fmt.Errorf("projeto %q: %w", project.Name, err)
+		}
+		if project.DevPort != nil {
+			port := *project.DevPort
+			if port < 1024 || port > 65535 {
+				return fmt.Errorf("projeto %q: porta dev inválida: %d", project.Name, port)
+			}
+			if existingName, exists := seenDevPorts[port]; exists {
+				return fmt.Errorf("porta dev %d em conflito entre %q e %q", port, existingName, project.Name)
+			}
+			seenDevPorts[port] = project.Name
+		}
+		if project.IdleTimeout != nil && *project.IdleTimeout != "" {
+			if duration, err := time.ParseDuration(*project.IdleTimeout); err != nil || duration <= 0 {
+				return fmt.Errorf("projeto %q: idle timeout inválido: %q", project.Name, *project.IdleTimeout)
+			}
+		}
+		if project.StaticDir != nil && *project.StaticDir != "" {
+			clean := pathpkg.Clean(strings.ReplaceAll(strings.TrimSpace(*project.StaticDir), "\\", "/"))
+			clean = strings.TrimPrefix(clean, "./")
+			*project.StaticDir = clean
 		}
 		if project.PHPVersion != nil {
 			version, err := NormalizePHPVersion(*project.PHPVersion)
@@ -858,6 +901,173 @@ func (c *Config) SetProjectPHPPool(name string, pool *PHPFPMPoolConfig) error {
 	return fmt.Errorf("projeto não encontrado: %s", normalizedName)
 }
 
+func (c *Config) SetProjectStaticDir(name string, dir *string) error {
+	normalizedName, err := NormalizeName(name)
+	if err != nil {
+		return err
+	}
+	for i := range c.Projects {
+		if c.Projects[i].Name == normalizedName {
+			c.Projects[i].StaticDir = dir
+			return c.Normalize()
+		}
+	}
+	return fmt.Errorf("projeto não encontrado: %s", normalizedName)
+}
+
+func (c *Config) SetProjectSPAFallback(name string, spa *bool) error {
+	normalizedName, err := NormalizeName(name)
+	if err != nil {
+		return err
+	}
+	for i := range c.Projects {
+		if c.Projects[i].Name == normalizedName {
+			c.Projects[i].SPAFallback = spa
+			return c.Normalize()
+		}
+	}
+	return fmt.Errorf("projeto não encontrado: %s", normalizedName)
+}
+
+func (c *Config) SetProjectDevPort(name string, port *int) error {
+	normalizedName, err := NormalizeName(name)
+	if err != nil {
+		return err
+	}
+	for i := range c.Projects {
+		if c.Projects[i].Name == normalizedName {
+			c.Projects[i].DevPort = port
+			return c.Normalize()
+		}
+	}
+	return fmt.Errorf("projeto não encontrado: %s", normalizedName)
+}
+
+func (c *Config) SetProjectDevCommand(name string, cmd *string) error {
+	normalizedName, err := NormalizeName(name)
+	if err != nil {
+		return err
+	}
+	for i := range c.Projects {
+		if c.Projects[i].Name == normalizedName {
+			c.Projects[i].DevCommand = cmd
+			return c.Normalize()
+		}
+	}
+	return fmt.Errorf("projeto não encontrado: %s", normalizedName)
+}
+
+func (c *Config) SetProjectPackageManager(name string, pm *string) error {
+	normalizedName, err := NormalizeName(name)
+	if err != nil {
+		return err
+	}
+	for i := range c.Projects {
+		if c.Projects[i].Name == normalizedName {
+			c.Projects[i].PackageManager = pm
+			return c.Normalize()
+		}
+	}
+	return fmt.Errorf("projeto não encontrado: %s", normalizedName)
+}
+
+func (c *Config) SetProjectIdleTimeout(name string, timeout *string) error {
+	normalizedName, err := NormalizeName(name)
+	if err != nil {
+		return err
+	}
+	for i := range c.Projects {
+		if c.Projects[i].Name == normalizedName {
+			c.Projects[i].IdleTimeout = timeout
+			return c.Normalize()
+		}
+	}
+	return fmt.Errorf("projeto não encontrado: %s", normalizedName)
+}
+
+func (c Config) StaticDocumentRoot(project Project) string {
+	if project.StaticDir != nil && strings.TrimSpace(*project.StaticDir) != "" {
+		dir := strings.TrimSpace(*project.StaticDir)
+		if strings.HasPrefix(dir, "/") {
+			return dir
+		}
+		return pathpkg.Join(project.Path, dir)
+	}
+	return project.Path
+}
+
+func (c Config) SPAFallback(project Project) bool {
+	if project.SPAFallback != nil {
+		return *project.SPAFallback
+	}
+	return true
+}
+
+func (c Config) DevPort(project Project) int {
+	if project.DevPort != nil && *project.DevPort > 0 {
+		return *project.DevPort
+	}
+	// Deterministic port allocation: find index of project among registered projects
+	base := c.DevBasePort
+	if base == 0 {
+		base = 9100
+	}
+	allocated := map[int]bool{}
+	for _, p := range c.Projects {
+		if p.DevPort != nil && *p.DevPort > 0 {
+			allocated[*p.DevPort] = true
+		}
+	}
+	for index, p := range c.Projects {
+		if p.Name == project.Name {
+			candidate := base + index
+			for allocated[candidate] {
+				candidate++
+			}
+			return candidate
+		}
+	}
+	return base
+}
+
+func (c Config) DevCommand(project Project) string {
+	if project.DevCommand != nil && strings.TrimSpace(*project.DevCommand) != "" {
+		return strings.TrimSpace(*project.DevCommand)
+	}
+	pm := c.PackageManager(project)
+	switch pm {
+	case "yarn":
+		return "yarn dev"
+	case "pnpm":
+		return "pnpm run dev"
+	case "bun":
+		return "bun run dev"
+	default:
+		return "npm run dev"
+	}
+}
+
+func (c Config) PackageManager(project Project) string {
+	if project.PackageManager != nil && strings.TrimSpace(*project.PackageManager) != "" {
+		return strings.TrimSpace(*project.PackageManager)
+	}
+	return "npm"
+}
+
+func (c Config) ProjectIdleTimeout(project Project) time.Duration {
+	if project.IdleTimeout != nil && strings.TrimSpace(*project.IdleTimeout) != "" {
+		if d, err := time.ParseDuration(*project.IdleTimeout); err == nil && d > 0 {
+			return d
+		}
+	}
+	if c.DefaultIdleTimeout != "" {
+		if d, err := time.ParseDuration(c.DefaultIdleTimeout); err == nil && d > 0 {
+			return d
+		}
+	}
+	return 15 * time.Minute
+}
+
 func (c Config) Resolve(name string) (ResolvedProject, error) {
 	project, found := c.Project(name)
 	if !found {
@@ -933,4 +1143,5 @@ func (r ResolvedProject) URL(host string, httpPort, httpsPort int, secure bool) 
 	return fmt.Sprintf("http://%s:%d/%s", address, httpPort, r.Project.Name)
 }
 
-var ErrUnsupportedMode = errors.New("modo ainda não implementado no MVP")
+var ErrUnsupportedMode = errors.New("modo ainda não implementado")
+

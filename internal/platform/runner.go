@@ -115,6 +115,14 @@ func (r WSLRunner) Exists(ctx context.Context, path string) (bool, error) {
 	return false, nil
 }
 
+func (r WSLRunner) ReadFile(ctx context.Context, path string) ([]byte, error) {
+	output, err := r.Run(ctx, "/bin/cat", path)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(output), nil
+}
+
 // LaravelMarkers checks both Laravel marker files in one WSL process. Starting
 // wsl.exe is comparatively expensive, so callers that discover many projects
 // should prefer this over two individual Exists calls.
@@ -168,23 +176,58 @@ func (r WSLRunner) ListDirectories(ctx context.Context, parent string) ([]string
 	return paths, nil
 }
 
-type DiscoveredPHPProject struct {
-	Path        string
-	Artisan     bool
-	PublicIndex bool
-	RootIndex   bool
-	Console     bool
+type DiscoveredRawProject struct {
+	Path           string
+	Artisan        bool
+	PublicIndex    bool
+	RootIndex      bool
+	Console        bool
+	HasPackageJSON bool
+	PnpmLock       bool
+	YarnLock       bool
+	BunLock        bool
+	NpmLock        bool
+	Vite           bool
+	Next           bool
+	Nuxt           bool
+	Astro          bool
+	Svelte         bool
+	DistHTML       bool
+	DistDir        bool
+	RootHTML       bool
 }
 
-func (r WSLRunner) DiscoverPHPProjects(ctx context.Context, parent string) ([]DiscoveredPHPProject, error) {
+func (r WSLRunner) DiscoverAllProjects(ctx context.Context, parent string) ([]DiscoveredRawProject, error) {
 	script := `for d in "$1"/*; do
 		if [ -d "$d" ]; then
 			a=0; p=0; r=0; c=0
+			pkg=0; pnpm=0; yarn=0; bun=0; npm=0
+			vite=0; next=0; nuxt=0; astro=0; svelte=0
+			dist_h=0; dist_d=0; root_h=0
+
 			[ -f "$d/artisan" ] && a=1
 			[ -f "$d/public/index.php" ] && p=1
 			[ -f "$d/index.php" ] && r=1
 			[ -f "$d/bin/console" ] && c=1
-			printf '%s\t%d\t%d\t%d\t%d\n' "$d" "$a" "$p" "$r" "$c"
+
+			[ -f "$d/package.json" ] && pkg=1
+			[ -f "$d/pnpm-lock.yaml" ] && pnpm=1
+			[ -f "$d/yarn.lock" ] && yarn=1
+			([ -f "$d/bun.lockb" ] || [ -f "$d/bun.lock" ]) && bun=1
+			[ -f "$d/package-lock.json" ] && npm=1
+
+			([ -f "$d/vite.config.js" ] || [ -f "$d/vite.config.ts" ] || [ -f "$d/vite.config.mjs" ]) && vite=1
+			([ -f "$d/next.config.js" ] || [ -f "$d/next.config.mjs" ] || [ -f "$d/next.config.ts" ]) && next=1
+			([ -f "$d/nuxt.config.ts" ] || [ -f "$d/nuxt.config.js" ]) && nuxt=1
+			([ -f "$d/astro.config.mjs" ] || [ -f "$d/astro.config.ts" ]) && astro=1
+			[ -f "$d/svelte.config.js" ] && svelte=1
+
+			[ -f "$d/dist/index.html" ] && dist_h=1
+			[ -d "$d/dist" ] && dist_d=1
+			[ -f "$d/index.html" ] && root_h=1
+
+			printf '%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n' \
+				"$d" "$a" "$p" "$r" "$c" "$pkg" "$pnpm" "$yarn" "$bun" "$npm" "$vite" "$next" "$nuxt" "$astro" "$svelte" "$dist_h" "$dist_d" "$root_h"
 		fi
 	done`
 	output, err := r.Run(ctx, "/bin/sh", "-c", script, "devlan", parent)
@@ -192,21 +235,34 @@ func (r WSLRunner) DiscoverPHPProjects(ctx context.Context, parent string) ([]Di
 		if errors.Is(err, ErrUnavailable) {
 			return nil, err
 		}
-		return []DiscoveredPHPProject{}, nil
+		return []DiscoveredRawProject{}, nil
 	}
 	lines := strings.Split(strings.ReplaceAll(output, "\r\n", "\n"), "\n")
-	results := make([]DiscoveredPHPProject, 0, len(lines))
+	results := make([]DiscoveredRawProject, 0, len(lines))
 	for _, line := range lines {
 		parts := strings.Split(strings.TrimSpace(line), "\t")
-		if len(parts) < 5 {
+		if len(parts) < 18 {
 			continue
 		}
-		results = append(results, DiscoveredPHPProject{
-			Path:        filepath.ToSlash(parts[0]),
-			Artisan:     parts[1] == "1",
-			PublicIndex: parts[2] == "1",
-			RootIndex:   parts[3] == "1",
-			Console:     parts[4] == "1",
+		results = append(results, DiscoveredRawProject{
+			Path:           filepath.ToSlash(parts[0]),
+			Artisan:        parts[1] == "1",
+			PublicIndex:    parts[2] == "1",
+			RootIndex:      parts[3] == "1",
+			Console:        parts[4] == "1",
+			HasPackageJSON: parts[5] == "1",
+			PnpmLock:       parts[6] == "1",
+			YarnLock:       parts[7] == "1",
+			BunLock:        parts[8] == "1",
+			NpmLock:        parts[9] == "1",
+			Vite:           parts[10] == "1",
+			Next:           parts[11] == "1",
+			Nuxt:           parts[12] == "1",
+			Astro:          parts[13] == "1",
+			Svelte:         parts[14] == "1",
+			DistHTML:       parts[15] == "1",
+			DistDir:        parts[16] == "1",
+			RootHTML:       parts[17] == "1",
 		})
 	}
 	sort.Slice(results, func(i, j int) bool {

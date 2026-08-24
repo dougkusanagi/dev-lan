@@ -139,12 +139,44 @@ func TestRenderWindowsClearsSecureBrowserStateBeforeDowngradingAProject(t *testi
 	}
 }
 
-func TestRenderRejectsFutureModeUntilImplemented(t *testing.T) {
+func TestRenderWSLStaticAndDevModes(t *testing.T) {
 	cfg := domain.NewConfig()
-	mode := domain.ModeDev
-	cfg.Projects = []domain.Project{{Name: "painel", Path: "/home/dev/painel", Mode: &mode}}
-	if _, err := RenderWSL(cfg); err == nil || !strings.Contains(err.Error(), "não implementado") {
-		t.Fatalf("modo futuro deveria ser rejeitado: %v", err)
+	staticMode := domain.ModeStatic
+	devMode := domain.ModeDev
+	dist := "dist"
+	devPort := 9300
+	cfg.Projects = []domain.Project{
+		{Name: "frontend", Path: "/home/dev/frontend", Mode: &staticMode, StaticDir: &dist},
+		{Name: "vite-app", Path: "/home/dev/vite-app", Mode: &devMode, DevPort: &devPort},
+	}
+	result, err := RenderWSL(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Check static route
+	if !strings.Contains(result, `handle_path /frontend/*`) {
+		t.Fatalf("rota estática ausente:\n%s", result)
+	}
+	if !strings.Contains(result, `root * "/home/dev/frontend/dist"`) {
+		t.Fatalf("document root estático ausente:\n%s", result)
+	}
+	if !strings.Contains(result, "try_files {path} {path}/ /index.html") {
+		t.Fatalf("SPA fallback ausente:\n%s", result)
+	}
+
+	// Check dev route
+	if !strings.Contains(result, `handle_path /vite-app/*`) {
+		t.Fatalf("rota dev ausente:\n%s", result)
+	}
+	if !strings.Contains(result, `reverse_proxy 127.0.0.1:9300`) {
+		t.Fatalf("proxy reverso dev ausente:\n%s", result)
+	}
+	if !strings.Contains(result, `header_up X-DevLAN-Prefix /vite-app`) {
+		t.Fatalf("header de prefixo ausente:\n%s", result)
+	}
+	if !strings.Contains(result, `header_up Upgrade {http.request.header.Upgrade}`) {
+		t.Fatalf("suporte a websocket/HMR ausente:\n%s", result)
 	}
 }
 

@@ -26,6 +26,7 @@ type App struct {
 	Detector     detect.Detector
 	WSL          platform.WSLRunner
 	PHP          platform.PHPManager
+	Dev          platform.DevManager
 	WindowsCaddy platform.CaddyClient
 	WSLCaddy     platform.CaddyClient
 	Now          func() time.Time
@@ -38,6 +39,7 @@ func New(dataDir string) *App {
 		Detector:     detect.Detector{Inspector: detect.SmartInspector{WSL: wsl}},
 		WSL:          wsl,
 		PHP:          platform.NewWSLPHPManager(wsl),
+		Dev:          platform.NewWSLDevManager(wsl),
 		WindowsCaddy: platform.NewLocalCaddy(""),
 		WSLCaddy:     platform.NewWSLCaddy(wsl),
 		Now:          time.Now,
@@ -128,7 +130,7 @@ func (a *App) Link(ctx context.Context, name, projectPath string) (domain.Projec
 	if err != nil {
 		return domain.Project{}, ApplyResult{}, err
 	}
-	detected, err := a.Detector.DetectPHP(ctx, normalizedPath)
+	detected, err := a.Detector.DetectProject(ctx, normalizedPath)
 	if err != nil {
 		return domain.Project{}, ApplyResult{}, err
 	}
@@ -142,8 +144,39 @@ func (a *App) Link(ctx context.Context, name, projectPath string) (domain.Projec
 	}
 	for i := range cfg.Projects {
 		if cfg.Projects[i].Name == project.Name {
-			preset := detected.Preset
-			cfg.Projects[i].PHPPreset = &preset
+			switch detected.Kind {
+			case detect.ProjectKindPHP:
+				preset := detected.PHP.Preset
+				cfg.Projects[i].PHPPreset = &preset
+				mode := domain.ModePHP
+				cfg.Projects[i].Mode = &mode
+			case detect.ProjectKindDev:
+				mode := domain.ModeDev
+				cfg.Projects[i].Mode = &mode
+				pm := detected.JS.PackageManager
+				cfg.Projects[i].PackageManager = &pm
+				fw := detected.JS.Framework
+				cfg.Projects[i].DevFramework = &fw
+				if detected.JS.DevScript != "" {
+					devCmd := detected.JS.DevScript
+					cfg.Projects[i].DevCommand = &devCmd
+				}
+				if detected.JS.StaticDir != "" {
+					staticDir := detected.JS.StaticDir
+					cfg.Projects[i].StaticDir = &staticDir
+				}
+				spa := detected.JS.IsSPA
+				cfg.Projects[i].SPAFallback = &spa
+			case detect.ProjectKindStatic:
+				mode := domain.ModeStatic
+				cfg.Projects[i].Mode = &mode
+				if detected.JS.StaticDir != "" {
+					staticDir := detected.JS.StaticDir
+					cfg.Projects[i].StaticDir = &staticDir
+				}
+				spa := detected.JS.IsSPA
+				cfg.Projects[i].SPAFallback = &spa
+			}
 			project = cfg.Projects[i]
 			break
 		}
@@ -874,10 +907,6 @@ func (a *App) apply(ctx context.Context, cfg domain.Config, validate, reload boo
 	return result, nil
 }
 
-// EffectiveConfig adds Laravel projects discovered as direct children of a
-// parked directory. They are intentionally not written to state.json: the
-// park is the explicit registration and removing it immediately removes the
-// discovered routes.
 func (a *App) EffectiveConfig(ctx context.Context, cfg domain.Config) (domain.Config, error) {
 	effective := cfg
 	knownNames := make(map[string]struct{}, len(cfg.Projects))
@@ -887,11 +916,8 @@ func (a *App) EffectiveConfig(ctx context.Context, cfg domain.Config) (domain.Co
 		knownPaths[project.Path] = struct{}{}
 	}
 	for _, park := range cfg.Parks {
-		discovered, err := a.Detector.BatchDetectPHP(ctx, park.Path)
+		discovered, err := a.Detector.BatchDiscoverProjects(ctx, park.Path)
 		if err != nil {
-			// A parked WSL directory may be temporarily unavailable. Explicit
-			// links remain usable, so leave discovery empty and let doctor report
-			// the missing runtime.
 			if errors.Is(err, platform.ErrUnavailable) {
 				continue
 			}
@@ -914,8 +940,41 @@ func (a *App) EffectiveConfig(ctx context.Context, cfg domain.Config) (domain.Co
 				// stable name.
 				continue
 			}
-			preset := item.Preset
-			effective.Projects = append(effective.Projects, domain.Project{Name: name, Path: childPath, PHPPreset: &preset})
+			switch item.Kind {
+			case detect.ProjectKindPHP:
+				preset := item.PHP.Preset
+				mode := domain.ModePHP
+				effective.Projects = append(effective.Projects, domain.Project{
+					Name: name, Path: childPath, Mode: &mode, PHPPreset: &preset,
+				})
+			case detect.ProjectKindDev:
+				mode := domain.ModeDev
+				pm := item.JS.PackageManager
+				fw := item.JS.Framework
+				proj := domain.Project{
+					Name: name, Path: childPath, Mode: &mode, PackageManager: &pm, DevFramework: &fw,
+				}
+				if item.JS.DevScript != "" {
+					proj.DevCommand = &item.JS.DevScript
+				}
+				if item.JS.StaticDir != "" {
+					proj.StaticDir = &item.JS.StaticDir
+				}
+				spa := item.JS.IsSPA
+				proj.SPAFallback = &spa
+				effective.Projects = append(effective.Projects, proj)
+			case detect.ProjectKindStatic:
+				mode := domain.ModeStatic
+				proj := domain.Project{
+					Name: name, Path: childPath, Mode: &mode,
+				}
+				if item.JS.StaticDir != "" {
+					proj.StaticDir = &item.JS.StaticDir
+				}
+				spa := item.JS.IsSPA
+				proj.SPAFallback = &spa
+				effective.Projects = append(effective.Projects, proj)
+			}
 			knownNames[name] = struct{}{}
 			knownPaths[childPath] = struct{}{}
 		}
@@ -977,6 +1036,13 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 		checks = append(checks, Check{"Caddy WSL", "WARN", "não encontrado"})
 	} else {
 		checks = append(checks, Check{"Caddy WSL", "OK", "disponível"})
+	}
+
+	// Check Node & JS package managers
+	for _, tool := range []string{"node", "npm", "pnpm", "yarn", "bun"} {
+		if has, _ := a.WSL.HasCommand(ctx, tool); has {
+			checks = append(checks, Check{"WSL " + tool, "OK", "disponível"})
+		}
 	}
 
 	adminRunning := platform.IsAdminResponsive(platform.WindowsCaddyAdminAddress)
@@ -1075,15 +1141,28 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 		if err != nil {
 			return nil, err
 		}
-		if resolved.Mode != domain.ModePHP {
-			checks = append(checks, Check{"Projeto " + project.Name, "WARN", "modo " + string(resolved.Mode) + " ainda não implementado"})
-			continue
-		}
-		detected, detectErr := a.Detector.DetectPHP(ctx, project.Path)
-		if detectErr != nil {
-			checks = append(checks, Check{"Projeto " + project.Name, "FAIL", detectErr.Error()})
-		} else {
-			checks = append(checks, Check{"Projeto " + project.Name, "OK", fmt.Sprintf("%s, preset=%s, PHP=%s, pool=%s", detected.DocumentRoot, effective.PHPProjectPreset(project), effective.EffectivePHPVersion(project), phpconfig.PoolSummary(effective, project))})
+		switch resolved.Mode {
+		case domain.ModePHP:
+			detected, detectErr := a.Detector.DetectPHP(ctx, project.Path)
+			if detectErr != nil {
+				checks = append(checks, Check{"Projeto " + project.Name, "FAIL", detectErr.Error()})
+			} else {
+				checks = append(checks, Check{"Projeto " + project.Name, "OK", fmt.Sprintf("%s, preset=%s, PHP=%s, pool=%s", detected.DocumentRoot, effective.PHPProjectPreset(project), effective.EffectivePHPVersion(project), phpconfig.PoolSummary(effective, project))})
+			}
+		case domain.ModeStatic:
+			staticRoot := effective.StaticDocumentRoot(project)
+			spa := effective.SPAFallback(project)
+			checks = append(checks, Check{"Projeto " + project.Name, "OK", fmt.Sprintf("estático: %s (spa_fallback=%t)", staticRoot, spa)})
+		case domain.ModeDev:
+			devPort := effective.DevPort(project)
+			devCmd := effective.DevCommand(project)
+			pm := effective.PackageManager(project)
+			statusStr := "parado"
+			if a.Dev != nil {
+				st, _ := a.Dev.Status(ctx, project, devPort)
+				statusStr = string(st.State)
+			}
+			checks = append(checks, Check{"Projeto " + project.Name, "OK", fmt.Sprintf("dev server: %s (porta %d, pm=%s, status=%s)", devCmd, devPort, pm, statusStr)})
 		}
 	}
 	return checks, nil
@@ -1217,4 +1296,209 @@ func (a *App) CheckLANAddressDivergence() (current string, generated string, div
 		return current, generated, true
 	}
 	return current, generated, false
+}
+
+func (a *App) resolveProject(ctx context.Context, selector string) (domain.Project, domain.Config, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return domain.Project{}, domain.Config{}, err
+	}
+	effective, err := a.EffectiveConfig(ctx, cfg)
+	if err != nil {
+		return domain.Project{}, domain.Config{}, err
+	}
+	project, found := projectBySelector(effective.Projects, selector)
+	if !found {
+		return domain.Project{}, domain.Config{}, fmt.Errorf("projeto não encontrado: %s", selector)
+	}
+	return project, effective, nil
+}
+
+func (a *App) StartDev(ctx context.Context, selector string) error {
+	if a.Dev == nil {
+		return fmt.Errorf("gerenciador dev não configurado")
+	}
+	project, cfg, err := a.resolveProject(ctx, selector)
+	if err != nil {
+		return err
+	}
+	port := cfg.DevPort(project)
+	cmd := cfg.DevCommand(project)
+	if err := a.Dev.StartDev(ctx, project, port, cmd); err != nil {
+		return err
+	}
+	_ = a.appendLog("dev start %s (porta %d)", project.Name, port)
+	return nil
+}
+
+func (a *App) StopDev(ctx context.Context, selector string) error {
+	if a.Dev == nil {
+		return fmt.Errorf("gerenciador dev não configurado")
+	}
+	project, cfg, err := a.resolveProject(ctx, selector)
+	if err != nil {
+		return err
+	}
+	port := cfg.DevPort(project)
+	if err := a.Dev.StopDev(ctx, project, port); err != nil {
+		return err
+	}
+	_ = a.appendLog("dev stop %s", project.Name)
+	return nil
+}
+
+func (a *App) RestartDev(ctx context.Context, selector string) error {
+	if a.Dev == nil {
+		return fmt.Errorf("gerenciador dev não configurado")
+	}
+	project, cfg, err := a.resolveProject(ctx, selector)
+	if err != nil {
+		return err
+	}
+	port := cfg.DevPort(project)
+	cmd := cfg.DevCommand(project)
+	if err := a.Dev.RestartDev(ctx, project, port, cmd); err != nil {
+		return err
+	}
+	_ = a.appendLog("dev restart %s (porta %d)", project.Name, port)
+	return nil
+}
+
+func (a *App) BuildProject(ctx context.Context, selector string) (string, error) {
+	if a.Dev == nil {
+		return "", fmt.Errorf("gerenciador dev não configurado")
+	}
+	project, cfg, err := a.resolveProject(ctx, selector)
+	if err != nil {
+		return "", err
+	}
+	pm := cfg.PackageManager(project)
+	out, err := a.Dev.Build(ctx, project, pm)
+	if err == nil {
+		_ = a.appendLog("build %s (%s)", project.Name, pm)
+	}
+	return out, err
+}
+
+func (a *App) InstallDeps(ctx context.Context, selector string) (string, error) {
+	if a.Dev == nil {
+		return "", fmt.Errorf("gerenciador dev não configurado")
+	}
+	project, cfg, err := a.resolveProject(ctx, selector)
+	if err != nil {
+		return "", err
+	}
+	pm := cfg.PackageManager(project)
+	out, err := a.Dev.InstallDeps(ctx, project, pm)
+	if err == nil {
+		_ = a.appendLog("deps install %s (%s)", project.Name, pm)
+	}
+	return out, err
+}
+
+func (a *App) ProjectDevLogs(ctx context.Context, selector string, lines int) (string, error) {
+	if a.Dev == nil {
+		return "", fmt.Errorf("gerenciador dev não configurado")
+	}
+	project, _, err := a.resolveProject(ctx, selector)
+	if err != nil {
+		return "", err
+	}
+	return a.Dev.Logs(ctx, project, lines)
+}
+
+func (a *App) DevStatus(ctx context.Context, selector string) (platform.DevProcessStatus, error) {
+	if a.Dev == nil {
+		return platform.DevProcessStatus{}, fmt.Errorf("gerenciador dev não configurado")
+	}
+	project, cfg, err := a.resolveProject(ctx, selector)
+	if err != nil {
+		return platform.DevProcessStatus{}, err
+	}
+	port := cfg.DevPort(project)
+	return a.Dev.Status(ctx, project, port)
+}
+
+func (a *App) SetProjectStaticDir(ctx context.Context, selector, staticDir string) (ApplyResult, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	cfg, name, index, err := a.materializeProject(ctx, cfg, selector)
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	var val *string
+	if staticDir != "" && staticDir != "inherit" {
+		val = &staticDir
+	}
+	cfg.Projects[index].StaticDir = val
+	result, err := a.saveAndApply(ctx, cfg, true)
+	if err == nil {
+		_ = a.appendLog("static_dir %s %s", name, staticDir)
+	}
+	return result, err
+}
+
+func (a *App) SetProjectDevPort(ctx context.Context, selector string, port int) (ApplyResult, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	cfg, name, index, err := a.materializeProject(ctx, cfg, selector)
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	var val *int
+	if port > 0 {
+		val = &port
+	}
+	cfg.Projects[index].DevPort = val
+	result, err := a.saveAndApply(ctx, cfg, true)
+	if err == nil {
+		_ = a.appendLog("dev_port %s %d", name, port)
+	}
+	return result, err
+}
+
+func (a *App) SetProjectDevCommand(ctx context.Context, selector, devCmd string) (ApplyResult, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	cfg, name, index, err := a.materializeProject(ctx, cfg, selector)
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	var val *string
+	if devCmd != "" && devCmd != "inherit" {
+		val = &devCmd
+	}
+	cfg.Projects[index].DevCommand = val
+	result, err := a.saveAndApply(ctx, cfg, true)
+	if err == nil {
+		_ = a.appendLog("dev_command %s %s", name, devCmd)
+	}
+	return result, err
+}
+
+func (a *App) SetProjectPackageManager(ctx context.Context, selector, pm string) (ApplyResult, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	cfg, name, index, err := a.materializeProject(ctx, cfg, selector)
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	var val *string
+	if pm != "" && pm != "inherit" {
+		val = &pm
+	}
+	cfg.Projects[index].PackageManager = val
+	result, err := a.saveAndApply(ctx, cfg, true)
+	if err == nil {
+		_ = a.appendLog("package_manager %s %s", name, pm)
+	}
+	return result, err
 }

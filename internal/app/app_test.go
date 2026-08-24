@@ -251,3 +251,67 @@ func TestAppLANAddressDivergence(t *testing.T) {
 		t.Fatalf("esperado divergência quando IPs forem diferentes (current=%s, generated=%s)", current, generated)
 	}
 }
+
+func TestLinkJSDevProject(t *testing.T) {
+	ctx := context.Background()
+	service := New(t.TempDir())
+	service.Detector = detect.Detector{Inspector: detect.StaticInspector{
+		Files: map[string]bool{
+			"/home/dev/frontend/package.json":   true,
+			"/home/dev/frontend/vite.config.ts": true,
+		},
+		FileContents: map[string]string{
+			"/home/dev/frontend/package.json": `{
+				"name": "frontend",
+				"packageManager": "pnpm@8.15.0",
+				"scripts": {
+					"dev": "vite",
+					"build": "vite build"
+				},
+				"devDependencies": {
+					"vite": "^5.0.0"
+				}
+			}`,
+		},
+	}}
+	service.WindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
+	service.WSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
+
+	project, _, err := service.Link(ctx, "frontend", "/home/dev/frontend")
+	if err != nil {
+		t.Fatalf("falha ao linkar projeto JS Dev: %v", err)
+	}
+	if project.Mode == nil || *project.Mode != "dev" {
+		t.Fatalf("modo dev esperado: %#v", project)
+	}
+	if project.PackageManager == nil || *project.PackageManager != "pnpm" {
+		t.Fatalf("package manager pnpm esperado: %#v", project)
+	}
+	if project.DevFramework == nil || *project.DevFramework != "vite" {
+		t.Fatalf("framework vite esperado: %#v", project)
+	}
+}
+
+func TestLinkStaticProject(t *testing.T) {
+	ctx := context.Background()
+	service := New(t.TempDir())
+	service.Detector = detect.Detector{Inspector: detect.StaticInspector{
+		Files: map[string]bool{
+			"/home/dev/static-doc/dist/index.html": true,
+		},
+	}}
+	service.WindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
+	service.WSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
+
+	project, _, err := service.Link(ctx, "docs", "/home/dev/static-doc")
+	if err != nil {
+		t.Fatalf("falha ao linkar projeto estático: %v", err)
+	}
+	if project.Mode == nil || *project.Mode != "static" {
+		t.Fatalf("modo static esperado: %#v", project)
+	}
+	if project.StaticDir == nil || *project.StaticDir != "dist" {
+		t.Fatalf("static dir dist esperado: %#v", project)
+	}
+}
+

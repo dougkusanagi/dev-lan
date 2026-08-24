@@ -129,3 +129,61 @@ func TestPHPConfigRejectsUnsafeVersionAndPool(t *testing.T) {
 		t.Fatal("timeout PHP não positivo deveria ser rejeitado")
 	}
 }
+
+func TestDevPortAllocationAndConflict(t *testing.T) {
+	cfg := NewConfig()
+	port1 := 9200
+	port2 := 9200
+	cfg.Projects = []Project{
+		{Name: "app1", Path: "/home/dev/app1", DevPort: &port1},
+		{Name: "app2", Path: "/home/dev/app2", DevPort: &port2},
+	}
+	if err := cfg.Normalize(); err == nil {
+		t.Fatal("conflito de porta dev deveria ser rejeitado")
+	}
+
+	cfg2 := NewConfig()
+	cfg2.Projects = []Project{
+		{Name: "app1", Path: "/home/dev/app1"},
+		{Name: "app2", Path: "/home/dev/app2"},
+	}
+	if err := cfg2.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	p1Port := cfg2.DevPort(cfg2.Projects[0])
+	p2Port := cfg2.DevPort(cfg2.Projects[1])
+	if p1Port == p2Port {
+		t.Fatalf("portas dev automáticas deveriam ser distintas: %d vs %d", p1Port, p2Port)
+	}
+	if p1Port != 9100 || p2Port != 9101 {
+		t.Fatalf("portas dev automáticas inesperadas: %d, %d", p1Port, p2Port)
+	}
+}
+
+func TestStaticDocumentRootAndSPAFallback(t *testing.T) {
+	cfg := NewConfig()
+	dist := "dist"
+	spaFalse := false
+	cfg.Projects = []Project{
+		{Name: "spa", Path: "/home/dev/spa", StaticDir: &dist},
+		{Name: "plain", Path: "/home/dev/plain", SPAFallback: &spaFalse},
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	spaProj, _ := cfg.Project("spa")
+	plainProj, _ := cfg.Project("plain")
+	if got := cfg.StaticDocumentRoot(spaProj); got != "/home/dev/spa/dist" {
+		t.Fatalf("document root estático inesperado: %s", got)
+	}
+	if got := cfg.StaticDocumentRoot(plainProj); got != "/home/dev/plain" {
+		t.Fatalf("document root estático inesperado: %s", got)
+	}
+	if !cfg.SPAFallback(spaProj) {
+		t.Fatal("SPA fallback padrão deveria ser true")
+	}
+	if cfg.SPAFallback(plainProj) {
+		t.Fatal("SPA fallback configurado deveria ser false")
+	}
+}
+

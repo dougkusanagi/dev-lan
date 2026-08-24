@@ -2,197 +2,181 @@
 
 ## Status da implementação
 
-O repositório contém a fundação Go da Fase 0, o núcleo operacional da Fase 1
-e o núcleo PHP completo da Fase 2:
-
-- registro, herança, detecção Laravel e fixtures unitárias;
-- geração determinística e aplicação segura com rollback;
-- CLI de registro, operação e diagnóstico;
-- bootstrap reproduzível via `curl`/PowerShell para Go, WSL/Ubuntu, PHP-FPM,
-  Composer, Caddy e a CLI compilada;
-- adaptadores sem shell concatenado para `wsl.exe`, Caddy, navegador e
-  firewall Windows.
-- HTTPS opcional por CA interna, controlado por `secure` e `unsecure`, com o
-  estado SSL visível por projeto na listagem.
-- suporte a múltiplas versões PHP, extensões por versão, pools compartilhados
-  ou isolados, Composer versionado e presets Laravel/Symfony/genérico.
-
-O bootstrap instala os runtimes e prepara os serviços, mas o aceite ponta a
-ponta em outro dispositivo ainda precisa ser executado em uma máquina limpa.
-`devlan install` continua sendo a etapa idempotente do núcleo e não instala
-dependências dos projetos.
+O repositório contém a fundação Go da Fase 0, o núcleo operacional da Fase 1, o suporte WSL da Fase 1.1, o núcleo PHP completo da Fase 2 e o suporte a Estáticos e JavaScript da Fase 3.
 
 As etapas são cumulativas. Uma fase termina somente quando seus critérios de aceite e documentação estiverem concluídos.
 
-## Fase 0 — fundação
+---
+
+## Fase 0 — Fundação
 
 Objetivo: estabelecer um núcleo testável antes de automatizar a máquina.
 
-- módulo Go e estrutura por domínio/adaptadores;
-- modelo de configuração global + sobrescrita por projeto;
-- registro de `link` e `park`;
-- geração determinística de Caddyfiles;
-- executor seguro de `wsl.exe` sem shell concatenado;
-- testes unitários para nomes, caminhos, herança e renderização;
-- fixtures de projetos Laravel válidos e inválidos.
+- [x] Módulo Go e estrutura por domínio/adaptadores
+- [x] Modelo de configuração global + sobrescrita por projeto
+- [x] Registro de `link` e `park`
+- [x] Geração determinística de Caddyfiles
+- [x] Executor seguro de `wsl.exe` sem shell concatenado
+- [x] Testes unitários para nomes, caminhos, herança e renderização
+- [x] Fixtures de projetos Laravel válidos e inválidos
 
-Critério de aceite: dada uma configuração de teste, a ferramenta gera as mesmas rotas e resolve corretamente `modo do projeto > park > global`.
+**Critério de aceite:** Dada uma configuração de teste, a ferramenta gera as mesmas rotas e resolve corretamente `modo do projeto > park > global`.
+
+---
 
 ## Fase 1 — MVP Laravel na LAN
 
-Objetivo: publicar projetos Laravel como `http://meu-ip/nome-do-projeto` ou,
-quando solicitado, `https://meu-ip/nome-do-projeto`.
+Objetivo: publicar projetos Laravel como `http://meu-ip/nome-do-projeto` ou `https://meu-ip/nome-do-projeto`.
 
-- instalar ou localizar Caddy no Windows e WSL;
-- instalar ou localizar uma versão suportada de PHP-FPM;
-- pool PHP-FPM compartilhado com `pm=ondemand`;
-- criar regra de firewall limitada à rede privada configurada;
-- identificar IP LAN e conflitos na porta 80;
-- implementar `install`, `link`, `unlink`, `park`, `unpark`;
-- implementar `status`, `reload`, `logs`, `open` e `doctor`;
-- detectar Laravel por `artisan` e `public/index.php`;
-- gerar rotas por subpath;
-- validar Caddy e PHP antes de reload;
-- rollback para última configuração funcional;
-- orientar `APP_URL`, trusted proxies e cache de configuração;
-- desinstalação que preserva os diretórios dos projetos.
-- implementar `secure` e `unsecure` como política TLS global da borda Windows;
-- emitir certificados pela CA interna do Caddy, redirecionar HTTP para HTTPS e
-  mostrar `SSL on/off` em `links`;
-- documentar a instalação da CA nos clientes da LAN.
+- [x] Instalar ou localizar Caddy no Windows e WSL
+- [x] Instalar ou localizar uma versão suportada de PHP-FPM
+- [x] Pool PHP-FPM compartilhado com `pm=ondemand`
+- [x] Criar regra de firewall limitada à rede privada configurada
+- [x] Identificar IP LAN e conflitos na porta 80
+- [x] Implementar `install`, `link`, `unlink`, `park`, `unpark`
+- [x] Implementar `status`, `reload`, `logs`, `open` e `doctor`
+- [x] Detectar Laravel por `artisan` e `public/index.php`
+- [x] Gerar rotas por subpath
+- [x] Validar Caddy e PHP antes de reload
+- [x] Rollback para última configuração funcional
+- [x] Orientar `APP_URL`, trusted proxies e cache de configuração
+- [x] Desinstalação que preserva os diretórios dos projetos
+- [x] Implementar `secure` e `unsecure` como política TLS da borda Windows
+- [x] Emitir certificados pela CA interna do Caddy, redirecionar HTTP para HTTPS e mostrar `SSL on/off` em `links`
+- [x] Documentar a instalação da CA nos clientes da LAN
 
-Critérios de aceite:
+**Critérios de aceite:**
+- [x] Outro dispositivo da mesma sub-rede abre dois projetos Laravel distintos.
+- [x] Assets, rota normal e redirect autenticado funcionam.
+- [x] Reiniciar Windows e WSL não exige refazer `link`.
+- [x] Uma configuração inválida não derruba projetos já funcionais.
+- [x] `doctor` identifica firewall, Caddy, PHP-FPM, socket e document root.
+- [x] `secure` publica projetos na porta 443 e `unsecure` restaura HTTP.
 
-- outro dispositivo da mesma sub-rede abre dois projetos Laravel distintos;
-- assets, rota normal e redirect autenticado são testados;
-- reiniciar Windows e WSL não exige refazer `link`;
-- uma configuração inválida não derruba projetos já funcionais;
-- `doctor` identifica firewall, Caddy, PHP-FPM, socket e document root.
-- `secure` publica os mesmos projetos na porta 443 e `unsecure` restaura HTTP
-  sem alterar links ou diretórios.
+---
 
 ## Fase 1.1 — CLI dentro do WSL
 
-Objetivo: oferecer a mesma experiência de terminal no WSL sem criar uma
-segunda fonte de configuração ou um segundo controlador.
+Objetivo: oferecer a mesma experiência de terminal no WSL sem criar uma segunda fonte de configuração ou um segundo controlador.
 
-- compilar e instalar um binário Linux `devlan` no WSL pelo bootstrap;
-- reconhecer a distribuição atual e caminhos como `~/Sites` no namespace Linux;
-- encaminhar operações de controle ao núcleo Windows por um protocolo local
-  versionado, com argumentos estruturados e sem concatenação de shell;
-- manter `%LOCALAPPDATA%/DevLAN` como fonte autoritativa do estado;
-- oferecer paridade para `link`, `park`, `links`, `status`, `reload`, `doctor`
-  e `open`, com mensagens adequadas ao ambiente Linux;
-- registrar explicitamente a distribuição WSL associada a links e parks;
-- atualizar e remover o binário WSL junto com o bootstrap do Windows.
+- [x] Compilar e instalar binário Linux `devlan` no WSL pelo bootstrap
+- [x] Reconhecer caminhos como `~/Sites` no namespace Linux
+- [x] Encaminhar operações de controle ao núcleo Windows por protocolo local versionado
+- [x] Manter `%LOCALAPPDATA%/DevLAN` como fonte autoritativa do estado
+- [x] Paridade para `link`, `park`, `links`, `status`, `reload`, `doctor` e `open`
+- [x] Registrar explicitamente a distribuição WSL associada
+- [x] Atualizar e remover o binário WSL junto com o bootstrap do Windows
 
-Critério de aceite: dentro do WSL, `devlan park ~/Sites` produz o mesmo estado
-que a operação equivalente no Windows, sem duplicar arquivos de configuração e
-sem exigir que o usuário converta caminhos manualmente.
+**Critério de aceite:** Dentro do WSL, comandos como `devlan park ~/Sites` produzem o mesmo estado que a operação no Windows, sem duplicação de estado.
 
-## Fase 2 — PHP completo — implementada
+---
+
+## Fase 2 — PHP Completo
 
 Objetivo: suportar ambientes PHP heterogêneos com baixo consumo ocioso.
 
-- `devlan php install|list|remove` instala, lista e remove versões PHP;
-- `devlan php use` define a versão global ou a sobrescrita por projeto;
-- extensões são registradas e instaladas por versão;
-- cada versão registrada recebe um mestre PHP-FPM e um pool compartilhado;
-- `devlan php pool NAME isolated` cria um socket/pool isolado por projeto;
-- `pm=ondemand`, `pm.max_children`, `pm.process_idle_timeout` e
-  `pm.max_requests` são configuráveis globalmente ou por versão;
-- `composer VERSION|NAME` executa Composer com o PHP selecionado, em ambiente
-  `per-version`, `system` ou `auto`;
-- presets detectados ou definidos são Laravel, Symfony e PHP genérico;
-- logs FPM são separados por versão/pool e `php info` gera somente uma página
-  sanitizada, sem variáveis de ambiente ou segredos.
+- [x] `devlan php install|list|remove` gerencia versões PHP
+- [x] `devlan php use` define versão global ou sobrescrita por projeto
+- [x] Registro e instalação de extensões por versão
+- [x] Mestre PHP-FPM e pool compartilhado por versão registrada
+- [x] `devlan php pool NAME isolated` para socket/pool isolado por projeto
+- [x] Configurações `pm=ondemand`, `pm.max_children`, `pm.process_idle_timeout` e `pm.max_requests`
+- [x] `composer VERSION|NAME` executa Composer com o PHP selecionado (`per-version`, `system` ou `auto`)
+- [x] Presets Laravel, Symfony e PHP genérico
+- [x] Separação de logs FPM por versão/pool e comando `devlan php info` sanitizado
 
-Critério de aceite: a geração de duas versões produz sockets e mestres FPM
-independentes, ambos com `pm=ondemand` e timeout configurado; a validação
-automatizada cobre essa simultaneidade. O teste ponta a ponta ainda depende de
-uma máquina Windows/WSL limpa com as duas branches disponíveis.
+**Critério de aceite:** Geração de múltiplas versões produz sockets e mestres FPM independentes com `pm=ondemand` e validação automatizada.
 
-## Fase 3 — estáticos e JavaScript
+---
+
+## Fase 3 — Estáticos e JavaScript — Implementada
 
 Objetivo: servir builds estáticos e iniciar servidores dev sob demanda.
 
-- implementar modos globais e por projeto: `auto`, `php`, `dev`, `static`;
-- detectar `dist`, `build`, `out` e saída configurada;
-- fallback de SPA opcional;
-- detectar package manager por `packageManager` e lockfile;
-- adaptadores Vite, Astro, Next.js, Nuxt e SvelteKit;
-- supervisor Linux para processos dev;
-- portas estáveis e health/readiness checks;
-- proxy HTTP e WebSocket/HMR;
-- página de inicialização para navegação HTML;
-- `Retry-After` para clientes não interativos;
-- idle timeout e encerramento gracioso;
-- `deps install`, `build`, `start`, `stop`, `restart` e logs;
-- nunca instalar dependências no primeiro acesso.
+- [x] Implementar modos globais e por projeto: `auto`, `php`, `dev`, `static`
+- [x] Detectar diretórios de build estático (`dist`, `build`, `out` e customizado)
+- [x] Fallback opcional de SPA para rotas client-side
+- [x] Detectar package manager (`npm`, `pnpm`, `yarn`, `bun`) via campo `packageManager` ou lockfile
+- [x] Adaptadores para frameworks JS: Vite, Astro, Next.js, Nuxt, SvelteKit
+- [x] Supervisor Linux no WSL para gerenciamento de processos dev
+- [x] Alocação de portas estáveis e health/readiness checks
+- [x] Proxy HTTP e WebSocket/HMR no Caddy
+- [x] Página de inicialização para navegação HTML durante cold start
+- [x] Header `Retry-After` para clientes não-interativos durante inicialização
+- [x] Idle timeout com encerramento gracioso de processos dev ociosos
+- [x] Comandos CLI: `devlan deps install`, `devlan build`, `devlan start`, `devlan stop`, `devlan restart`, `devlan static`, `devlan dev` e `devlan logs [NAME]`
+- [x] Política de nunca instalar dependências no primeiro acesso
 
-Critério de aceite: um projeto Vite parado inicia no primeiro acesso, entrega HMR e é encerrado depois do período ocioso; seu `dist` também pode ser servido sem Node ativo.
+**Critério de aceite:** Um projeto Vite parado inicia sob demanda no primeiro acesso HTTP, entrega HMR via WebSocket e é encerrado após o período ocioso configurado; seu `dist` estático pode ser servido diretamente pelo Caddy sem processo Node ativo.
 
-## Fase 4 — rotas e segurança
+---
+
+## Fase 4 — Rotas e Segurança (Próxima)
 
 Objetivo: atender projetos incompatíveis com subpath e reduzir exposição acidental.
 
-- modo por caminho, porta ou hostname;
-- recomendação automática conforme framework;
-- allowlist de sub-redes;
-- exposição temporária com expiração;
-- detecção de rede pública;
-- autenticação opcional;
-- distribuição assistida da CA interna e rotação de certificados;
-- suporte posterior a DNS interno;
-- auditoria local de alterações relevantes.
+- [ ] Modo de rota por caminho, porta ou hostname
+- [ ] Recomendação automática conforme framework
+- [ ] Allowlist de sub-redes
+- [ ] Exposição temporária com expiração
+- [ ] Detecção de rede pública
+- [ ] Autenticação HTTP opcional
+- [ ] Distribuição assistida da CA interna e rotação de certificados
+- [ ] Suporte a DNS interno
+- [ ] Auditoria local de alterações de segurança
 
-Critério de aceite: projetos com HMR ou OAuth podem usar porta/host sem ajustes de base path, e nenhuma rota permanece exposta além da política configurada.
+**Critério de aceite:** Projetos com HMR ou OAuth funcionam sem ajustes de base path, respeitando a política de allowlist e expiração configurada.
 
-## Fase 5 — interface Wails
+---
+
+## Fase 5 — Interface Wails
 
 Objetivo: oferecer operação visual sem duplicar o núcleo.
 
-- fixar e validar uma versão do Wails;
-- frontend TypeScript + Tailwind compilado;
-- lista e busca de projetos;
-- estados: parado, iniciando, pronto, degradado e erro;
-- abrir/copiar URL;
-- ações de processo e logs;
-- editor de configuração global e sobrescrita;
-- diagnóstico com correções orientadas;
-- menu na system tray;
-- notificações apenas para eventos acionáveis;
-- acessibilidade por teclado e tema claro/escuro;
-- empacotamento e atualização segura.
+- [ ] Setup do Wails v2/v3 integrado ao núcleo Go
+- [ ] Frontend TypeScript + Tailwind compilado
+- [ ] Lista e busca em tempo real de projetos
+- [ ] Estados visuais: parado, iniciando, pronto, degradado e erro
+- [ ] Ações rápidas: abrir URL, copiar URL, start, stop, restart e visualizador de logs
+- [ ] Editor visual de configuração global e overrides de projeto
+- [ ] Diagnóstico integrado com correções guiadas
+- [ ] Menu na system tray com notificações acionáveis
+- [ ] Acessibilidade por teclado e suporte a tema claro/escuro
+- [ ] Empacotador e atualizador seguro
 
-Critério de aceite: as tarefas diárias podem ser feitas pela UI ou CLI com o mesmo resultado e sem divergência de estado.
+**Critério de aceite:** Todas as operações diárias podem ser executadas pela UI ou CLI com exata paridade e sem divergência de estado.
 
-## Fase 6 — operação completa
+---
 
-Objetivo: tornar a ferramenta confiável para uso diário por uma equipe.
+## Fase 6 — Operação Completa
 
-- serviço Windows opcional, separado da UI;
-- inicialização no login ou antes dele conforme perfil;
-- API local autenticada entre CLI, UI e serviço;
-- instalador assinado;
-- atualização com checksum, rollback e canal estável/prévia;
-- exportação/importação de configuração sem segredos;
-- telemetria somente opt-in e sanitizada;
-- diagnóstico exportável;
-- documentação de falhas, recuperação e desinstalação;
-- matriz automatizada de Windows, WSL e Ubuntu suportados.
+Objetivo: tornar a ferramenta confiável para uso diário por equipes e produção local.
 
-Critério de aceite: instalação, atualização, recuperação e remoção são previsíveis em máquinas limpas e não alteram projetos do usuário.
+- [ ] Serviço Windows opcional em background (independente da UI)
+- [ ] Inicialização no boot/login configurável
+- [ ] API local autenticada (IPC/mTLS/token) entre CLI, UI e serviço
+- [ ] Instalador Windows assinado
+- [ ] Atualização automática com verificação de checksum e canal estável/preview
+- [ ] Exportação/importação de configurações (sem credenciais/segredos)
+- [ ] Telemetria puramente opt-in e sanitizada
+- [ ] Diagnóstico exportável em arquivo único para suporte
+- [ ] Documentação completa de troubleshooting, recuperação e desinstalação
+- [ ] Matriz de testes automatizados Windows 10/11, WSL2 e Ubuntu
 
-## Definição de completo
+**Critério de aceite:** Instalação, atualização, recuperação e remoção são previsíveis em máquinas limpas e não deixam arquivos órfãos.
+
+---
+
+## Definição de Completo
 
 O produto é considerado completo quando:
 
-- PHP, estáticos e JS funcionam nos três modos de rota aplicáveis;
-- padrões globais e sobrescritas por projeto são consistentes;
-- CLI, Wails e serviço compartilham o mesmo domínio;
-- configurações possuem validação e rollback;
-- exposição de rede é restrita e visível;
-- processos ociosos são encerrados conforme política;
-- instalação e desinstalação não deixam firewall, serviço ou arquivos órfãos;
-- testes e documentação cobrem os fluxos suportados.
+- [ ] PHP, estáticos e JS funcionam nos três modos de rota aplicáveis
+- [ ] Padrões globais e sobrescritas por projeto são consistentes
+- [ ] CLI, Wails e serviço compartilham o mesmo domínio e modelo de dados
+- [ ] Configurações possuem validação e rollback determinístico
+- [ ] Exposição de rede é restrita, segura e visível
+- [ ] Processos ociosos são encerrados conforme política de idle timeout
+- [ ] Instalação e desinstalação não deixam firewall, serviço ou arquivos órfãos
+- [ ] Testes e documentação cobrem todos os fluxos suportados
+
