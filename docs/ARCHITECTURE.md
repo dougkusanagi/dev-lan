@@ -24,6 +24,10 @@ Sua configuração deve mudar pouco. A lógica de PHP e de cada projeto permanec
 
 ### Caddy no WSL
 
+A API administrativa do Caddy no Windows usa `127.0.0.1:2019`, enquanto a do
+Caddy no WSL usa `127.0.0.1:2020`. Endereços distintos evitam que o
+encaminhamento de `localhost` do WSL entregue uma recarga ao processo errado.
+
 Conhece os projetos, seus document roots, modos de atendimento e sockets PHP-FPM. A CLI gera fragmentos a partir do registro de projetos e só recarrega o Caddy após `caddy validate` ter sucesso.
 
 ### PHP-FPM

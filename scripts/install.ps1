@@ -321,7 +321,7 @@ function Sync-WslCaddy {
 function Start-WindowsCaddy {
     param([Parameter(Mandatory = $true)][string]$CaddyPath, [Parameter(Mandatory = $true)][string]$ConfigPath)
     try {
-        Invoke-Native $CaddyPath @('reload', '--config', $ConfigPath, '--adapter', 'caddyfile') | Write-Host
+        Invoke-Native $CaddyPath @('reload', '--address', '127.0.0.1:2019', '--config', $ConfigPath, '--adapter', 'caddyfile') | Write-Host
     } catch {
         Invoke-Native $CaddyPath @('start', '--config', $ConfigPath, '--adapter', 'caddyfile') | Write-Host
     }

@@ -125,7 +125,7 @@ func ToWSLPath(value string) (string, error) {
 	clean = filepath.ToSlash(clean)
 	if len(clean) >= 3 && clean[1] == ':' {
 		drive := strings.ToLower(string(clean[0]))
-		return "/mnt/" + drive + strings.TrimPrefix(clean[2:], "/"), nil
+		return "/mnt/" + drive + "/" + strings.TrimPrefix(clean[2:], "/"), nil
 	}
 	if strings.HasPrefix(clean, "/") {
 		return clean, nil

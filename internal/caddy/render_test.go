@@ -33,6 +33,19 @@ func TestRenderWSLIsDeterministicAndSorted(t *testing.T) {
 	if !strings.Contains(first, "request_header X-Forwarded-Prefix /alpha") {
 		t.Fatal("prefixo encaminhado ausente")
 	}
+	if !strings.Contains(first, "admin 127.0.0.1:2020") {
+		t.Fatal("porta administrativa dedicada do WSL ausente")
+	}
+}
+
+func TestRenderWindowsUsesDedicatedAdminAddress(t *testing.T) {
+	result, err := RenderWindows(domain.NewConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, "admin 127.0.0.1:2019") {
+		t.Fatal("endereço administrativo do Windows ausente")
+	}
 }
 
 func TestRenderRejectsFutureModeUntilImplemented(t *testing.T) {

@@ -5,6 +5,11 @@ import (
 	"fmt"
 )
 
+const (
+	WindowsCaddyAdminAddress = "127.0.0.1:2019"
+	WSLCaddyAdminAddress     = "127.0.0.1:2020"
+)
+
 type CaddyClient struct {
 	Runner Runner
 	WSL    bool
@@ -60,9 +65,9 @@ func (c CaddyClient) Reload(ctx context.Context, configPath string) error {
 		if err != nil {
 			return err
 		}
-		_, err = c.Runner.Run(ctx, "caddy", "reload", "--config", wslPath, "--adapter", "caddyfile")
+		_, err = c.Runner.Run(ctx, "caddy", "reload", "--address", WSLCaddyAdminAddress, "--config", wslPath, "--adapter", "caddyfile")
 		return err
 	}
-	_, err := c.Runner.Run(ctx, "reload", "--config", configPath, "--adapter", "caddyfile")
+	_, err := c.Runner.Run(ctx, "reload", "--address", WindowsCaddyAdminAddress, "--config", configPath, "--adapter", "caddyfile")
 	return err
 }
