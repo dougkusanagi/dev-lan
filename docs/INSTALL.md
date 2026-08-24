@@ -16,6 +16,11 @@ O instalador interrompe a execução com uma mensagem clara quando o terminal n�
 está elevado. A conta usada continua sendo a conta atual; a elevação serve para
 configurar os componentes do sistema e a regra de firewall.
 
+As etapas de provisionamento dentro do WSL são executadas diretamente como
+`root` pelo `wsl.exe`, sem solicitar a senha do `sudo`. Esse privilégio é usado
+somente durante a instalação de pacotes, configuração do PHP-FPM e do Caddy; os
+comandos cotidianos do DevLAN continuam sendo executados com o usuário normal.
+
 Ao executar o script a partir de um clone local, não é necessário baixar o
 código novamente:
 

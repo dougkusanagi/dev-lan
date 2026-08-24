@@ -301,18 +301,20 @@ function Install-WslDependencies {
     [IO.File]::WriteAllText($scriptPath, $scriptText, [System.Text.UTF8Encoding]::new($false))
     $wslPath = ConvertTo-WslPath $scriptPath
     $caddyFlag = if ($SkipCaddy) { '0' } else { '1' }
-    Invoke-Native 'wsl.exe' @('--distribution', $WslDistribution, '--exec', 'bash', $wslPath, $PhpVersion, $caddyFlag) | Write-Host
+    # Provision through WSL's root user. Calling sudo from a captured native
+    # process can hide its password prompt and eventually fail with a timeout.
+    Invoke-Native 'wsl.exe' @('--distribution', $WslDistribution, '--user', 'root', '--exec', 'bash', $wslPath, $PhpVersion, $caddyFlag) | Write-Host
 }
 
 function Sync-WslCaddy {
     param([Parameter(Mandatory = $true)][string]$WslDistribution, [Parameter(Mandatory = $true)][string]$ConfigPath)
     $wslConfig = ConvertTo-WslPath $ConfigPath
-    Invoke-Native 'wsl.exe' @('--distribution', $WslDistribution, '--exec', 'sudo', '/bin/mkdir', '-p', '/etc/caddy') | Write-Host
-    Invoke-Native 'wsl.exe' @('--distribution', $WslDistribution, '--exec', 'sudo', '/bin/cp', $wslConfig, '/etc/caddy/Caddyfile') | Write-Host
+    Invoke-Native 'wsl.exe' @('--distribution', $WslDistribution, '--user', 'root', '--exec', '/bin/mkdir', '-p', '/etc/caddy') | Write-Host
+    Invoke-Native 'wsl.exe' @('--distribution', $WslDistribution, '--user', 'root', '--exec', '/bin/cp', $wslConfig, '/etc/caddy/Caddyfile') | Write-Host
     try {
-        Invoke-Native 'wsl.exe' @('--distribution', $WslDistribution, '--exec', 'sudo', '/usr/bin/systemctl', 'restart', 'caddy') | Write-Host
+        Invoke-Native 'wsl.exe' @('--distribution', $WslDistribution, '--user', 'root', '--exec', '/usr/bin/systemctl', 'restart', 'caddy') | Write-Host
     } catch {
-        Invoke-Native 'wsl.exe' @('--distribution', $WslDistribution, '--exec', 'sudo', '/usr/sbin/service', 'caddy', 'restart') | Write-Host
+        Invoke-Native 'wsl.exe' @('--distribution', $WslDistribution, '--user', 'root', '--exec', '/usr/sbin/service', 'caddy', 'restart') | Write-Host
     }
 }
 
