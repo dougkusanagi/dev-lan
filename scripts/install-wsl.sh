@@ -2,9 +2,9 @@
 set -Eeuo pipefail
 
 # DevLAN WSL bootstrap. It is called by install.ps1 with one argument such as
-# 8.4. All commands and package names below are fixed; the version is checked
+# 8.5. All commands and package names below are fixed; the version is checked
 # before it is used.
-php_minor="${1:-8.4}"
+php_minor="${1:-8.5}"
 install_caddy="${2:-1}"
 if [[ ! "$php_minor" =~ ^8\.(3|4|5)$ ]]; then
     printf 'Unsupported PHP branch: %s (expected 8.3, 8.4 or 8.5)\n' "$php_minor" >&2

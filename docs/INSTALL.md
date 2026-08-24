@@ -58,11 +58,11 @@ MVP.
 
 PHP não possui uma categoria oficial chamada “LTS”: cada branch recebe dois
 anos de suporte ativo e dois anos de correções críticas de segurança. O
-bootstrap usa PHP 8.4 por padrão por ser uma branch ativa e madura para o MVP;
-8.3 e 8.5 também podem ser escolhidos:
+bootstrap usa PHP 8.5 por padrão por ser a branch ativa mais recente do MVP;
+8.3 e 8.4 também podem ser escolhidos:
 
 ```powershell
-.\scripts\install.ps1 -SourceDir . -PhpVersion 8.5
+.\scripts\install.ps1 -SourceDir . -PhpVersion 8.4
 ```
 
 Quando a distribuição não oferece a branch escolhida, o script tenta o PPA
@@ -73,7 +73,7 @@ Quando a distribuição não oferece a branch escolhida, o script tenta o PPA
 
 ```text
 -Distribution Ubuntu-24.04  escolhe a distribuição WSL
--PhpVersion 8.3|8.4|8.5     escolhe a branch PHP
+-PhpVersion 8.3|8.4|8.5     escolhe a branch PHP (padrão: 8.5)
 -InstallRoot PATH            altera o diretório gerenciado
 -SkipWSL                     não instala dependências no WSL
 -SkipCaddy                   não instala Caddy

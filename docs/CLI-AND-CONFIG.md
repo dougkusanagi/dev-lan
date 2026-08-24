@@ -126,8 +126,8 @@ continua sendo gerada e `doctor` informa a dependência ausente.
 ## Comandos posteriores
 
 ```text
-devlan php install 8.4
-devlan php use NAME 8.4
+devlan php install 8.5
+devlan php use NAME 8.5
 devlan deps install NAME
 devlan build NAME
 devlan start|stop|restart NAME

@@ -17,7 +17,7 @@ O domínio não deve importar Wails, Cobra, Caddy ou detalhes de PowerShell dire
 O bootstrap é PowerShell no Windows e usa um script Bash fixo no WSL. Go é
 baixado da lista oficial de releases estáveis quando não está no PATH; Caddy
 usa o pacote oficial/distribuição ou o release oficial com checksum. PHP não
-tem uma modalidade LTS oficial: o MVP adota 8.4 por padrão, permite 8.3/8.5 e
+tem uma modalidade LTS oficial: o MVP adota 8.5 por padrão, permite 8.3/8.4 e
 detecta a versão efetivamente instalada. O instalador não executa `composer
 install` nem qualquer script de projeto.
 

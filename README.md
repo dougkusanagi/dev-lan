@@ -83,7 +83,7 @@ O MVP está implementado como uma CLI Go em `cmd/devlan`. O núcleo cobre:
 - `install`, `uninstall`, `status`, `reload`, `doctor`, `logs`, `open` e os comandos de registro;
 - regra de firewall DevLAN limitada ao perfil privado e à sub-rede local.
 
-`devlan install` prepara os arquivos gerenciados e tenta criar a regra de firewall. Para uma máquina limpa, use o [bootstrap de instalação](docs/INSTALL.md): ele instala Go, WSL/Ubuntu, Caddy, PHP-FPM, extensões Laravel e Composer, compila a CLI e executa `devlan install`. Dependências dos projetos continuam explícitas; o bootstrap não executa `composer install` automaticamente.
+`devlan install` prepara os arquivos gerenciados e tenta criar a regra de firewall. Para uma máquina limpa, use o [bootstrap de instalação](docs/INSTALL.md): ele instala Go, WSL/Ubuntu, Caddy, PHP-FPM 8.5, extensões Laravel e Composer, compila a CLI e executa `devlan install`. Dependências dos projetos continuam explícitas; o bootstrap não executa `composer install` automaticamente.
 
 ## Instalação rápida via curl
 

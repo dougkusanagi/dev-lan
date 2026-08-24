@@ -7,7 +7,7 @@ param(
     [string]$Ref = 'master',
 
     [ValidatePattern('^8\.(3|4|5)$')]
-    [string]$PhpVersion = '8.4',
+    [string]$PhpVersion = '8.5',
 
     [string]$InstallRoot = '',
     [string]$Distribution = '',
