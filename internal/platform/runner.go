@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	pathpkg "path"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -63,6 +64,44 @@ func (r WSLRunner) Run(ctx context.Context, args ...string) (string, error) {
 	commandArgs = append(commandArgs, "--exec")
 	commandArgs = append(commandArgs, args...)
 	return NewExecRunner(r.Binary).Run(ctx, commandArgs...)
+}
+
+// GrantProjectAccess gives only the Caddy and PHP-FPM service accounts access
+// to a registered WSL project. It avoids relaxing home-directory permissions.
+func (r WSLRunner) GrantProjectAccess(ctx context.Context, projectPath string) error {
+	if !strings.HasPrefix(projectPath, "/") {
+		return nil
+	}
+	ancestors := []string{}
+	for parent := pathpkg.Dir(projectPath); parent != "/" && parent != "."; parent = pathpkg.Dir(parent) {
+		ancestors = append(ancestors, parent)
+	}
+	args := []string{}
+	if r.Distribution != "" {
+		args = append(args, "--distribution", r.Distribution)
+	}
+	args = append(args, "--user", "root", "--exec", "/usr/bin/setfacl", "-m", "u:caddy:--x,u:www-data:--x")
+	args = append(args, ancestors...)
+	if _, err := NewExecRunner(r.Binary).Run(ctx, args...); err != nil {
+		return fmt.Errorf("permitir travessia até %s: %w", projectPath, err)
+	}
+	args = args[:0]
+	if r.Distribution != "" {
+		args = append(args, "--distribution", r.Distribution)
+	}
+	args = append(args, "--user", "root", "--exec", "/usr/bin/setfacl", "-R", "-m", "u:caddy:rX,u:www-data:rwX", projectPath)
+	if _, err := NewExecRunner(r.Binary).Run(ctx, args...); err != nil {
+		return fmt.Errorf("conceder acesso aos serviços para %s: %w", projectPath, err)
+	}
+	args = args[:0]
+	if r.Distribution != "" {
+		args = append(args, "--distribution", r.Distribution)
+	}
+	args = append(args, "--user", "root", "--exec", "/usr/bin/find", projectPath, "-type", "d", "-exec", "/usr/bin/setfacl", "-m", "d:u:caddy:rX,d:u:www-data:rwX", "{}", "+")
+	if _, err := NewExecRunner(r.Binary).Run(ctx, args...); err != nil {
+		return fmt.Errorf("definir ACL padrão para %s: %w", projectPath, err)
+	}
+	return nil
 }
 
 func (r WSLRunner) Exists(ctx context.Context, path string) (bool, error) {

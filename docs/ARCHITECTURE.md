@@ -151,3 +151,9 @@ registrar intenção
 ```
 
 Entradas do usuário nunca devem ser concatenadas em comandos shell. Caminhos e argumentos são enviados como argumentos separados e validados contra o registro de projetos.
+
+Para projetos no filesystem Linux, o núcleo aplica ACLs restritas ao projeto:
+`caddy` recebe leitura e travessia; `www-data` recebe leitura/escrita para que
+PHP-FPM possa servir e gravar arquivos de runtime. ACLs padrão são aplicadas a
+subdiretórios para arquivos futuros. O DevLAN não altera permissões globais do
+home do usuário.

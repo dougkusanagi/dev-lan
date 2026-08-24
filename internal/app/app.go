@@ -254,6 +254,9 @@ func (a *App) apply(ctx context.Context, cfg domain.Config, validate, reload boo
 		return ApplyResult{}, err
 	}
 	cfg = effective
+	if err := a.ensureProjectAccess(ctx, cfg); err != nil {
+		return ApplyResult{}, err
+	}
 	windows, err := caddy.RenderWindows(cfg)
 	if err != nil {
 		return ApplyResult{}, err
@@ -370,6 +373,21 @@ func (a *App) EffectiveConfig(ctx context.Context, cfg domain.Config) (domain.Co
 		return domain.Config{}, err
 	}
 	return effective, nil
+}
+
+func (a *App) ensureProjectAccess(ctx context.Context, cfg domain.Config) error {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+	if _, ok := a.Detector.Inspector.(detect.SmartInspector); !ok {
+		return nil
+	}
+	for _, project := range cfg.Projects {
+		if err := a.WSL.GrantProjectAccess(ctx, project.Path); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type Check struct {

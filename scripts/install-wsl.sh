@@ -60,7 +60,7 @@ php_packages=(
     "${php_prefix}-intl"
     "${php_prefix}-gd"
 )
-required_packages=("${php_packages[@]}" composer)
+required_packages=("${php_packages[@]}" composer acl)
 if [[ "$install_caddy" == "1" ]]; then
     required_packages+=(caddy)
 fi
@@ -70,7 +70,7 @@ if packages_installed "${required_packages[@]}"; then
 else
     export DEBIAN_FRONTEND=noninteractive
     "${SUDO[@]}" apt-get update
-    apt_install ca-certificates curl gnupg debian-keyring debian-archive-keyring apt-transport-https lsb-release software-properties-common unzip git
+    apt_install ca-certificates curl gnupg debian-keyring debian-archive-keyring apt-transport-https lsb-release software-properties-common unzip git acl
 
     if ! has_package "${php_prefix}-fpm"; then
         # Ubuntu's official repository may lag behind the requested active branch.
