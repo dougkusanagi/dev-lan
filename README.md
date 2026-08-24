@@ -69,3 +69,34 @@ http://192.168.1.50/financeiro
 - Múltiplas versões de PHP.
 - Containers e bancos de dados.
 - Instalação automática de dependências dos projetos.
+
+## Implementação atual
+
+O MVP está implementado como uma CLI Go em `cmd/devlan`. O núcleo cobre:
+
+- registro explícito com `link` e descoberta de filhos Laravel por `park`;
+- resolução `modo do projeto > park > padrão global`;
+- detecção sem executar scripts, exigindo `artisan` e `public/index.php`;
+- Caddyfiles Windows/WSL determinísticos, com rota por subpath e `X-Forwarded-Prefix`;
+- aplicação por arquivo temporário, validação quando o Caddy está disponível e rollback da última configuração funcional;
+- `install`, `uninstall`, `status`, `reload`, `doctor`, `logs`, `open` e os comandos de registro;
+- regra de firewall DevLAN limitada ao perfil privado e à sub-rede local.
+
+`install` prepara os arquivos gerenciados e tenta criar a regra de firewall. Caddy e PHP-FPM são detectados no Windows/WSL; a instalação dos runtimes fica deliberadamente explícita para não instalar pacotes ou alterar o WSL sem autorização. Execute `devlan doctor` para ver o que falta.
+
+## Desenvolvimento
+
+Com Go instalado:
+
+```powershell
+go test ./...
+go vet ./...
+go run ./cmd/devlan help
+```
+
+Durante o desenvolvimento, `--data-dir` permite usar um diretório isolado:
+
+```powershell
+go run ./cmd/devlan --data-dir .devlan install
+go run ./cmd/devlan --data-dir .devlan doctor
+```

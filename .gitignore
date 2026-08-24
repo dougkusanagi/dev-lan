@@ -1,0 +1,11 @@
+.tools/
+bin/
+dist/
+
+# DevLAN runtime data when developing locally.
+.devlan/
+
+# Go build/test output.
+*.exe
+*.test
+*.out

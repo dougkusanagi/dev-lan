@@ -85,7 +85,7 @@ Proposta:
 ```text
 %LOCALAPPDATA%/DevLAN/
   config.toml
-  state.db
+  state.json
   generated/Caddyfile.windows
   logs/
 
@@ -96,9 +96,15 @@ Proposta:
 ```
 
 - TOML guarda preferências editáveis.
-- SQLite guarda projetos, portas, processos e migrações de schema.
+- O MVP usa JSON para o registro de projetos e parks; SQLite fica reservado
+  para quando processos, portas e migrações de schema entrarem no produto.
 - Arquivos em `generated` não devem ser editados manualmente.
 - Personalizações entram por snippets com pontos de extensão definidos.
+
+No MVP, `generated/Caddyfile.windows` e `generated/Caddyfile.wsl` são arquivos
+gerados pelo núcleo. O caminho Windows é convertido para `/mnt/<drive>/...`
+quando o Caddy do WSL é validado ou recarregado, evitando concatenação de
+comandos shell.
 
 ## Aplicação segura de configuração
 

@@ -103,6 +103,20 @@ devlan mode default php         define padrão do MVP
 devlan mode NAME php|inherit    sobrescreve ou restaura herança
 ```
 
+O binário aceita `--data-dir DIR` antes do comando. Sem essa opção, usa
+`%LOCALAPPDATA%/DevLAN` no Windows ou `~/.devlan` em outros sistemas. O
+diretório contém `config.toml`, `state.json`, os Caddyfiles gerados e logs.
+
+`park PATH` registra a pasta, mas não copia projetos para o estado. Em cada
+geração, filhos diretos são examinados sem executar scripts; somente os que
+contêm `artisan` e `public/index.php` tornam-se rotas. Um `link` explícito tem
+prioridade se houver colisão de nome.
+
+`reload` cria arquivos temporários, valida os Caddyfiles disponíveis, substitui
+os arquivos gerados e só então tenta o reload. Se o reload falhar, restaura o
+par anterior. Quando Caddy ou PHP-FPM não estão instalados, a configuração
+continua sendo gerada e `doctor` informa a dependência ausente.
+
 ## Comandos posteriores
 
 ```text
