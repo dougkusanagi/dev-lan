@@ -887,7 +887,7 @@ func (a *App) EffectiveConfig(ctx context.Context, cfg domain.Config) (domain.Co
 		knownPaths[project.Path] = struct{}{}
 	}
 	for _, park := range cfg.Parks {
-		children, err := a.Detector.Inspector.ListDirectories(ctx, park.Path)
+		discovered, err := a.Detector.BatchDetectPHP(ctx, park.Path)
 		if err != nil {
 			// A parked WSL directory may be temporarily unavailable. Explicit
 			// links remain usable, so leave discovery empty and let doctor report
@@ -897,8 +897,8 @@ func (a *App) EffectiveConfig(ctx context.Context, cfg domain.Config) (domain.Co
 			}
 			continue
 		}
-		for _, child := range children {
-			childPath, err := domain.NormalizePath(child)
+		for _, item := range discovered {
+			childPath, err := domain.NormalizePath(item.ProjectPath)
 			if err != nil {
 				continue
 			}
@@ -914,11 +914,7 @@ func (a *App) EffectiveConfig(ctx context.Context, cfg domain.Config) (domain.Co
 				// stable name.
 				continue
 			}
-			detected, err := a.Detector.DetectPHP(ctx, childPath)
-			if err != nil {
-				continue
-			}
-			preset := detected.Preset
+			preset := item.Preset
 			effective.Projects = append(effective.Projects, domain.Project{Name: name, Path: childPath, PHPPreset: &preset})
 			knownNames[name] = struct{}{}
 			knownPaths[childPath] = struct{}{}

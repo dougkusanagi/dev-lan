@@ -168,6 +168,53 @@ func (r WSLRunner) ListDirectories(ctx context.Context, parent string) ([]string
 	return paths, nil
 }
 
+type DiscoveredPHPProject struct {
+	Path        string
+	Artisan     bool
+	PublicIndex bool
+	RootIndex   bool
+	Console     bool
+}
+
+func (r WSLRunner) DiscoverPHPProjects(ctx context.Context, parent string) ([]DiscoveredPHPProject, error) {
+	script := `for d in "$1"/*; do
+		if [ -d "$d" ]; then
+			a=0; p=0; r=0; c=0
+			[ -f "$d/artisan" ] && a=1
+			[ -f "$d/public/index.php" ] && p=1
+			[ -f "$d/index.php" ] && r=1
+			[ -f "$d/bin/console" ] && c=1
+			printf '%s\t%d\t%d\t%d\t%d\n' "$d" "$a" "$p" "$r" "$c"
+		fi
+	done`
+	output, err := r.Run(ctx, "/bin/sh", "-c", script, "devlan", parent)
+	if err != nil {
+		if errors.Is(err, ErrUnavailable) {
+			return nil, err
+		}
+		return []DiscoveredPHPProject{}, nil
+	}
+	lines := strings.Split(strings.ReplaceAll(output, "\r\n", "\n"), "\n")
+	results := make([]DiscoveredPHPProject, 0, len(lines))
+	for _, line := range lines {
+		parts := strings.Split(strings.TrimSpace(line), "\t")
+		if len(parts) < 5 {
+			continue
+		}
+		results = append(results, DiscoveredPHPProject{
+			Path:        filepath.ToSlash(parts[0]),
+			Artisan:     parts[1] == "1",
+			PublicIndex: parts[2] == "1",
+			RootIndex:   parts[3] == "1",
+			Console:     parts[4] == "1",
+		})
+	}
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Path < results[j].Path
+	})
+	return results, nil
+}
+
 func ToWSLPath(value string) (string, error) {
 	clean := filepath.Clean(value)
 	if runtime.GOOS != "windows" {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -120,10 +121,18 @@ func run(args []string) error {
 		return nil
 
 	case "links":
-		if len(args) != 0 {
-			return fmt.Errorf("uso: devlan links")
+		asJSON := false
+		filter := ""
+		for _, arg := range args {
+			if arg == "--json" {
+				asJSON = true
+			} else if !strings.HasPrefix(arg, "-") && filter == "" {
+				filter = arg
+			} else {
+				return fmt.Errorf("uso: devlan links [FILTRO] [--json]")
+			}
 		}
-		return printProjects(service)
+		return printProjects(service, filter, asJSON)
 
 	case "park":
 		if len(args) != 1 {
@@ -259,7 +268,7 @@ func run(args []string) error {
 			return fmt.Errorf("uso: devlan open [NAME]")
 		}
 		if len(args) == 0 {
-			return printProjects(service)
+			return printProjects(service, "", false)
 		}
 		url, err := service.Open(ctx, args[0])
 		fmt.Println(url)
@@ -627,7 +636,7 @@ func runComposer(ctx context.Context, service *app.App, args []string) error {
 	return err
 }
 
-func printProjects(service *app.App) error {
+func printProjects(service *app.App, filter string, asJSON bool) error {
 	cfg, err := service.Store.Load()
 	if err != nil {
 		return err
@@ -644,42 +653,74 @@ func printProjects(service *app.App) error {
 		}
 	}
 	if len(effective.Projects) == 0 {
+		if asJSON {
+			fmt.Println("[]")
+			return nil
+		}
 		fmt.Println("Nenhum projeto registrado.")
 		return nil
 	}
 	rows := make([]projectRow, 0, len(effective.Projects))
+	filterLower := strings.ToLower(strings.TrimSpace(filter))
 	for _, project := range effective.Projects {
+		if filterLower != "" && !strings.Contains(strings.ToLower(project.Name), filterLower) && !strings.Contains(strings.ToLower(project.Path), filterLower) {
+			continue
+		}
 		resolved, err := effective.Resolve(project.Name)
 		if err != nil {
 			return err
 		}
 		url := resolved.URL(host, cfg.WindowsPort, cfg.HTTPSPort, effective.SecureProject(project))
+		phpVersion := effective.EffectivePHPVersion(project)
+		preset := string(effective.PHPProjectPreset(project))
 		rows = append(rows, projectRow{
-			Name: project.Name, Mode: string(resolved.Mode), Source: string(resolved.Source), SSL: sslState(cfg.SecureProject(project)), URL: url, Path: project.Path,
+			Name:   project.Name,
+			Mode:   string(resolved.Mode),
+			PHP:    phpVersion,
+			Preset: preset,
+			Source: string(resolved.Source),
+			SSL:    sslState(cfg.SecureProject(project)),
+			URL:    url,
+			Path:   project.Path,
 		})
 	}
-	return writeProjectTable(os.Stdout, rows)
+	if asJSON {
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(rows)
+	}
+	if len(rows) == 0 {
+		fmt.Printf("Nenhum projeto encontrado para o filtro %q.\n", filter)
+		return nil
+	}
+	if err := writeProjectTable(os.Stdout, rows); err != nil {
+		return err
+	}
+	fmt.Printf("\n💡 Dica: execute `devlan open %s` para abrir no navegador ou `devlan secure %s` para ativar HTTPS.\n", rows[0].Name, rows[0].Name)
+	return nil
 }
 
 type projectRow struct {
-	Name   string
-	Mode   string
-	Source string
-	SSL    string
-	URL    string
-	Path   string
+	Name   string `json:"name"`
+	Mode   string `json:"mode"`
+	PHP    string `json:"php"`
+	Preset string `json:"preset"`
+	Source string `json:"source"`
+	SSL    string `json:"ssl"`
+	URL    string `json:"url"`
+	Path   string `json:"path"`
 }
 
 func writeProjectTable(output io.Writer, rows []projectRow) error {
 	writer := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(writer, "PROJETO\tMODO\tORIGEM\tSSL\tURL\tCAMINHO"); err != nil {
+	if _, err := fmt.Fprintln(writer, "PROJETO\tMODO\tPHP\tTIPO\tORIGEM\tSSL\tURL\tCAMINHO"); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(writer, "-------\t----\t------\t---\t---\t-------"); err != nil {
+	if _, err := fmt.Fprintln(writer, "-------\t----\t---\t----\t------\t---\t---\t-------"); err != nil {
 		return err
 	}
 	for _, row := range rows {
-		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n", row.Name, row.Mode, row.Source, row.SSL, row.URL, row.Path); err != nil {
+		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", row.Name, row.Mode, row.PHP, row.Preset, row.Source, row.SSL, row.URL, row.Path); err != nil {
 			return err
 		}
 	}
@@ -731,7 +772,7 @@ func printStatus(ctx context.Context, service *app.App, dataDir string) error {
 		fmt.Printf("PHP: indisponível (%s)\n", versionErr)
 	}
 	fmt.Printf("Projetos registrados: %d | parks: %d\n", len(cfg.Projects), len(cfg.Parks))
-	return printProjects(service)
+	return printProjects(service, "", false)
 }
 
 func printWarnings(warnings []string) {
@@ -752,7 +793,7 @@ Fundação e registro:
   uninstall                  remove arquivos gerenciados, preserva projetos (Administrador*)
   link NAME PATH             registra um projeto Laravel
   unlink NAME                remove registro e rota
-  links                      lista projetos registrados
+  links [FILTRO] [--json]    lista projetos registrados e descobertos
   park PATH                  registra uma pasta de projetos
   unpark PATH                remove uma pasta estacionada
   parked                     lista pastas estacionadas
@@ -815,7 +856,7 @@ func printCommandUsage(command string) {
 		"uninstall": "uso: devlan uninstall",
 		"link":      "uso: devlan link NAME PATH",
 		"unlink":    "uso: devlan unlink NAME",
-		"links":     "uso: devlan links",
+		"links":     "uso: devlan links [FILTRO] [--json]",
 		"park":      "uso: devlan park PATH",
 		"unpark":    "uso: devlan unpark PATH",
 		"parked":    "uso: devlan parked",

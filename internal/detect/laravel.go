@@ -44,6 +44,30 @@ type LaravelInspector interface {
 	DetectLaravel(ctx context.Context, projectPath string) (LaravelResult, error)
 }
 
+type BatchInspector interface {
+	BatchDiscoverPHP(ctx context.Context, parentPath string) ([]PHPResult, error)
+}
+
+func (d Detector) BatchDetectPHP(ctx context.Context, parentPath string) ([]PHPResult, error) {
+	if d.Inspector == nil {
+		return nil, fmt.Errorf("detector sem inspector configurado")
+	}
+	if batch, ok := d.Inspector.(BatchInspector); ok {
+		return batch.BatchDiscoverPHP(ctx, parentPath)
+	}
+	children, err := d.Inspector.ListDirectories(ctx, parentPath)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]PHPResult, 0, len(children))
+	for _, child := range children {
+		if res, err := d.DetectPHP(ctx, child); err == nil {
+			results = append(results, res)
+		}
+	}
+	return results, nil
+}
+
 func (d Detector) Detect(ctx context.Context, projectPath string) (LaravelResult, error) {
 	if d.Inspector == nil {
 		return LaravelResult{}, fmt.Errorf("detector sem inspector configurado")
@@ -138,7 +162,7 @@ func (LocalInspector) Directory(_ context.Context, projectPath string) (bool, er
 	return info.IsDir(), nil
 }
 
-func (LocalInspector) ListDirectories(_ context.Context, projectPath string) ([]string, error) {
+func (l LocalInspector) ListDirectories(_ context.Context, projectPath string) ([]string, error) {
 	entries, err := os.ReadDir(filepath.FromSlash(projectPath))
 	if os.IsNotExist(err) {
 		return []string{}, nil
@@ -154,6 +178,20 @@ func (LocalInspector) ListDirectories(_ context.Context, projectPath string) ([]
 	}
 	sort.Strings(paths)
 	return paths, nil
+}
+
+func (l LocalInspector) BatchDiscoverPHP(ctx context.Context, parentPath string) ([]PHPResult, error) {
+	children, err := l.ListDirectories(ctx, parentPath)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]PHPResult, 0, len(children))
+	for _, child := range children {
+		if res, err := (Detector{Inspector: l}).DetectPHP(ctx, child); err == nil {
+			results = append(results, res)
+		}
+	}
+	return results, nil
 }
 
 type SmartInspector struct {
@@ -184,6 +222,45 @@ func (s SmartInspector) ListDirectories(ctx context.Context, projectPath string)
 		return s.WSL.ListDirectories(ctx, projectPath)
 	}
 	return s.Local.ListDirectories(ctx, projectPath)
+}
+
+func (s SmartInspector) BatchDiscoverPHP(ctx context.Context, projectPath string) ([]PHPResult, error) {
+	if s.usesWSL(projectPath) {
+		discovered, err := s.WSL.DiscoverPHPProjects(ctx, projectPath)
+		if err != nil {
+			return nil, err
+		}
+		results := make([]PHPResult, 0, len(discovered))
+		for _, d := range discovered {
+			res := PHPResult{
+				ProjectPath:  d.Path,
+				Artisan:      d.Artisan,
+				PublicIndex:  d.PublicIndex,
+				RootIndex:    d.RootIndex,
+				Console:      d.Console,
+			}
+			switch {
+			case d.Artisan && d.PublicIndex:
+				res.Preset = domain.PHPPresetLaravel
+				res.DocumentRoot = pathpkg.Join(d.Path, "public")
+				results = append(results, res)
+			case d.Console && d.PublicIndex:
+				res.Preset = domain.PHPPresetSymfony
+				res.DocumentRoot = pathpkg.Join(d.Path, "public")
+				results = append(results, res)
+			case d.PublicIndex:
+				res.Preset = domain.PHPPresetGeneric
+				res.DocumentRoot = pathpkg.Join(d.Path, "public")
+				results = append(results, res)
+			case d.RootIndex:
+				res.Preset = domain.PHPPresetGeneric
+				res.DocumentRoot = d.Path
+				results = append(results, res)
+			}
+		}
+		return results, nil
+	}
+	return s.Local.BatchDiscoverPHP(ctx, projectPath)
 }
 
 func (s SmartInspector) DetectLaravel(ctx context.Context, projectPath string) (LaravelResult, error) {
