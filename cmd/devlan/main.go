@@ -167,6 +167,12 @@ func run(args []string) error {
 	case "mode":
 		return runMode(ctx, service, args)
 
+	case "php":
+		return runPHP(ctx, service, args)
+
+	case "composer":
+		return runComposer(ctx, service, args)
+
 	case "status":
 		if len(args) != 0 {
 			return fmt.Errorf("uso: devlan status")
@@ -185,6 +191,16 @@ func run(args []string) error {
 		fmt.Println("Configurações geradas, validadas quando possível e recarregadas quando o Caddy está disponível.")
 		return nil
 
+	case "trust":
+		if len(args) != 0 {
+			return fmt.Errorf("uso: devlan trust")
+		}
+		if err := service.Trust(ctx); err != nil {
+			return fmt.Errorf("não foi possível confiar na CA local automaticamente (%w); execute `devlan trust` em PowerShell como Administrador", err)
+		}
+		fmt.Println("Certificado raiz local do Caddy instalado e confiado no sistema.")
+		return nil
+
 	case "secure", "unsecure":
 		if len(args) != 1 {
 			return fmt.Errorf("uso: devlan %s NAME|PATH", command)
@@ -200,6 +216,7 @@ func run(args []string) error {
 			fmt.Println("Outros dispositivos da LAN precisam confiar na CA local do DevLAN.")
 		} else {
 			fmt.Printf("SSL desativado para %s.\n", projectName)
+			fmt.Println("[dica] Se o navegador apresentar erros de CSRF ou cookies rejeitados, limpe os cookies ou acesse a versão HTTPS uma vez para redefinir o estado.")
 		}
 		return nil
 
@@ -326,6 +343,288 @@ func runMode(ctx context.Context, service *app.App, args []string) error {
 	return nil
 }
 
+func runPHP(ctx context.Context, service *app.App, args []string) error {
+	if len(args) == 0 || args[0] == "list" {
+		if len(args) > 1 {
+			return fmt.Errorf("uso: devlan php list")
+		}
+		versions, err := service.PHPVersions(ctx)
+		if err != nil {
+			return err
+		}
+		cfg, err := service.Store.Load()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("PADRÃO PHP: %s\n", cfg.PHPDefaultVersion)
+		if len(versions) == 0 {
+			fmt.Println("Nenhuma versão PHP registrada ou detectada.")
+			return nil
+		}
+		fmt.Println("VERSÃO\tSTATUS\tEXTENSÕES")
+		for _, version := range versions {
+			status := "detectada"
+			if version.Configured && version.Installed {
+				status = "ativa"
+			} else if version.Configured {
+				status = "configurada"
+			}
+			fmt.Printf("%s\t%s\t%s\n", version.Version, status, strings.Join(version.Extensions, ","))
+		}
+		return nil
+	}
+	switch args[0] {
+	case "install":
+		if len(args) < 2 {
+			return fmt.Errorf("uso: devlan php install VERSION [--extensions EXT1,EXT2]")
+		}
+		extensions, err := parseExtensionsFlag(args[2:])
+		if err != nil {
+			return err
+		}
+		result, err := service.PHPInstall(ctx, args[1], extensions)
+		printWarnings(result.Warnings)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("PHP %s instalado e registrado.\n", args[1])
+		return nil
+
+	case "remove", "uninstall":
+		if len(args) != 2 {
+			return fmt.Errorf("uso: devlan php remove VERSION")
+		}
+		result, err := service.PHPRemove(ctx, args[1])
+		printWarnings(result.Warnings)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("PHP %s removido.\n", args[1])
+		return nil
+
+	case "use":
+		if len(args) != 3 {
+			return fmt.Errorf("uso: devlan php use default VERSION | devlan php use NAME VERSION|inherit")
+		}
+		var result app.ApplyResult
+		var err error
+		if args[1] == "default" {
+			result, err = service.SetDefaultPHPVersion(ctx, args[2])
+		} else {
+			result, err = service.SetProjectPHPVersion(ctx, args[1], args[2])
+		}
+		printWarnings(result.Warnings)
+		if err != nil {
+			return err
+		}
+		fmt.Println("Preferência de versão PHP atualizada.")
+		return nil
+
+	case "extensions", "ext":
+		if len(args) < 2 {
+			return fmt.Errorf("uso: devlan php extensions VERSION [EXT1 EXT2 ...]")
+		}
+		if len(args) == 2 {
+			cfg, err := service.Store.Load()
+			if err != nil {
+				return err
+			}
+			version, found := cfg.PHPVersion(args[1])
+			if !found {
+				return fmt.Errorf("versão PHP não registrada: %s", args[1])
+			}
+			fmt.Println(strings.Join(version.Extensions, "\n"))
+			return nil
+		}
+		extensions, err := parseExtensionValues(args[2:])
+		if err != nil {
+			return err
+		}
+		result, err := service.SetPHPVersionExtensions(ctx, args[1], extensions)
+		printWarnings(result.Warnings)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Extensões de PHP %s atualizadas.\n", args[1])
+		return nil
+
+	case "pool":
+		return runPHPPool(ctx, service, args[1:])
+
+	case "preset":
+		if len(args) != 3 {
+			return fmt.Errorf("uso: devlan php preset NAME laravel|symfony|generic|inherit")
+		}
+		result, err := service.SetProjectPHPPreset(ctx, args[1], args[2])
+		printWarnings(result.Warnings)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Preset PHP do projeto %s atualizado.\n", args[1])
+		return nil
+
+	case "info":
+		if len(args) > 2 {
+			return fmt.Errorf("uso: devlan php info [NAME]")
+		}
+		selector := ""
+		if len(args) == 2 {
+			selector = args[1]
+		}
+		page, err := service.PHPInfo(ctx, selector)
+		if err != nil {
+			return err
+		}
+		fmt.Print(page)
+		return nil
+	default:
+		return fmt.Errorf("subcomando PHP desconhecido %q; use `devlan php --help`", args[0])
+	}
+}
+
+func parseExtensionsFlag(args []string) ([]string, error) {
+	if len(args) == 0 {
+		return nil, nil
+	}
+	if len(args) != 2 || args[0] != "--extensions" {
+		return nil, fmt.Errorf("uso: devlan php install VERSION [--extensions EXT1,EXT2]")
+	}
+	return parseExtensionValues([]string{args[1]})
+}
+
+func parseExtensionValues(values []string) ([]string, error) {
+	result := make([]string, 0)
+	for _, value := range values {
+		for _, extension := range strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ' ' }) {
+			if strings.TrimSpace(extension) != "" {
+				result = append(result, strings.TrimSpace(extension))
+			}
+		}
+	}
+	if len(result) == 0 {
+		return nil, fmt.Errorf("ao menos uma extensão é obrigatória")
+	}
+	return result, nil
+}
+
+func runPHPPool(ctx context.Context, service *app.App, args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("uso: devlan php pool default|VERSION|NAME [shared|isolated] [opções]")
+	}
+	if args[0] == "default" {
+		pool, err := parsePoolOptions(args[1:], domain.DefaultPHPFPMPoolConfig())
+		if err != nil {
+			return err
+		}
+		result, err := service.SetPHPGlobalPool(ctx, pool)
+		printWarnings(result.Warnings)
+		return err
+	}
+	if len(args) >= 2 && (args[1] == "shared" || args[1] == "isolated") {
+		result, err := service.SetProjectPHPIsolated(ctx, args[0], args[1] == "isolated")
+		printWarnings(result.Warnings)
+		return err
+	}
+	cfg, err := service.Store.Load()
+	if err != nil {
+		return err
+	}
+	version, found := cfg.PHPVersion(args[0])
+	if !found {
+		return fmt.Errorf("versão PHP não registrada: %s", args[0])
+	}
+	base := version.Pool
+	if base.IsZero() {
+		base = cfg.PHPFPMPool
+	}
+	pool, err := parsePoolOptions(args[1:], base)
+	if err != nil {
+		return err
+	}
+	result, err := service.SetPHPVersionPool(ctx, args[0], pool)
+	printWarnings(result.Warnings)
+	return err
+}
+
+func parsePoolOptions(args []string, base domain.PHPFPMPoolConfig) (domain.PHPFPMPoolConfig, error) {
+	if err := base.Normalize(); err != nil {
+		return domain.PHPFPMPoolConfig{}, err
+	}
+	for index := 0; index < len(args); index++ {
+		if index+1 >= len(args) {
+			return domain.PHPFPMPoolConfig{}, fmt.Errorf("opção %s exige um valor", args[index])
+		}
+		value := args[index+1]
+		switch args[index] {
+		case "--max-children":
+			parsed, err := strconv.Atoi(value)
+			if err != nil {
+				return domain.PHPFPMPoolConfig{}, fmt.Errorf("--max-children inválido: %s", value)
+			}
+			base.MaxChildren = parsed
+		case "--idle-timeout":
+			base.IdleTimeout = value
+		case "--max-requests":
+			parsed, err := strconv.Atoi(value)
+			if err != nil {
+				return domain.PHPFPMPoolConfig{}, fmt.Errorf("--max-requests inválido: %s", value)
+			}
+			base.MaxRequests = parsed
+		default:
+			return domain.PHPFPMPoolConfig{}, fmt.Errorf("opção de pool desconhecida: %s", args[index])
+		}
+		index++
+	}
+	if err := base.Normalize(); err != nil {
+		return domain.PHPFPMPoolConfig{}, err
+	}
+	return base, nil
+}
+
+func runComposer(ctx context.Context, service *app.App, args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("uso: devlan composer VERSION|NAME [--environment auto|system|per-version] -- ARGUMENTOS | composer config default|NAME ENV")
+	}
+	if args[0] == "config" {
+		if len(args) != 3 {
+			return fmt.Errorf("uso: devlan composer config default|NAME auto|system|per-version")
+		}
+		result, err := service.SetComposerEnvironment(ctx, args[1], args[2])
+		printWarnings(result.Warnings)
+		if err != nil {
+			return err
+		}
+		fmt.Println("Ambiente do Composer atualizado.")
+		return nil
+	}
+	selector := args[0]
+	environment := ""
+	composerArgs := make([]string, 0, len(args)-1)
+	for index := 1; index < len(args); index++ {
+		if args[index] == "--environment" {
+			if index+1 >= len(args) {
+				return fmt.Errorf("--environment exige um valor")
+			}
+			environment = args[index+1]
+			index++
+			continue
+		}
+		if args[index] == "--" {
+			composerArgs = append(composerArgs, args[index+1:]...)
+			break
+		}
+		composerArgs = append(composerArgs, args[index])
+	}
+	output, err := service.RunComposer(ctx, selector, environment, composerArgs)
+	if output != "" {
+		fmt.Print(output)
+		if !strings.HasSuffix(output, "\n") {
+			fmt.Println()
+		}
+	}
+	return err
+}
+
 func printProjects(service *app.App) error {
 	cfg, err := service.Store.Load()
 	if err != nil {
@@ -397,6 +696,9 @@ func printStatus(ctx context.Context, service *app.App, dataDir string) error {
 	if err != nil {
 		return err
 	}
+	if current, generated, diverged := service.CheckLANAddressDivergence(); diverged {
+		fmt.Fprintf(os.Stderr, "[aviso] O IP da rede local mudou de %s para %s. Execute `devlan reload` para atualizar o Caddy.\n", generated, current)
+	}
 	fmt.Printf("DevLAN %s (%s)\n", version, app.RuntimeDescription())
 	fmt.Printf("Dados: %s\n", dataDir)
 	fmt.Printf("Padrão: %s | HTTP: %d | HTTPS: %d | SSL: %s | porta WSL: %d\n", cfg.DefaultMode, cfg.WindowsPort, cfg.HTTPSPort, sslState(cfg.TLSEnabled), cfg.WSLPort)
@@ -409,6 +711,22 @@ func printStatus(ctx context.Context, service *app.App, dataDir string) error {
 		fmt.Println("Caddy WSL: disponível")
 	} else {
 		fmt.Println("Caddy WSL: ausente")
+	}
+	if versions, versionErr := service.PHPVersions(ctx); versionErr == nil {
+		labels := make([]string, 0, len(versions))
+		for _, version := range versions {
+			status := "detectada"
+			if version.Configured {
+				status = "configurada"
+			}
+			if version.Configured && version.Installed {
+				status = "ativa"
+			}
+			labels = append(labels, version.Version+" ("+status+")")
+		}
+		fmt.Printf("PHP padrão: %s | versões: %s\n", cfg.PHPDefaultVersion, strings.Join(labels, ", "))
+	} else {
+		fmt.Printf("PHP: indisponível (%s)\n", versionErr)
 	}
 	fmt.Printf("Projetos registrados: %d | parks: %d\n", len(cfg.Projects), len(cfg.Parks))
 	return printProjects(service)
@@ -440,13 +758,28 @@ Fundação e registro:
 Operação:
   status                     mostra componentes, projetos e URLs
   reload                     valida/aplica configurações e recarrega Caddy
+  trust                      instala e confia na CA interna do Caddy (Administrador*)
   secure NAME|PATH           ativa HTTPS para um projeto (Administrador*)
   unsecure NAME|PATH         desativa HTTPS para um projeto
   doctor [NAME]              diagnostica host, runtime e projeto
   logs [COMPONENT]           mostra logs gerenciados
   open [NAME]                abre URL ou mostra o dashboard textual
-  mode default php           define o padrão do MVP
+  mode default php           define o modo global
   mode NAME php|inherit      sobrescreve ou restaura herança
+
+PHP:
+  php list                   lista versões, extensões e estado
+  php install VERSION        instala PHP-FPM, Composer e extensões
+  php remove VERSION         remove uma versão não usada
+  php use default VERSION    define a versão PHP global
+  php use NAME VERSION       sobrescreve a versão do projeto
+  php extensions VERSION ... define extensões da versão
+  php pool default|VERSION   configura limites e timeout do pool
+  php pool NAME shared|isolated escolhe pool por projeto
+  php preset NAME PRESET     usa laravel, symfony ou generic
+  php info [NAME]            mostra página sanitizada de informações
+  composer VERSION|NAME      executa Composer com a versão escolhida
+  composer config default|NAME ENV  define ambiente do Composer
 
 Variável de ambiente:
   DEVLAN_HOME                diretório de dados (padrão: %LOCALAPPDATA%\DevLAN)
@@ -466,6 +799,15 @@ func containsHelp(args []string) bool {
 }
 
 func printCommandUsage(command string) {
+	if command == "php" {
+		printPHPUsage()
+		return
+	}
+	if command == "composer" {
+		printComposerUsage()
+		return
+	}
+
 	usages := map[string]string{
 		"install":   "uso: devlan install [--no-firewall] [--windows-port PORT]",
 		"uninstall": "uso: devlan uninstall",
@@ -477,6 +819,7 @@ func printCommandUsage(command string) {
 		"parked":    "uso: devlan parked",
 		"status":    "uso: devlan status",
 		"reload":    "uso: devlan reload",
+		"trust":     "uso: devlan trust",
 		"secure":    "uso: devlan secure NAME|PATH",
 		"unsecure":  "uso: devlan unsecure NAME|PATH",
 		"doctor":    "uso: devlan doctor [NAME]",
@@ -491,8 +834,116 @@ func printCommandUsage(command string) {
 			fmt.Println("\nAdministrador: necessário para criar ou remover a regra de firewall.")
 		case "secure":
 			fmt.Println("\nAdministrador: necessário na primeira ativação para liberar a porta HTTPS no firewall e confiar na CA interna.")
+		case "trust":
+			fmt.Println("\nAdministrador: necessário para instalar e confiar na CA raiz do Caddy no sistema.")
 		}
 		return
 	}
 	printUsage()
+}
+
+func printPHPUsage() {
+	fmt.Print(`Uso: devlan php SUBCOMANDO [ARGUMENTOS]
+
+Gerenciamento de versões PHP-FPM no WSL e seleção por projeto.
+
+Subcomandos:
+  list
+      Lista a versão padrão, versões detectadas/instaladas e extensões.
+
+  install VERSION [--extensions EXT1,EXT2]
+      Instala e registra uma versão do PHP-FPM no WSL.
+      Se --extensions não for informado, usa a lista padrão do DevLAN.
+
+  remove VERSION
+      Remove uma versão registrada. Não remove a versão padrão nem uma versão
+      que ainda esteja selecionada por um projeto.
+      Alias: uninstall.
+
+  use default VERSION
+      Define a versão PHP global para projetos sem uma sobrescrita.
+
+  use NAME VERSION
+      Define a versão PHP somente para o projeto NAME.
+
+  use NAME inherit
+      Remove a sobrescrita de NAME e volta a herdar a versão global.
+
+  extensions VERSION
+      Mostra as extensões configuradas para VERSION, uma por linha.
+
+  extensions VERSION EXT1 EXT2 ...
+      Substitui a lista de extensões de VERSION.
+      Extensões também podem ser separadas por vírgulas.
+      Alias: ext.
+
+  pool default [OPÇÕES]
+      Configura o pool global compartilhado.
+
+  pool VERSION [OPÇÕES]
+      Configura o pool compartilhado da versão VERSION.
+
+  pool NAME shared|isolated
+      Escolhe o pool compartilhado ou isolado para o projeto NAME.
+
+  preset NAME laravel|symfony|generic|inherit
+      Define o preset do projeto. inherit remove a sobrescrita do projeto.
+
+  info [NAME]
+      Imprime uma página HTML sanitizada com as informações do PHP do projeto
+      ou, sem NAME, da configuração global.
+
+Opções de pool:
+  --max-children N       máximo de workers PHP-FPM
+  --idle-timeout DURAÇÃO tempo ocioso antes de encerrar workers
+  --max-requests N       requisições atendidas por worker antes de reciclar
+
+Exemplos:
+  devlan php list
+  devlan php install 8.3 --extensions mbstring,xml,curl
+  devlan php use default 8.3
+  devlan php use loja 8.2
+  devlan php use loja inherit
+  devlan php pool default --max-children 10 --idle-timeout 10s
+  devlan php pool loja isolated
+  devlan php preset loja laravel
+  devlan php info loja
+
+Ajuda:
+  devlan php -h
+  devlan php SUBCOMANDO -h
+`)
+}
+
+func printComposerUsage() {
+	fmt.Print(`Uso: devlan composer SELETOR [OPÇÕES] -- ARGUMENTOS
+     devlan composer config default|NAME auto|system|per-version
+
+Executa o Composer dentro do WSL usando a versão PHP selecionada.
+
+SELETOR:
+  VERSION                 usa essa versão PHP (ex.: 8.3)
+  NAME                    usa a versão efetiva do projeto NAME
+
+Opções:
+  --environment ENV       auto, system ou per-version
+  --                      separa as opções do DevLAN dos argumentos do Composer
+
+Ambientes do Composer:
+  auto                    escolhe automaticamente o ambiente por versão
+  system                  usa o Composer global do WSL
+  per-version             usa o Composer associado à versão PHP
+
+Configuração:
+  devlan composer config default auto
+  devlan composer config loja per-version
+
+Exemplos:
+  devlan composer 8.3 -- install
+  devlan composer loja -- update
+  devlan composer loja --environment per-version -- install laravel/framework
+
+Ajuda:
+  devlan composer -h
+`)
 }

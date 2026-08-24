@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/dougkusanagi/dev-lan/internal/domain"
 	"github.com/dougkusanagi/dev-lan/internal/platform"
 )
 
@@ -23,6 +24,16 @@ type LaravelResult struct {
 	ProjectPath string
 	Artisan     bool
 	PublicIndex bool
+}
+
+type PHPResult struct {
+	ProjectPath  string
+	Preset       domain.PHPPreset
+	DocumentRoot string
+	Artisan      bool
+	Console      bool
+	PublicIndex  bool
+	RootIndex    bool
 }
 
 type Detector struct {
@@ -60,6 +71,46 @@ func (d Detector) Detect(ctx context.Context, projectPath string) (LaravelResult
 		return result, fmt.Errorf("projeto não parece Laravel; ausente: %s", strings.Join(missing, ", "))
 	}
 	return result, nil
+}
+
+// DetectPHP recognizes the three supported PHP presets using marker files
+// only. No composer or application script is executed during discovery.
+func (d Detector) DetectPHP(ctx context.Context, projectPath string) (PHPResult, error) {
+	if d.Inspector == nil {
+		return PHPResult{}, fmt.Errorf("detector sem inspector configurado")
+	}
+	markers := PHPResult{ProjectPath: projectPath}
+	var err error
+	if markers.Artisan, err = d.Inspector.Exists(ctx, projectPath, "artisan"); err != nil {
+		return PHPResult{}, err
+	}
+	if markers.Console, err = d.Inspector.Exists(ctx, projectPath, "bin/console"); err != nil {
+		return PHPResult{}, err
+	}
+	if markers.PublicIndex, err = d.Inspector.Exists(ctx, projectPath, "public/index.php"); err != nil {
+		return PHPResult{}, err
+	}
+	if markers.RootIndex, err = d.Inspector.Exists(ctx, projectPath, "index.php"); err != nil {
+		return PHPResult{}, err
+	}
+	switch {
+	case markers.Artisan && markers.PublicIndex:
+		markers.Preset = domain.PHPPresetLaravel
+		markers.DocumentRoot = pathpkg.Join(projectPath, "public")
+	case markers.Console && markers.PublicIndex:
+		markers.Preset = domain.PHPPresetSymfony
+		markers.DocumentRoot = pathpkg.Join(projectPath, "public")
+	case markers.PublicIndex:
+		markers.Preset = domain.PHPPresetGeneric
+		markers.DocumentRoot = pathpkg.Join(projectPath, "public")
+	case markers.RootIndex:
+		markers.Preset = domain.PHPPresetGeneric
+		markers.DocumentRoot = projectPath
+	default:
+		missing := []string{"public/index.php ou index.php"}
+		return markers, fmt.Errorf("projeto PHP não reconhecido; ausente: %s", strings.Join(missing, ", "))
+	}
+	return markers, nil
 }
 
 type LocalInspector struct{}
@@ -155,6 +206,51 @@ func (s SmartInspector) DetectLaravel(ctx context.Context, projectPath string) (
 		return result, fmt.Errorf("projeto não parece Laravel; ausente: %s", strings.Join(missing, ", "))
 	}
 	return Detector{Inspector: s.Local}.Detect(ctx, projectPath)
+}
+
+func (s SmartInspector) DetectPHP(ctx context.Context, projectPath string) (PHPResult, error) {
+	if s.usesWSL(projectPath) {
+		markers := PHPResult{ProjectPath: projectPath}
+		var err error
+		if markers.Artisan, markers.PublicIndex, err = s.WSL.LaravelMarkers(ctx, projectPath); err != nil {
+			return PHPResult{}, err
+		}
+		// The WSL marker call above is intentionally kept batched for the common
+		// Laravel case. The remaining markers are individual safe test calls.
+		if markers.Artisan && markers.PublicIndex {
+			markers.Preset = domain.PHPPresetLaravel
+			markers.DocumentRoot = pathpkg.Join(projectPath, "public")
+			return markers, nil
+		}
+		var exists bool
+		if exists, err = s.WSL.Exists(ctx, pathpkg.Join(projectPath, "bin/console")); err != nil {
+			return PHPResult{}, err
+		}
+		markers.Console = exists
+		if exists, err = s.WSL.Exists(ctx, pathpkg.Join(projectPath, "public/index.php")); err != nil {
+			return PHPResult{}, err
+		}
+		markers.PublicIndex = exists
+		if exists, err = s.WSL.Exists(ctx, pathpkg.Join(projectPath, "index.php")); err != nil {
+			return PHPResult{}, err
+		}
+		markers.RootIndex = exists
+		switch {
+		case markers.Console && markers.PublicIndex:
+			markers.Preset = domain.PHPPresetSymfony
+			markers.DocumentRoot = pathpkg.Join(projectPath, "public")
+		case markers.PublicIndex:
+			markers.Preset = domain.PHPPresetGeneric
+			markers.DocumentRoot = pathpkg.Join(projectPath, "public")
+		case markers.RootIndex:
+			markers.Preset = domain.PHPPresetGeneric
+			markers.DocumentRoot = projectPath
+		default:
+			return markers, fmt.Errorf("projeto PHP não reconhecido; ausente: public/index.php ou index.php")
+		}
+		return markers, nil
+	}
+	return Detector{Inspector: s.Local}.DetectPHP(ctx, projectPath)
 }
 
 // StaticInspector makes service tests independent of the host filesystem.

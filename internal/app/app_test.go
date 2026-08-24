@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/dougkusanagi/dev-lan/internal/detect"
@@ -11,6 +13,38 @@ import (
 type successfulRunner struct{}
 
 func (successfulRunner) Run(context.Context, ...string) (string, error) { return "", nil }
+
+type fakePHPManager struct {
+	installed []string
+}
+
+func (f *fakePHPManager) List(context.Context) ([]platform.PHPInstallation, error) {
+	result := make([]platform.PHPInstallation, 0, len(f.installed))
+	for _, version := range f.installed {
+		result = append(result, platform.PHPInstallation{Version: version, FPMBinary: "php-fpm" + version})
+	}
+	return result, nil
+}
+
+func (f *fakePHPManager) Install(_ context.Context, version string, _ []string) error {
+	for _, current := range f.installed {
+		if current == version {
+			return nil
+		}
+	}
+	f.installed = append(f.installed, version)
+	return nil
+}
+
+func (f *fakePHPManager) Remove(_ context.Context, version string) error {
+	for i, current := range f.installed {
+		if current == version {
+			f.installed = append(f.installed[:i], f.installed[i+1:]...)
+			return nil
+		}
+	}
+	return nil
+}
 
 func TestParkDiscoversOnlyLaravelChildren(t *testing.T) {
 	inspector := detect.StaticInspector{
@@ -82,5 +116,138 @@ func TestSetProjectTLSFindsParkedProject(t *testing.T) {
 	}
 	if len(cfg.Projects) != 1 || cfg.Projects[0].Secure == nil || *cfg.Projects[0].Secure {
 		t.Fatalf("preferência TLS não persistida: %#v", cfg.Projects)
+	}
+}
+
+func TestUnsecureKeepsTheTLSEdgeAvailableForBrowserCleanup(t *testing.T) {
+	service := New(t.TempDir())
+	service.Detector = detect.Detector{Inspector: detect.StaticInspector{Files: map[string]bool{
+		"/home/dev/financeiro/artisan":          true,
+		"/home/dev/financeiro/public/index.php": true,
+	}}}
+	service.WindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
+	service.WSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
+	ctx := context.Background()
+	if _, _, err := service.Link(ctx, "financeiro", "/home/dev/financeiro"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := service.SetProjectTLS(ctx, "financeiro", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := service.SetProjectTLS(ctx, "financeiro", false); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := service.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.TLSEnabled {
+		t.Fatal("listener TLS deveria permanecer disponível para limpar o estado seguro do navegador")
+	}
+	project, found := cfg.Project("financeiro")
+	if !found || project.Secure == nil || *project.Secure {
+		t.Fatalf("projeto deveria permanecer anunciado em HTTP: %#v", project)
+	}
+}
+
+func TestPHPVersionsCanBeInstalledAndSelectedPerProject(t *testing.T) {
+	service := New(t.TempDir())
+	service.PHP = &fakePHPManager{}
+	service.Detector = detect.Detector{Inspector: detect.StaticInspector{Files: map[string]bool{
+		"/home/dev/financeiro/artisan":          true,
+		"/home/dev/financeiro/public/index.php": true,
+	}}}
+	service.WindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
+	service.WSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
+	ctx := context.Background()
+	if _, err := service.PHPInstall(ctx, "8.3", []string{"xml"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.PHPInstall(ctx, "8.5", []string{"xml"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := service.Link(ctx, "financeiro", "/home/dev/financeiro"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.SetProjectPHPVersion(ctx, "financeiro", "8.3"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := service.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, found := cfg.Project("financeiro")
+	if !found || project.PHPVersion == nil || *project.PHPVersion != "8.3" {
+		t.Fatalf("override PHP não persistido: %#v", cfg.Projects)
+	}
+	if _, err := service.SetProjectPHPIsolated(ctx, "financeiro", true); err != nil {
+		t.Fatal(err)
+	}
+	_, generated, err := service.Store.Generated()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(generated) == 0 {
+		t.Fatal("Caddyfile não foi gerado")
+	}
+	data, err := os.ReadFile(service.Store.Paths().PHPGeneratedDir + "/php-8-3.conf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "pm.process_idle_timeout = 10s") || !strings.Contains(string(data), "/run/devlan/php/8.3/financeiro.sock") {
+		t.Fatalf("pool PHP incompleto:\n%s", data)
+	}
+}
+
+func TestAppTrust(t *testing.T) {
+	service := New(t.TempDir())
+	service.WindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
+	if err := service.Trust(context.Background()); err != nil {
+		t.Fatalf("trust falhou: %v", err)
+	}
+}
+
+func TestAppDoctorIncludesPortAndIPChecks(t *testing.T) {
+	service := New(t.TempDir())
+	service.WindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
+	service.WSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
+	checks, err := service.Doctor(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundPortHTTP := false
+	foundIP := false
+	for _, check := range checks {
+		if strings.HasPrefix(check.Name, "Porta HTTP") {
+			foundPortHTTP = true
+		}
+		if check.Name == "IP LAN" {
+			foundIP = true
+		}
+	}
+	if !foundPortHTTP {
+		t.Fatalf("Doctor deveria incluir checagem de porta HTTP: %#v", checks)
+	}
+	if !foundIP {
+		t.Fatalf("Doctor deveria incluir checagem de IP LAN: %#v", checks)
+	}
+}
+
+func TestAppLANAddressDivergence(t *testing.T) {
+	service := New(t.TempDir())
+	if err := service.Store.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	// Write dummy Caddyfile with a fake IP
+	fakeCaddyfile := "{\n    default_sni 10.0.0.99\n}\n"
+	if err := os.WriteFile(service.Store.Paths().WindowsCaddy, []byte(fakeCaddyfile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	current, generated, diverged := service.CheckLANAddressDivergence()
+	if generated != "10.0.0.99" {
+		t.Fatalf("esperado generated IP 10.0.0.99, obtido %q", generated)
+	}
+	if current != "" && current != "10.0.0.99" && !diverged {
+		t.Fatalf("esperado divergência quando IPs forem diferentes (current=%s, generated=%s)", current, generated)
 	}
 }

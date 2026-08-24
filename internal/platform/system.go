@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 )
 
 func LANAddress() (string, error) {
@@ -61,6 +62,24 @@ func LANAddress() (string, error) {
 
 func isPrivateIPv4(ip net.IP) bool {
 	return ip.IsPrivate() || ip.Equal(net.ParseIP("127.0.0.1"))
+}
+
+func IsPortAvailable(port int) bool {
+	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
+	if err != nil {
+		return false
+	}
+	_ = listener.Close()
+	return true
+}
+
+func IsAdminResponsive(address string) bool {
+	conn, err := net.DialTimeout("tcp", address, 300*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }
 
 func FirewallRule(ctx context.Context, name string) (bool, error) {

@@ -74,14 +74,84 @@ modo explícito do projeto
   > padrão global
 ```
 
-No MVP, apenas `php` será implementado. O schema e os comandos já devem aceitar evolução sem quebrar os projetos registrados.
+Na Fase 1, `php` usa o socket legado configurado em `php_fpm_socket`. Na Fase
+2, versões registradas ganham sockets e pools próprios sem invalidar esse
+estado antigo.
+
+## PHP completo
+
+Instale e mantenha as versões disponíveis no WSL:
+
+```powershell
+devlan php install 8.3
+devlan php install 8.5 --extensions mbstring,xml,curl
+devlan php list
+devlan php remove 8.3
+```
+
+O primeiro `php install` de uma configuração vazia torna-se a versão global.
+Depois, a preferência pode ser alterada sem mexer nos projetos:
+
+```powershell
+devlan php use default 8.5
+devlan php use financeiro 8.3
+devlan php use financeiro inherit
+```
+
+A resolução da versão é `sobrescrita do projeto > versão global`. Quando há
+versões registradas, o DevLAN rejeita uma referência a uma versão que não foi
+instalada. Projetos antigos sem `php_versions` continuam usando
+`/run/php/php-fpm.sock`.
+
+Extensões são uma lista por versão:
+
+```powershell
+devlan php extensions 8.5
+devlan php extensions 8.5 mbstring xml intl
+```
+
+Pools usam `ondemand` por padrão. Os limites podem ser ajustados globalmente
+ou por versão:
+
+```powershell
+devlan php pool default --max-children 10 --idle-timeout 10s --max-requests 500
+devlan php pool 8.5 --max-children 20 --idle-timeout 15s
+devlan php pool financeiro isolated
+devlan php pool financeiro shared
+```
+
+Um pool compartilhado usa `/run/devlan/php/VERSAO/shared.sock`; um pool isolado
+usa `/run/devlan/php/VERSAO/NOME.sock`. Os arquivos gerados ficam em
+`generated/php` e não devem ser editados manualmente.
+
+Presets podem ser detectados por markers sem executar scripts ou definidos
+explicitamente:
+
+```powershell
+devlan php preset financeiro laravel
+devlan php preset portal symfony
+devlan php preset site generic
+```
+
+Composer pode usar o binário do sistema ou ser executado pelo PHP da versão
+selecionada. O ambiente global ou por projeto é configurável:
+
+```powershell
+devlan composer config default per-version
+devlan composer config financeiro system
+devlan composer financeiro --environment per-version -- install --no-interaction
+```
+
+`php info [NAME]` imprime uma página HTML sanitizada. Ela mostra apenas
+projeto, preset, versão, pool, socket e extensões; não exibe `$_SERVER`,
+variáveis de ambiente, headers, credenciais ou conteúdo da aplicação.
 
 ## Configuração por projeto
 
 Exemplos futuros:
 
 ```powershell
-devlan config financeiro php.version 8.3
+devlan php use financeiro 8.3
 devlan config financeiro route.mode path
 devlan config financeiro route.path financeiro
 devlan config painel js.idle-timeout 15m
@@ -116,8 +186,15 @@ devlan secure NAME|PATH         ativa HTTPS para um projeto
 devlan unsecure NAME|PATH       desativa HTTPS para um projeto
 devlan doctor [NAME]            diagnóstico completo ou por projeto
 devlan logs [COMPONENT]         exibe logs relevantes
-devlan mode default php         define padrão do MVP
+devlan mode default php         define modo global
 devlan mode NAME php|inherit    sobrescreve ou restaura herança
+devlan php list                 lista versões PHP e extensões
+devlan php install VERSION      instala PHP-FPM e Composer
+devlan php use NAME VERSION     seleciona PHP por projeto
+devlan php pool ...             configura pools e timeout
+devlan php preset NAME PRESET   escolhe preset PHP
+devlan php info [NAME]          página de informações sanitizada
+devlan composer VERSION|NAME    executa Composer com PHP selecionado
 ```
 
 ## HTTPS na LAN

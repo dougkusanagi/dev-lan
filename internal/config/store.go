@@ -25,6 +25,9 @@ type Paths struct {
 	Config          string
 	State           string
 	GeneratedDir    string
+	PHPGeneratedDir string
+	PHPPreviousDir  string
+	PHPInfoDir      string
 	WindowsCaddy    string
 	WSLCaddy        string
 	WindowsPrevious string
@@ -41,6 +44,9 @@ func (s Store) Paths() Paths {
 		Config:          filepath.Join(s.Dir, "config.toml"),
 		State:           filepath.Join(s.Dir, "state.json"),
 		GeneratedDir:    generated,
+		PHPGeneratedDir: filepath.Join(generated, "php"),
+		PHPPreviousDir:  filepath.Join(generated, "php.previous"),
+		PHPInfoDir:      filepath.Join(generated, "php", "info"),
 		WindowsCaddy:    filepath.Join(generated, "Caddyfile.windows"),
 		WSLCaddy:        filepath.Join(generated, "Caddyfile.wsl"),
 		WindowsPrevious: filepath.Join(generated, "Caddyfile.windows.previous"),
@@ -51,7 +57,7 @@ func (s Store) Paths() Paths {
 
 func (s Store) Ensure() error {
 	paths := s.Paths()
-	for _, dir := range []string{paths.Dir, paths.GeneratedDir, paths.LogsDir} {
+	for _, dir := range []string{paths.Dir, paths.GeneratedDir, paths.PHPGeneratedDir, paths.PHPInfoDir, paths.LogsDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("criar diretório %s: %w", dir, err)
 		}
@@ -60,9 +66,10 @@ func (s Store) Ensure() error {
 }
 
 type stateFile struct {
-	Version  int              `json:"version"`
-	Projects []domain.Project `json:"projects"`
-	Parks    []domain.Park    `json:"parks"`
+	Version     int                       `json:"version"`
+	Projects    []domain.Project          `json:"projects"`
+	Parks       []domain.Park             `json:"parks"`
+	PHPVersions []domain.PHPVersionConfig `json:"php_versions,omitempty"`
 }
 
 func (s Store) Load() (domain.Config, error) {
@@ -85,6 +92,7 @@ func (s Store) Load() (domain.Config, error) {
 		cfg.Version = state.Version
 		cfg.Projects = state.Projects
 		cfg.Parks = state.Parks
+		cfg.PHPVersions = state.PHPVersions
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return domain.Config{}, fmt.Errorf("ler %s: %w", paths.State, err)
 	}
@@ -106,7 +114,7 @@ func (s Store) Save(cfg domain.Config) error {
 	if err := atomicWrite(paths.Config, []byte(renderTOMLConfig(cfg)), 0o644); err != nil {
 		return fmt.Errorf("gravar %s: %w", paths.Config, err)
 	}
-	state := stateFile{Version: cfg.Version, Projects: cfg.Projects, Parks: cfg.Parks}
+	state := stateFile{Version: cfg.Version, Projects: cfg.Projects, Parks: cfg.Parks, PHPVersions: cfg.PHPVersions}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return fmt.Errorf("serializar estado: %w", err)
@@ -129,6 +137,12 @@ func renderTOMLConfig(cfg domain.Config) string {
 	fmt.Fprintf(&b, "tls_enabled = %t\n", cfg.TLSEnabled)
 	fmt.Fprintf(&b, "wsl_port = %d\n", cfg.WSLPort)
 	fmt.Fprintf(&b, "php_fpm_socket = %s\n", strconv.Quote(cfg.PHPFPMOsocket))
+	fmt.Fprintf(&b, "php_default_version = %s\n", strconv.Quote(cfg.PHPDefaultVersion))
+	fmt.Fprintf(&b, "php_pool_max_children = %d\n", cfg.PHPFPMPool.MaxChildren)
+	fmt.Fprintf(&b, "php_pool_idle_timeout = %s\n", strconv.Quote(cfg.PHPFPMPool.IdleTimeout))
+	fmt.Fprintf(&b, "php_pool_max_requests = %d\n", cfg.PHPFPMPool.MaxRequests)
+	fmt.Fprintf(&b, "composer_environment = %s\n", strconv.Quote(string(cfg.Composer.Environment)))
+	fmt.Fprintf(&b, "composer_binary = %s\n", strconv.Quote(cfg.Composer.Binary))
 	return b.String()
 }
 
@@ -198,6 +212,42 @@ func parseTOMLConfig(data []byte, cfg *domain.Config) error {
 				return fmt.Errorf("linha %d: php_fpm_socket inválido: %w", lineNumber+1, err)
 			}
 			cfg.PHPFPMOsocket = parsed
+		case "php_default_version":
+			parsed, err := parseTOMLString(value)
+			if err != nil {
+				return fmt.Errorf("linha %d: php_default_version inválida: %w", lineNumber+1, err)
+			}
+			cfg.PHPDefaultVersion = parsed
+		case "php_pool_max_children":
+			parsed, err := strconv.Atoi(value)
+			if err != nil {
+				return fmt.Errorf("linha %d: php_pool_max_children inválido", lineNumber+1)
+			}
+			cfg.PHPFPMPool.MaxChildren = parsed
+		case "php_pool_idle_timeout":
+			parsed, err := parseTOMLString(value)
+			if err != nil {
+				return fmt.Errorf("linha %d: php_pool_idle_timeout inválido: %w", lineNumber+1, err)
+			}
+			cfg.PHPFPMPool.IdleTimeout = parsed
+		case "php_pool_max_requests":
+			parsed, err := strconv.Atoi(value)
+			if err != nil {
+				return fmt.Errorf("linha %d: php_pool_max_requests inválido", lineNumber+1)
+			}
+			cfg.PHPFPMPool.MaxRequests = parsed
+		case "composer_environment":
+			parsed, err := parseTOMLString(value)
+			if err != nil {
+				return fmt.Errorf("linha %d: composer_environment inválido: %w", lineNumber+1, err)
+			}
+			cfg.Composer.Environment = domain.ComposerEnvironment(parsed)
+		case "composer_binary":
+			parsed, err := parseTOMLString(value)
+			if err != nil {
+				return fmt.Errorf("linha %d: composer_binary inválido: %w", lineNumber+1, err)
+			}
+			cfg.Composer.Binary = parsed
 		default:
 			return fmt.Errorf("linha %d: chave desconhecida %q", lineNumber+1, key)
 		}
@@ -311,6 +361,142 @@ func (s Store) RollbackGenerated() error {
 	return nil
 }
 
+// ApplyPHPFiles replaces only the generated PHP-FPM configuration and the
+// sanitized information page. All paths are derived inside the managed data
+// directory; callers provide filenames rather than arbitrary paths.
+func (s Store) ApplyPHPFiles(poolFiles map[string]string, infoPage string) error {
+	if err := s.Ensure(); err != nil {
+		return err
+	}
+	paths := s.Paths()
+	if err := os.RemoveAll(paths.PHPPreviousDir); err != nil {
+		return fmt.Errorf("preparar rollback dos pools PHP: %w", err)
+	}
+	if err := os.MkdirAll(paths.PHPPreviousDir, 0o755); err != nil {
+		return fmt.Errorf("criar rollback dos pools PHP: %w", err)
+	}
+	entries, readErr := os.ReadDir(paths.PHPGeneratedDir)
+	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		return readErr
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			if entry.Name() != "info" {
+				continue
+			}
+			source := filepath.Join(paths.PHPGeneratedDir, entry.Name())
+			target := filepath.Join(paths.PHPPreviousDir, entry.Name())
+			if err := copyManagedTree(source, target); err != nil {
+				return err
+			}
+			continue
+		}
+		if !strings.HasSuffix(entry.Name(), ".conf") {
+			continue
+		}
+		source := filepath.Join(paths.PHPGeneratedDir, entry.Name())
+		target := filepath.Join(paths.PHPPreviousDir, entry.Name())
+		data, err := os.ReadFile(source)
+		if err != nil {
+			return err
+		}
+		if err := atomicWrite(target, data, 0o644); err != nil {
+			return err
+		}
+	}
+	for name, contents := range poolFiles {
+		if filepath.Base(name) != name || !strings.HasSuffix(name, ".conf") {
+			return fmt.Errorf("arquivo de pool PHP inválido: %q", name)
+		}
+		if err := atomicWrite(filepath.Join(paths.PHPGeneratedDir, name), []byte(contents), 0o644); err != nil {
+			return fmt.Errorf("gravar pool PHP %s: %w", name, err)
+		}
+	}
+	entries, err := os.ReadDir(paths.PHPGeneratedDir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".conf") {
+			continue
+		}
+		if _, keep := poolFiles[entry.Name()]; !keep {
+			if err := os.Remove(filepath.Join(paths.PHPGeneratedDir, entry.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("remover pool PHP antigo %s: %w", entry.Name(), err)
+			}
+		}
+	}
+	if infoPage != "" {
+		if err := atomicWrite(filepath.Join(paths.PHPInfoDir, "index.html"), []byte(infoPage), 0o644); err != nil {
+			return fmt.Errorf("gravar página de informações PHP: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s Store) RollbackPHPFiles() error {
+	paths := s.Paths()
+	if err := os.RemoveAll(paths.PHPGeneratedDir); err != nil {
+		return err
+	}
+	previous, err := os.ReadDir(paths.PHPPreviousDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(paths.PHPGeneratedDir, 0o755); err != nil {
+		return err
+	}
+	for _, entry := range previous {
+		source := filepath.Join(paths.PHPPreviousDir, entry.Name())
+		target := filepath.Join(paths.PHPGeneratedDir, entry.Name())
+		if entry.IsDir() {
+			if err := copyManagedTree(source, target); err != nil {
+				return err
+			}
+			continue
+		}
+		data, err := os.ReadFile(source)
+		if err != nil {
+			return err
+		}
+		if err := atomicWrite(target, data, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyManagedTree(source, target string) error {
+	entries, err := os.ReadDir(source)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		sourcePath := filepath.Join(source, entry.Name())
+		targetPath := filepath.Join(target, entry.Name())
+		if entry.IsDir() {
+			if err := copyManagedTree(sourcePath, targetPath); err != nil {
+				return err
+			}
+			continue
+		}
+		data, err := os.ReadFile(sourcePath)
+		if err != nil {
+			return err
+		}
+		if err := atomicWrite(targetPath, data, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s Store) RemoveManagedFiles() error {
 	paths := s.Paths()
 	files := []string{paths.Config, paths.State, paths.WindowsCaddy, paths.WSLCaddy, paths.WindowsPrevious, paths.WSLPrevious}
@@ -318,6 +504,12 @@ func (s Store) RemoveManagedFiles() error {
 		if err := os.Remove(file); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remover %s: %w", file, err)
 		}
+	}
+	if err := os.RemoveAll(paths.PHPGeneratedDir); err != nil {
+		return fmt.Errorf("remover arquivos PHP gerenciados: %w", err)
+	}
+	if err := os.RemoveAll(paths.PHPPreviousDir); err != nil {
+		return fmt.Errorf("remover rollback PHP gerenciado: %w", err)
 	}
 	return nil
 }
@@ -400,7 +592,9 @@ func StableJSON(cfg domain.Config) ([]byte, error) {
 	parks := append([]domain.Park(nil), cfg.Parks...)
 	sort.Slice(projects, func(i, j int) bool { return projects[i].Name < projects[j].Name })
 	sort.Slice(parks, func(i, j int) bool { return parks[i].Path < parks[j].Path })
-	state := stateFile{Version: cfg.Version, Projects: projects, Parks: parks}
+	versions := append([]domain.PHPVersionConfig(nil), cfg.PHPVersions...)
+	sort.Slice(versions, func(i, j int) bool { return versions[i].Version < versions[j].Version })
+	state := stateFile{Version: cfg.Version, Projects: projects, Parks: parks, PHPVersions: versions}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return nil, err

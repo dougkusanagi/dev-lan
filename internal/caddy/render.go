@@ -2,7 +2,6 @@ package caddy
 
 import (
 	"fmt"
-	pathpkg "path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -20,6 +19,7 @@ const (
 type Route struct {
 	Project domain.Project
 	Mode    domain.Mode
+	Preset  domain.PHPPreset
 }
 
 func Routes(cfg domain.Config) ([]Route, error) {
@@ -32,7 +32,7 @@ func Routes(cfg domain.Config) ([]Route, error) {
 		if item.Mode != domain.ModePHP {
 			return nil, fmt.Errorf("projeto %q resolve para modo %q: %w", item.Project.Name, item.Mode, domain.ErrUnsupportedMode)
 		}
-		routes = append(routes, Route{Project: item.Project, Mode: item.Mode})
+		routes = append(routes, Route{Project: item.Project, Mode: item.Mode, Preset: cfg.PHPProjectPreset(item.Project)})
 	}
 	return routes, nil
 }
@@ -68,19 +68,20 @@ func RenderWindows(cfg domain.Config) (string, error) {
 		fmt.Fprintf(&b, "http://:%d {\n", cfg.WindowsPort)
 		b.WriteString("    bind 0.0.0.0\n")
 		secureNames := secureProjectNames(cfg)
-		if len(secureNames) == 0 {
+		hasProjectPreferences := hasProjectTLSPreferences(cfg)
+		if !hasProjectPreferences {
 			if cfg.HTTPSPort == 443 {
-				b.WriteString("    redir https://{http.request.host}{http.request.uri} 308\n")
+				b.WriteString("    redir https://{http.request.host}{http.request.uri} 307\n")
 			} else {
-				fmt.Fprintf(&b, "    redir https://{http.request.host}:%d{http.request.uri} 308\n", cfg.HTTPSPort)
+				fmt.Fprintf(&b, "    redir https://{http.request.host}:%d{http.request.uri} 307\n", cfg.HTTPSPort)
 			}
 		} else {
 			for index, name := range secureNames {
 				fmt.Fprintf(&b, "    @devlan_secure_%d path /%s /%s/*\n", index, name, name)
 				if cfg.HTTPSPort == 443 {
-					fmt.Fprintf(&b, "    redir @devlan_secure_%d https://{http.request.host}{http.request.uri} 308\n", index)
+					fmt.Fprintf(&b, "    redir @devlan_secure_%d https://{http.request.host}{http.request.uri} 307\n", index)
 				} else {
-					fmt.Fprintf(&b, "    redir @devlan_secure_%d https://{http.request.host}:%d{http.request.uri} 308\n", index, cfg.HTTPSPort)
+					fmt.Fprintf(&b, "    redir @devlan_secure_%d https://{http.request.host}:%d{http.request.uri} 307\n", index, cfg.HTTPSPort)
 				}
 			}
 		}
@@ -96,9 +97,40 @@ func RenderWindows(cfg domain.Config) (string, error) {
 		b.WriteString("    bind 0.0.0.0\n")
 		b.WriteString("    tls internal\n")
 		b.WriteString("    encode gzip\n")
-		fmt.Fprintf(&b, "    reverse_proxy 127.0.0.1:%d {\n", cfg.WSLPort)
-		b.WriteString("        header_up X-DevLAN-HTTPS on\n")
-		b.WriteString("    }\n")
+		if hasProjectTLSPreferences(cfg) {
+			for index, name := range secureProjectNames(cfg) {
+				fmt.Fprintf(&b, "    @devlan_secure_path_%d path /%s /%s/*\n", index, name, name)
+				fmt.Fprintf(&b, "    handle @devlan_secure_path_%d {\n", index)
+				fmt.Fprintf(&b, "        reverse_proxy 127.0.0.1:%d {\n", cfg.WSLPort)
+				b.WriteString("            header_up X-DevLAN-HTTPS on\n")
+				b.WriteString("        }\n")
+				b.WriteString("    }\n")
+				fmt.Fprintf(&b, "    @devlan_secure_referer_%d header_regexp Referer ^https://[^/]+/%s(?:/|$)\n", index, regexp.QuoteMeta(name))
+				fmt.Fprintf(&b, "    handle @devlan_secure_referer_%d {\n", index)
+				fmt.Fprintf(&b, "        reverse_proxy 127.0.0.1:%d {\n", cfg.WSLPort)
+				b.WriteString("            header_up X-DevLAN-HTTPS on\n")
+				b.WriteString("        }\n")
+				b.WriteString("    }\n")
+			}
+			for index, name := range unsecureProjectNames(cfg) {
+				fmt.Fprintf(&b, "    @devlan_unsecure_%d path /%s /%s/*\n", index, name, name)
+				fmt.Fprintf(&b, "    handle @devlan_unsecure_%d {\n", index)
+				b.WriteString("        header Clear-Site-Data \"\\\"cache\\\", \\\"cookies\\\"\"\n")
+				if cfg.WindowsPort == 80 {
+					b.WriteString("        redir http://{http.request.host}{http.request.uri} 302\n")
+				} else {
+					fmt.Fprintf(&b, "        redir http://{http.request.host}:%d{http.request.uri} 302\n", cfg.WindowsPort)
+				}
+				b.WriteString("    }\n")
+			}
+			fmt.Fprintf(&b, "    reverse_proxy 127.0.0.1:%d {\n", cfg.WSLPort)
+			b.WriteString("        header_up X-DevLAN-HTTPS on\n")
+			b.WriteString("    }\n")
+		} else {
+			fmt.Fprintf(&b, "    reverse_proxy 127.0.0.1:%d {\n", cfg.WSLPort)
+			b.WriteString("        header_up X-DevLAN-HTTPS on\n")
+			b.WriteString("    }\n")
+		}
 		b.WriteString("}\n")
 		return b.String(), nil
 	}
@@ -110,17 +142,18 @@ func RenderWindows(cfg domain.Config) (string, error) {
 	return b.String(), nil
 }
 
-func secureProjectNames(cfg domain.Config) []string {
-	if len(cfg.Projects) == 0 {
-		return nil
-	}
-	hasPreference := false
+func unsecureProjectNames(cfg domain.Config) []string {
+	names := make([]string, 0, len(cfg.Projects))
 	for _, project := range cfg.Projects {
-		if project.Secure != nil {
-			hasPreference = true
+		if project.Secure != nil && !*project.Secure {
+			names = append(names, project.Name)
 		}
 	}
-	if !hasPreference {
+	return names
+}
+
+func secureProjectNames(cfg domain.Config) []string {
+	if !hasProjectTLSPreferences(cfg) {
 		return nil // legacy global TLS configuration
 	}
 	names := make([]string, 0, len(cfg.Projects))
@@ -130,6 +163,15 @@ func secureProjectNames(cfg domain.Config) []string {
 		}
 	}
 	return names
+}
+
+func hasProjectTLSPreferences(cfg domain.Config) bool {
+	for _, project := range cfg.Projects {
+		if project.Secure != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // RenderWSL generates one deterministic route per explicitly registered
@@ -153,12 +195,13 @@ func RenderWSL(cfg domain.Config) (string, error) {
 
 	for _, route := range routes {
 		name := route.Project.Name
-		publicRoot := pathpkg.Join(route.Project.Path, "public")
+		publicRoot := cfg.PHPDocumentRoot(route.Project)
+		socket := cfg.PHPSocket(route.Project)
 		fmt.Fprintf(&b, "    redir /%s /%s/ 308\n", name, name)
 		fmt.Fprintf(&b, "    handle_path /%s/* {\n", name)
 		fmt.Fprintf(&b, "        root * %s\n", quoteCaddy(publicRoot))
 		b.WriteString("        vars devlan_request_uri {http.request.uri}\n")
-		fmt.Fprintf(&b, "        php_fastcgi unix/%s {\n", cfg.PHPFPMOsocket)
+		fmt.Fprintf(&b, "        php_fastcgi unix/%s {\n", socket)
 		fmt.Fprintf(&b, "            env REQUEST_URI /%s{vars.devlan_request_uri}\n", name)
 		fmt.Fprintf(&b, "            env SCRIPT_NAME /%s/index.php\n", name)
 		b.WriteString("            env HTTPS {http.request.header.X-DevLAN-HTTPS}\n")
@@ -174,12 +217,13 @@ func RenderWSL(cfg domain.Config) (string, error) {
 	// the same-origin Referer, avoiding ambiguous global paths between projects.
 	for index, route := range routes {
 		name := route.Project.Name
-		publicRoot := pathpkg.Join(route.Project.Path, "public")
+		publicRoot := cfg.PHPDocumentRoot(route.Project)
+		socket := cfg.PHPSocket(route.Project)
 		fmt.Fprintf(&b, "    @devlan_compat_%d header_regexp Referer ^https?://[^/]+/%s(?:/|$)\n", index, regexp.QuoteMeta(name))
 		fmt.Fprintf(&b, "    handle @devlan_compat_%d {\n", index)
 		fmt.Fprintf(&b, "        root * %s\n", quoteCaddy(publicRoot))
 		b.WriteString("        vars devlan_request_uri {http.request.uri}\n")
-		fmt.Fprintf(&b, "        php_fastcgi unix/%s {\n", cfg.PHPFPMOsocket)
+		fmt.Fprintf(&b, "        php_fastcgi unix/%s {\n", socket)
 		fmt.Fprintf(&b, "            env REQUEST_URI /%s{vars.devlan_request_uri}\n", name)
 		fmt.Fprintf(&b, "            env SCRIPT_NAME /%s/index.php\n", name)
 		b.WriteString("            env HTTPS {http.request.header.X-DevLAN-HTTPS}\n")

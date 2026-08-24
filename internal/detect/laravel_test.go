@@ -35,3 +35,21 @@ func TestDetectRejectsIncompleteFixture(t *testing.T) {
 		t.Fatal("fixture incompleta deveria ser rejeitada")
 	}
 }
+
+func TestDetectPHPPresets(t *testing.T) {
+	inspector := StaticInspector{Files: map[string]bool{
+		"/symfony/bin/console":      true,
+		"/symfony/public/index.php": true,
+		"/generic/public/index.php": true,
+		"/root/index.php":           true,
+	}}
+	detector := Detector{Inspector: inspector}
+	result, err := detector.DetectPHP(context.Background(), "/symfony")
+	if err != nil || string(result.Preset) != "symfony" {
+		t.Fatalf("preset Symfony inesperado: %#v, %v", result, err)
+	}
+	result, err = detector.DetectPHP(context.Background(), "/generic")
+	if err != nil || string(result.Preset) != "generic" {
+		t.Fatalf("preset genérico inesperado: %#v, %v", result, err)
+	}
+}

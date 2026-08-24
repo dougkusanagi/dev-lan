@@ -73,6 +73,32 @@ O script não executa `composer install` nos projetos e não instala bancos,
 Node ou dependências de aplicação. Esses passos continuam explícitos e fora do
 MVP.
 
+## Fase 2: mais de uma versão PHP
+
+O bootstrap continua instalando a versão inicial escolhida por `-PhpVersion`.
+Depois, as demais branches podem ser adicionadas sem reinstalar o DevLAN:
+
+```powershell
+devlan php install 8.3
+devlan php install 8.5
+devlan php list
+devlan php use default 8.5
+```
+
+Cada instalação registra a versão, instala Composer e as extensões solicitadas,
+gera um mestre PHP-FPM com `pm=ondemand` e mantém workers ociosos somente até
+`pm.process_idle_timeout`. Para ajustar a política:
+
+```powershell
+devlan php pool default --max-children 10 --idle-timeout 10s --max-requests 500
+devlan php pool 8.3 --max-children 20
+devlan php pool meu-projeto isolated
+```
+
+`devlan php remove VERSION` remove apenas versões que não estão selecionadas
+explicitamente por um projeto. Diretórios dos projetos e suas dependências não
+são removidos.
+
 O binário `devlan` nativo para uso direto dentro do WSL está planejado para a
 Fase 1.1 e ainda não é instalado pelo bootstrap atual. Ele será um cliente da
 CLI/controlador Windows, preservando uma única fonte de estado.

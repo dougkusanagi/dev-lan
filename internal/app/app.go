@@ -7,7 +7,9 @@ import (
 	"os"
 	pathpkg "path"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 	"github.com/dougkusanagi/dev-lan/internal/config"
 	"github.com/dougkusanagi/dev-lan/internal/detect"
 	"github.com/dougkusanagi/dev-lan/internal/domain"
+	phpconfig "github.com/dougkusanagi/dev-lan/internal/php"
 	"github.com/dougkusanagi/dev-lan/internal/platform"
 )
 
@@ -22,6 +25,7 @@ type App struct {
 	Store        config.Store
 	Detector     detect.Detector
 	WSL          platform.WSLRunner
+	PHP          platform.PHPManager
 	WindowsCaddy platform.CaddyClient
 	WSLCaddy     platform.CaddyClient
 	Now          func() time.Time
@@ -33,6 +37,7 @@ func New(dataDir string) *App {
 		Store:        config.NewStore(dataDir),
 		Detector:     detect.Detector{Inspector: detect.SmartInspector{WSL: wsl}},
 		WSL:          wsl,
+		PHP:          platform.NewWSLPHPManager(wsl),
 		WindowsCaddy: platform.NewLocalCaddy(""),
 		WSLCaddy:     platform.NewWSLCaddy(wsl),
 		Now:          time.Now,
@@ -65,7 +70,16 @@ func (a *App) InstallWithPort(ctx context.Context, configureFirewall bool, windo
 	}
 	if err := a.Store.Save(cfg); err != nil {
 		_ = a.Store.RollbackGenerated()
+		_ = a.Store.RollbackPHPFiles()
 		return result, err
+	}
+	if !platform.IsAdminResponsive(platform.WindowsCaddyAdminAddress) {
+		if !platform.IsPortAvailable(cfg.WindowsPort) {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("porta HTTP %d parece estar em uso por outro processo; use `devlan install --windows-port PORT` se houver conflito", cfg.WindowsPort))
+		}
+		if cfg.TLSEnabled && !platform.IsPortAvailable(cfg.HTTPSPort) {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("porta HTTPS %d parece estar em uso por outro processo", cfg.HTTPSPort))
+		}
 	}
 	if configureFirewall {
 		ports := []int{cfg.WindowsPort}
@@ -112,7 +126,8 @@ func (a *App) Link(ctx context.Context, name, projectPath string) (domain.Projec
 	if err != nil {
 		return domain.Project{}, ApplyResult{}, err
 	}
-	if _, err := a.Detector.Detect(ctx, normalizedPath); err != nil {
+	detected, err := a.Detector.DetectPHP(ctx, normalizedPath)
+	if err != nil {
 		return domain.Project{}, ApplyResult{}, err
 	}
 	cfg, err := a.Store.Load()
@@ -122,6 +137,14 @@ func (a *App) Link(ctx context.Context, name, projectPath string) (domain.Projec
 	project, err := cfg.Link(name, normalizedPath)
 	if err != nil {
 		return domain.Project{}, ApplyResult{}, err
+	}
+	for i := range cfg.Projects {
+		if cfg.Projects[i].Name == project.Name {
+			preset := detected.Preset
+			cfg.Projects[i].PHPPreset = &preset
+			project = cfg.Projects[i]
+			break
+		}
 	}
 	result, err := a.saveAndApply(ctx, cfg, true)
 	if err != nil {
@@ -228,6 +251,396 @@ func (a *App) SetProjectMode(ctx context.Context, name string, mode *domain.Mode
 	return result, err
 }
 
+var defaultPHPExtensions = []string{"bcmath", "curl", "gd", "intl", "mbstring", "mysql", "pgsql", "xml", "zip"}
+
+type PHPVersionStatus struct {
+	Version    string
+	Installed  bool
+	Configured bool
+	Extensions []string
+}
+
+func (a *App) PHPVersions(ctx context.Context) ([]PHPVersionStatus, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return nil, err
+	}
+	configured := make(map[string]domain.PHPVersionConfig, len(cfg.PHPVersions))
+	for _, version := range cfg.PHPVersions {
+		configured[version.Version] = version
+	}
+	installed := map[string]platform.PHPInstallation{}
+	if a.PHP != nil {
+		items, listErr := a.PHP.List(ctx)
+		if listErr != nil && !errors.Is(listErr, platform.ErrUnavailable) {
+			return nil, listErr
+		}
+		for _, item := range items {
+			installed[item.Version] = item
+		}
+	}
+	versions := make(map[string]struct{}, len(configured)+len(installed))
+	for version := range configured {
+		versions[version] = struct{}{}
+	}
+	for version := range installed {
+		versions[version] = struct{}{}
+	}
+	ordered := make([]string, 0, len(versions))
+	for version := range versions {
+		ordered = append(ordered, version)
+	}
+	sort.Strings(ordered)
+	result := make([]PHPVersionStatus, 0, len(ordered))
+	for _, version := range ordered {
+		entry := configured[version]
+		extensions := append([]string(nil), entry.Extensions...)
+		if len(extensions) == 0 {
+			extensions = append(extensions, installed[version].Extensions...)
+		}
+		sort.Strings(extensions)
+		result = append(result, PHPVersionStatus{Version: version, Installed: installed[version].Version != "", Configured: entry.Version != "", Extensions: extensions})
+	}
+	return result, nil
+}
+
+func (a *App) PHPInstall(ctx context.Context, version string, extensions []string) (ApplyResult, error) {
+	if a.PHP == nil {
+		return ApplyResult{}, fmt.Errorf("gerenciador PHP não configurado")
+	}
+	version, err := domain.NormalizePHPVersion(version)
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	if len(extensions) == 0 {
+		extensions = append([]string(nil), defaultPHPExtensions...)
+	}
+	if err := a.PHP.Install(ctx, version, extensions); err != nil {
+		return ApplyResult{}, err
+	}
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	wasEmpty := len(cfg.PHPVersions) == 0
+	if _, found := cfg.PHPVersion(version); found {
+		if err := cfg.SetPHPVersionExtensions(version, extensions); err != nil {
+			return ApplyResult{}, err
+		}
+	} else if _, err := cfg.AddPHPVersion(version, extensions); err != nil {
+		return ApplyResult{}, err
+	}
+	if wasEmpty {
+		cfg.PHPDefaultVersion = version
+		if err := cfg.Normalize(); err != nil {
+			return ApplyResult{}, err
+		}
+	}
+	result, err := a.saveAndApply(ctx, cfg, true)
+	if err == nil {
+		_ = a.appendLog("PHP %s instalado", version)
+	}
+	return result, err
+}
+
+func (a *App) PHPRemove(ctx context.Context, version string) (ApplyResult, error) {
+	version, err := domain.NormalizePHPVersion(version)
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	if _, found := cfg.PHPVersion(version); !found {
+		return ApplyResult{}, fmt.Errorf("versão PHP não registrada: %s", version)
+	}
+	for _, project := range cfg.Projects {
+		if project.PHPVersion != nil && *project.PHPVersion == version {
+			return ApplyResult{}, fmt.Errorf("PHP %s ainda é usado pelo projeto %s", version, project.Name)
+		}
+	}
+	result := ApplyResult{}
+	if poolManager, ok := a.PHP.(platform.PHPPoolManager); ok {
+		if stopErr := poolManager.StopVersion(ctx, version); stopErr != nil && !errors.Is(stopErr, platform.ErrUnavailable) {
+			result.Warnings = append(result.Warnings, "não foi possível parar o mestre PHP "+version+": "+stopErr.Error())
+		}
+	}
+	if a.PHP != nil {
+		if err := a.PHP.Remove(ctx, version); err != nil {
+			return result, err
+		}
+	}
+	if _, err := cfg.RemovePHPVersion(version); err != nil {
+		return result, err
+	}
+	applyResult, err := a.saveAndApply(ctx, cfg, true)
+	result.Warnings = append(result.Warnings, applyResult.Warnings...)
+	if err == nil {
+		_ = a.appendLog("PHP %s removido", version)
+	}
+	return result, err
+}
+
+func (a *App) SetPHPVersionExtensions(ctx context.Context, version string, extensions []string) (ApplyResult, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	if err := cfg.SetPHPVersionExtensions(version, extensions); err != nil {
+		return ApplyResult{}, err
+	}
+	if a.PHP != nil {
+		if err := a.PHP.Install(ctx, version, extensions); err != nil {
+			return ApplyResult{}, err
+		}
+	}
+	result, err := a.saveAndApply(ctx, cfg, true)
+	if err == nil {
+		_ = a.appendLog("extensões PHP %s atualizadas", version)
+	}
+	return result, err
+}
+
+func (a *App) SetDefaultPHPVersion(ctx context.Context, version string) (ApplyResult, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	normalized, normalizeErr := domain.NormalizePHPVersion(version)
+	if normalizeErr != nil {
+		return ApplyResult{}, normalizeErr
+	}
+	if len(cfg.PHPVersions) == 0 {
+		return ApplyResult{}, fmt.Errorf("nenhuma versão PHP foi registrada; use `devlan php install %s`", normalized)
+	}
+	if _, found := cfg.PHPVersion(normalized); !found {
+		return ApplyResult{}, fmt.Errorf("PHP %s não está instalado; use `devlan php install %s`", normalized, normalized)
+	}
+	if err := cfg.SetDefaultPHPVersion(version); err != nil {
+		return ApplyResult{}, err
+	}
+	result, err := a.saveAndApply(ctx, cfg, true)
+	if err == nil {
+		_ = a.appendLog("PHP global %s", cfg.PHPDefaultVersion)
+	}
+	return result, err
+}
+
+func (a *App) materializeProject(ctx context.Context, cfg domain.Config, selector string) (domain.Config, string, int, error) {
+	effective, err := a.EffectiveConfig(ctx, cfg)
+	if err != nil {
+		return domain.Config{}, "", -1, err
+	}
+	selected, found := projectBySelector(effective.Projects, strings.TrimSpace(selector))
+	if !found {
+		return domain.Config{}, "", -1, fmt.Errorf("projeto não encontrado: %s", selector)
+	}
+	for i := range cfg.Projects {
+		if cfg.Projects[i].Name == selected.Name || cfg.Projects[i].Path == selected.Path {
+			return cfg, selected.Name, i, nil
+		}
+	}
+	cfg.Projects = append(cfg.Projects, selected)
+	if err := cfg.Normalize(); err != nil {
+		return domain.Config{}, "", -1, err
+	}
+	for i := range cfg.Projects {
+		if cfg.Projects[i].Name == selected.Name {
+			return cfg, selected.Name, i, nil
+		}
+	}
+	return domain.Config{}, "", -1, fmt.Errorf("projeto materializado desapareceu: %s", selected.Name)
+}
+
+func (a *App) SetProjectPHPVersion(ctx context.Context, selector, version string) (ApplyResult, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	cfg, name, index, err := a.materializeProject(ctx, cfg, selector)
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	if version == "inherit" {
+		cfg.Projects[index].PHPVersion = nil
+	} else {
+		normalized, normalizeErr := domain.NormalizePHPVersion(version)
+		if normalizeErr != nil {
+			return ApplyResult{}, normalizeErr
+		}
+		if len(cfg.PHPVersions) == 0 {
+			return ApplyResult{}, fmt.Errorf("nenhuma versão PHP foi registrada; use `devlan php install %s`", normalized)
+		}
+		if _, found := cfg.PHPVersion(normalized); !found {
+			return ApplyResult{}, fmt.Errorf("PHP %s não está instalado; use `devlan php install %s`", normalized, normalized)
+		}
+		cfg.Projects[index].PHPVersion = &normalized
+	}
+	if err := cfg.Normalize(); err != nil {
+		return ApplyResult{}, err
+	}
+	result, err := a.saveAndApply(ctx, cfg, true)
+	if err == nil {
+		_ = a.appendLog("PHP do projeto %s: %s", name, version)
+	}
+	return result, err
+}
+
+func (a *App) SetProjectPHPPreset(ctx context.Context, selector, value string) (ApplyResult, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	cfg, name, index, err := a.materializeProject(ctx, cfg, selector)
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	if value == "inherit" {
+		cfg.Projects[index].PHPPreset = nil
+	} else {
+		preset, parseErr := domain.ParsePHPPreset(value)
+		if parseErr != nil {
+			return ApplyResult{}, parseErr
+		}
+		cfg.Projects[index].PHPPreset = &preset
+	}
+	result, err := a.saveAndApply(ctx, cfg, true)
+	if err == nil {
+		_ = a.appendLog("preset PHP do projeto %s: %s", name, value)
+	}
+	return result, err
+}
+
+func (a *App) SetProjectPHPIsolated(ctx context.Context, selector string, isolated bool) (ApplyResult, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	cfg, name, index, err := a.materializeProject(ctx, cfg, selector)
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	if isolated && len(cfg.PHPVersions) == 0 {
+		return ApplyResult{}, fmt.Errorf("pool isolado exige uma versão PHP registrada; use `devlan php install VERSION`")
+	}
+	cfg.Projects[index].PHPIsolatedPool = &isolated
+	result, err := a.saveAndApply(ctx, cfg, true)
+	if err == nil {
+		_ = a.appendLog("pool PHP do projeto %s: %t", name, isolated)
+	}
+	return result, err
+}
+
+func (a *App) SetPHPGlobalPool(ctx context.Context, pool domain.PHPFPMPoolConfig) (ApplyResult, error) {
+	if err := pool.Normalize(); err != nil {
+		return ApplyResult{}, err
+	}
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	cfg.PHPFPMPool = pool
+	result, err := a.saveAndApply(ctx, cfg, true)
+	return result, err
+}
+
+func (a *App) SetPHPVersionPool(ctx context.Context, version string, pool domain.PHPFPMPoolConfig) (ApplyResult, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	if err := cfg.SetPHPVersionPool(version, pool); err != nil {
+		return ApplyResult{}, err
+	}
+	return a.saveAndApply(ctx, cfg, true)
+}
+
+func (a *App) RunComposer(ctx context.Context, selector string, environment string, args []string) (string, error) {
+	if a.PHP == nil {
+		return "", fmt.Errorf("gerenciador PHP não configurado")
+	}
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return "", err
+	}
+	version, versionErr := domain.NormalizePHPVersion(selector)
+	var project *domain.Project
+	if versionErr != nil {
+		effective, effectiveErr := a.EffectiveConfig(ctx, cfg)
+		if effectiveErr != nil {
+			return "", effectiveErr
+		}
+		selected, found := projectBySelector(effective.Projects, selector)
+		if !found {
+			return "", fmt.Errorf("projeto ou versão PHP não encontrado: %s", selector)
+		}
+		project = &selected
+		version = effective.EffectivePHPVersion(selected)
+	}
+	if environment == "" {
+		environment = string(cfg.Composer.Environment)
+		if project != nil && project.ComposerEnvironment != nil {
+			environment = string(*project.ComposerEnvironment)
+		}
+	}
+	if len(cfg.PHPVersions) > 0 {
+		if _, found := cfg.PHPVersion(version); !found {
+			return "", fmt.Errorf("PHP %s não está instalado", version)
+		}
+	}
+	composerBinary := cfg.Composer.Binary
+	if configured, found := cfg.PHPVersion(version); found && configured.ComposerBinary != "" {
+		composerBinary = configured.ComposerBinary
+	}
+	manager, ok := a.PHP.(platform.PHPComposerManager)
+	if !ok {
+		return "", fmt.Errorf("Composer não é suportado pelo gerenciador PHP atual")
+	}
+	return manager.RunComposer(ctx, version, environment, composerBinary, args...)
+}
+
+func (a *App) SetComposerEnvironment(ctx context.Context, selector, value string) (ApplyResult, error) {
+	environment, err := domain.ParseComposerEnvironment(value)
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	if selector == "default" {
+		cfg.Composer.Environment = environment
+	} else {
+		cfg, _, index, materializeErr := a.materializeProject(ctx, cfg, selector)
+		if materializeErr != nil {
+			return ApplyResult{}, materializeErr
+		}
+		cfg.Projects[index].ComposerEnvironment = &environment
+	}
+	result, err := a.saveAndApply(ctx, cfg, true)
+	return result, err
+}
+
+func (a *App) PHPInfo(ctx context.Context, selector string) (string, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return "", err
+	}
+	if selector != "" {
+		effective, effectiveErr := a.EffectiveConfig(ctx, cfg)
+		if effectiveErr != nil {
+			return "", effectiveErr
+		}
+		selected, found := projectBySelector(effective.Projects, selector)
+		if !found {
+			return "", fmt.Errorf("projeto não encontrado: %s", selector)
+		}
+		cfg.Projects = []domain.Project{selected}
+	}
+	return phpconfig.RenderInfoPage(cfg)
+}
+
 func (a *App) SetTLS(ctx context.Context, enabled bool) (ApplyResult, error) {
 	cfg, err := a.Store.Load()
 	if err != nil {
@@ -254,6 +667,13 @@ func (a *App) SetTLS(ctx context.Context, enabled bool) (ApplyResult, error) {
 		_ = a.appendLog("TLS interno desativado")
 	}
 	return result, nil
+}
+
+func (a *App) Trust(ctx context.Context) error {
+	if a.WindowsCaddy.Runner == nil {
+		return fmt.Errorf("Caddy Windows não configurado")
+	}
+	return a.WindowsCaddy.Trust(ctx)
 }
 
 // SetProjectTLS changes the HTTPS preference of one registered project. The
@@ -290,14 +710,6 @@ func (a *App) SetProjectTLS(ctx context.Context, selector string, enabled bool) 
 	cfg.Projects[projectIndex].Secure = &enabled
 	if enabled {
 		cfg.TLSEnabled = true
-	} else {
-		cfg.TLSEnabled = false
-		for _, project := range cfg.Projects {
-			if project.Secure != nil && *project.Secure {
-				cfg.TLSEnabled = true
-				break
-			}
-		}
 	}
 	result, err := a.saveAndApply(ctx, cfg, true)
 	if err != nil {
@@ -381,6 +793,17 @@ func (a *App) apply(ctx context.Context, cfg domain.Config, validate, reload boo
 	}
 
 	result := ApplyResult{}
+	phpFiles, phpPools, err := phpconfig.PlansByFile(cfg)
+	if err != nil {
+		return result, err
+	}
+	infoPage, err := phpconfig.RenderInfoPage(cfg)
+	if err != nil {
+		return result, fmt.Errorf("gerar página de informações PHP: %w", err)
+	}
+	for i := range phpPools {
+		phpPools[i].ConfigPath = phpconfig.DisplayPath(a.Store.Paths().PHPGeneratedDir, phpPools[i].Version)
+	}
 	windowsReady := false
 	wslReady := false
 	if validate || reload {
@@ -416,18 +839,32 @@ func (a *App) apply(ctx context.Context, cfg domain.Config, validate, reload boo
 	if err := a.Store.ApplyGenerated(windows, wsl, callback); err != nil {
 		return result, err
 	}
+	if err := a.Store.ApplyPHPFiles(phpFiles, infoPage); err != nil {
+		_ = a.Store.RollbackGenerated()
+		_ = a.Store.RollbackPHPFiles()
+		return result, err
+	}
+	if reload && len(phpPools) > 0 {
+		if poolManager, ok := a.PHP.(platform.PHPPoolManager); ok {
+			if err := poolManager.EnsurePools(ctx, phpPools); err != nil {
+				result.Warnings = append(result.Warnings, "não foi possível iniciar todos os pools PHP: "+err.Error())
+			}
+		}
+	}
 
 	if reload {
 		paths := a.Store.Paths()
 		if windowsReady {
 			if err := a.WindowsCaddy.EnsureRunning(ctx, paths.WindowsCaddy); err != nil {
 				_ = a.Store.RollbackGenerated()
+				_ = a.Store.RollbackPHPFiles()
 				return result, fmt.Errorf("recarregar Caddy Windows: %w", err)
 			}
 		}
 		if wslReady {
 			if err := a.WSLCaddy.Reload(ctx, paths.WSLCaddy); err != nil {
 				_ = a.Store.RollbackGenerated()
+				_ = a.Store.RollbackPHPFiles()
 				return result, fmt.Errorf("recarregar Caddy WSL: %w", err)
 			}
 		}
@@ -475,10 +912,12 @@ func (a *App) EffectiveConfig(ctx context.Context, cfg domain.Config) (domain.Co
 				// stable name.
 				continue
 			}
-			if _, err := a.Detector.Detect(ctx, childPath); err != nil {
+			detected, err := a.Detector.DetectPHP(ctx, childPath)
+			if err != nil {
 				continue
 			}
-			effective.Projects = append(effective.Projects, domain.Project{Name: name, Path: childPath})
+			preset := detected.Preset
+			effective.Projects = append(effective.Projects, domain.Project{Name: name, Path: childPath, PHPPreset: &preset})
 			knownNames[name] = struct{}{}
 			knownPaths[childPath] = struct{}{}
 		}
@@ -520,7 +959,12 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 		if address, err := platform.LANAddress(); err != nil {
 			checks = append(checks, Check{"IP LAN", "WARN", err.Error()})
 		} else {
-			checks = append(checks, Check{"IP LAN", "OK", address})
+			generated := extractCaddyLANAddress(a.Store.Paths().WindowsCaddy)
+			if generated != "" && generated != "localhost" && generated != "127.0.0.1" && address != generated {
+				checks = append(checks, Check{"IP LAN", "WARN", fmt.Sprintf("IP atual (%s) diverge do Caddyfile (%s); execute `devlan reload`", address, generated)})
+			} else {
+				checks = append(checks, Check{"IP LAN", "OK", address})
+			}
 		}
 	} else {
 		checks = append(checks, Check{"IP LAN", "OK", cfg.LANAddress + " (configurado)"})
@@ -537,25 +981,75 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 		checks = append(checks, Check{"Caddy WSL", "OK", "disponível"})
 	}
 
-	phpCommands := []string{"php-fpm", "php-fpm8.5", "php-fpm8.4", "php-fpm8.3", "php-fpm8.2", "php-fpm8.1"}
-	phpFound := false
-	for _, command := range phpCommands {
-		found, _ := a.WSL.HasCommand(ctx, command)
-		if found {
-			checks = append(checks, Check{"PHP-FPM", "OK", command})
-			phpFound = true
-			break
+	adminRunning := platform.IsAdminResponsive(platform.WindowsCaddyAdminAddress)
+	if adminRunning {
+		checks = append(checks, Check{fmt.Sprintf("Porta HTTP (%d)", cfg.WindowsPort), "OK", "gerenciada pelo Caddy Windows"})
+		if cfg.TLSEnabled {
+			checks = append(checks, Check{fmt.Sprintf("Porta HTTPS (%d)", cfg.HTTPSPort), "OK", "gerenciada pelo Caddy Windows"})
+		}
+	} else {
+		if platform.IsPortAvailable(cfg.WindowsPort) {
+			checks = append(checks, Check{fmt.Sprintf("Porta HTTP (%d)", cfg.WindowsPort), "OK", "disponível"})
+		} else {
+			checks = append(checks, Check{fmt.Sprintf("Porta HTTP (%d)", cfg.WindowsPort), "WARN", "ocupada por outro processo; possível conflito"})
+		}
+		if cfg.TLSEnabled {
+			if platform.IsPortAvailable(cfg.HTTPSPort) {
+				checks = append(checks, Check{fmt.Sprintf("Porta HTTPS (%d)", cfg.HTTPSPort), "OK", "disponível"})
+			} else {
+				checks = append(checks, Check{fmt.Sprintf("Porta HTTPS (%d)", cfg.HTTPSPort), "WARN", "ocupada por outro processo; possível conflito"})
+			}
 		}
 	}
-	if !phpFound {
-		checks = append(checks, Check{"PHP-FPM", "WARN", "nenhum executável suportado encontrado no WSL"})
-	}
-	if socket, err := a.WSL.IsSocket(ctx, cfg.PHPFPMOsocket); err != nil {
-		checks = append(checks, Check{"Socket PHP-FPM", "WARN", "WSL indisponível"})
-	} else if socket {
-		checks = append(checks, Check{"Socket PHP-FPM", "OK", cfg.PHPFPMOsocket})
+
+	if len(cfg.PHPVersions) == 0 {
+		phpCommands := []string{"php-fpm", "php-fpm8.5", "php-fpm8.4", "php-fpm8.3", "php-fpm8.2", "php-fpm8.1"}
+		phpFound := false
+		for _, command := range phpCommands {
+			found, _ := a.WSL.HasCommand(ctx, command)
+			if found {
+				checks = append(checks, Check{"PHP-FPM", "OK", command})
+				phpFound = true
+				break
+			}
+		}
+		if !phpFound {
+			checks = append(checks, Check{"PHP-FPM", "WARN", "nenhum executável suportado encontrado no WSL"})
+		}
+		if socket, err := a.WSL.IsSocket(ctx, cfg.PHPFPMOsocket); err != nil {
+			checks = append(checks, Check{"Socket PHP-FPM", "WARN", "WSL indisponível"})
+		} else if socket {
+			checks = append(checks, Check{"Socket PHP-FPM", "OK", cfg.PHPFPMOsocket})
+		} else {
+			checks = append(checks, Check{"Socket PHP-FPM", "WARN", cfg.PHPFPMOsocket + " não é socket"})
+		}
 	} else {
-		checks = append(checks, Check{"Socket PHP-FPM", "WARN", cfg.PHPFPMOsocket + " não é socket"})
+		installed := map[string]platform.PHPInstallation{}
+		if a.PHP != nil {
+			items, listErr := a.PHP.List(ctx)
+			if listErr == nil {
+				for _, item := range items {
+					installed[item.Version] = item
+				}
+			}
+		}
+		for _, version := range cfg.PHPVersions {
+			if item, found := installed[version.Version]; found {
+				checks = append(checks, Check{"PHP " + version.Version, "OK", item.FPMBinary})
+			} else {
+				checks = append(checks, Check{"PHP " + version.Version, "WARN", "versão registrada, mas executável não foi encontrado"})
+			}
+			pool := cfg.PHPFPMPool
+			if !version.Pool.IsZero() {
+				pool = version.Pool
+			}
+			checks = append(checks, Check{"Pool PHP " + version.Version, "OK", fmt.Sprintf("ondemand, max_children=%d, idle_timeout=%s, max_requests=%d", pool.MaxChildren, pool.IdleTimeout, pool.MaxRequests)})
+			if socket, socketErr := a.WSL.IsSocket(ctx, domain.PHPSharedSocket(version.Version)); socketErr == nil && socket {
+				checks = append(checks, Check{"Socket PHP " + version.Version, "OK", domain.PHPSharedSocket(version.Version)})
+			} else {
+				checks = append(checks, Check{"Socket PHP " + version.Version, "WARN", domain.PHPSharedSocket(version.Version) + " não é socket"})
+			}
+		}
 	}
 
 	if firewall, err := platform.FirewallRule(ctx, "DevLAN"); err != nil {
@@ -587,10 +1081,11 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 			checks = append(checks, Check{"Projeto " + project.Name, "WARN", "modo " + string(resolved.Mode) + " ainda não implementado"})
 			continue
 		}
-		if _, err := a.Detector.Detect(ctx, project.Path); err != nil {
-			checks = append(checks, Check{"Projeto " + project.Name, "FAIL", err.Error()})
+		detected, detectErr := a.Detector.DetectPHP(ctx, project.Path)
+		if detectErr != nil {
+			checks = append(checks, Check{"Projeto " + project.Name, "FAIL", detectErr.Error()})
 		} else {
-			checks = append(checks, Check{"Projeto " + project.Name, "OK", project.Path + "/public"})
+			checks = append(checks, Check{"Projeto " + project.Name, "OK", fmt.Sprintf("%s, preset=%s, PHP=%s, pool=%s", detected.DocumentRoot, effective.PHPProjectPreset(project), effective.EffectivePHPVersion(project), phpconfig.PoolSummary(effective, project))})
 		}
 	}
 	return checks, nil
@@ -665,6 +1160,12 @@ func (a *App) Logs(component string) (string, error) {
 	if strings.ContainsAny(component, `/\\`) || component == "." || component == ".." {
 		return "", fmt.Errorf("componente de log inválido")
 	}
+	if strings.HasPrefix(component, "php-") {
+		version := strings.TrimPrefix(component, "php-")
+		if manager, ok := a.PHP.(platform.PHPInfoManager); ok {
+			return manager.Logs(context.Background(), version)
+		}
+	}
 	data, err := os.ReadFile(filepath.Join(paths.LogsDir, component+".log"))
 	if errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("log não encontrado: %s", component)
@@ -689,4 +1190,33 @@ func (a *App) appendLog(format string, values ...any) error {
 
 func RuntimeDescription() string {
 	return fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)
+}
+
+func extractCaddyLANAddress(caddyfilePath string) string {
+	data, err := os.ReadFile(caddyfilePath)
+	if err != nil {
+		return ""
+	}
+	re := regexp.MustCompile(`default_sni\s+([^\s\r\n]+)`)
+	matches := re.FindStringSubmatch(string(data))
+	if len(matches) > 1 {
+		return matches[1]
+	}
+	return ""
+}
+
+func (a *App) CheckLANAddressDivergence() (current string, generated string, diverged bool) {
+	cfg, err := a.Store.Load()
+	if err != nil || cfg.LANAddress != "auto" {
+		return "", "", false
+	}
+	current, err = platform.LANAddress()
+	if err != nil {
+		return "", "", false
+	}
+	generated = extractCaddyLANAddress(a.Store.Paths().WindowsCaddy)
+	if generated != "" && generated != "localhost" && generated != "127.0.0.1" && current != generated {
+		return current, generated, true
+	}
+	return current, generated, false
 }

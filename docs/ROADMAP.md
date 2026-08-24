@@ -2,7 +2,8 @@
 
 ## Status da implementação
 
-O repositório contém a fundação Go da Fase 0 e o núcleo operacional da Fase 1:
+O repositório contém a fundação Go da Fase 0, o núcleo operacional da Fase 1
+e o núcleo PHP completo da Fase 2:
 
 - registro, herança, detecção Laravel e fixtures unitárias;
 - geração determinística e aplicação segura com rollback;
@@ -13,6 +14,8 @@ O repositório contém a fundação Go da Fase 0 e o núcleo operacional da Fase
   firewall Windows.
 - HTTPS opcional por CA interna, controlado por `secure` e `unsecure`, com o
   estado SSL visível por projeto na listagem.
+- suporte a múltiplas versões PHP, extensões por versão, pools compartilhados
+  ou isolados, Composer versionado e presets Laravel/Symfony/genérico.
 
 O bootstrap instala os runtimes e prepara os serviços, mas o aceite ponta a
 ponta em outro dispositivo ainda precisa ser executado em uma máquina limpa.
@@ -87,21 +90,27 @@ Critério de aceite: dentro do WSL, `devlan park ~/Sites` produz o mesmo estado
 que a operação equivalente no Windows, sem duplicar arquivos de configuração e
 sem exigir que o usuário converta caminhos manualmente.
 
-## Fase 2 — PHP completo
+## Fase 2 — PHP completo — implementada
 
 Objetivo: suportar ambientes PHP heterogêneos com baixo consumo ocioso.
 
-- instalar/listar/remover versões PHP;
-- versão global e sobrescrita por projeto;
-- extensões por versão;
-- pools compartilhados por versão;
-- pool isolado opcional por projeto;
-- `pm=ondemand`, limites e idle timeout configuráveis;
-- Composer por versão/ambiente;
-- presets Laravel, Symfony e PHP genérico;
-- logs separados e página de informações sanitizada.
+- `devlan php install|list|remove` instala, lista e remove versões PHP;
+- `devlan php use` define a versão global ou a sobrescrita por projeto;
+- extensões são registradas e instaladas por versão;
+- cada versão registrada recebe um mestre PHP-FPM e um pool compartilhado;
+- `devlan php pool NAME isolated` cria um socket/pool isolado por projeto;
+- `pm=ondemand`, `pm.max_children`, `pm.process_idle_timeout` e
+  `pm.max_requests` são configuráveis globalmente ou por versão;
+- `composer VERSION|NAME` executa Composer com o PHP selecionado, em ambiente
+  `per-version`, `system` ou `auto`;
+- presets detectados ou definidos são Laravel, Symfony e PHP genérico;
+- logs FPM são separados por versão/pool e `php info` gera somente uma página
+  sanitizada, sem variáveis de ambiente ou segredos.
 
-Critério de aceite: projetos em duas versões de PHP funcionam simultaneamente e nenhum worker permanece ocioso após o timeout.
+Critério de aceite: a geração de duas versões produz sockets e mestres FPM
+independentes, ambos com `pm=ondemand` e timeout configurado; a validação
+automatizada cobre essa simultaneidade. O teste ponta a ponta ainda depende de
+uma máquina Windows/WSL limpa com as duas branches disponíveis.
 
 ## Fase 3 — estáticos e JavaScript
 

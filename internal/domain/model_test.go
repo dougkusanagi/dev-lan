@@ -90,3 +90,42 @@ func TestResolvedProjectURLUsesTLSState(t *testing.T) {
 		t.Fatalf("URL HTTPS inesperada: %s", got)
 	}
 }
+
+func TestPHPVersionAndPoolResolution(t *testing.T) {
+	cfg := NewConfig()
+	if _, err := cfg.AddPHPVersion("8.3", []string{"xml", "mbstring"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.AddPHPVersion("8.5", []string{"curl"}); err != nil {
+		t.Fatal(err)
+	}
+	isolated := true
+	version := "8.3"
+	cfg.Projects = []Project{{Name: "legacy", Path: "/home/dev/legacy", PHPVersion: &version, PHPIsolatedPool: &isolated}}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	project := cfg.Projects[0]
+	if got := cfg.PHPSocket(project); got != "/run/devlan/php/8.3/legacy.sock" {
+		t.Fatalf("socket isolado inesperado: %s", got)
+	}
+	if got := cfg.PHPPool(project); got.IdleTimeout != "10s" || got.MaxChildren != 10 || got.MaxRequests != 500 {
+		t.Fatalf("pool PHP inesperado: %#v", got)
+	}
+	if got := cfg.EffectivePHPVersion(Project{Name: "other"}); got != "8.3" {
+		t.Fatalf("versão global inesperada: %s", got)
+	}
+}
+
+func TestPHPConfigRejectsUnsafeVersionAndPool(t *testing.T) {
+	cfg := NewConfig()
+	cfg.PHPDefaultVersion = "latest"
+	if err := cfg.Normalize(); err == nil {
+		t.Fatal("versão PHP arbitrária deveria ser rejeitada")
+	}
+	cfg = NewConfig()
+	cfg.PHPFPMPool.IdleTimeout = "0s"
+	if err := cfg.Normalize(); err == nil {
+		t.Fatal("timeout PHP não positivo deveria ser rejeitado")
+	}
+}

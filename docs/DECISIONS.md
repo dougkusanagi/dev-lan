@@ -26,6 +26,19 @@ tem uma modalidade LTS oficial: o MVP adota 8.5 por padrão, permite 8.3/8.4 e
 detecta a versão efetivamente instalada. O instalador não executa `composer
 install` nem qualquer script de projeto.
 
+## Versões PHP e pools na Fase 2
+
+Versões instaladas são registradas no estado do DevLAN, enquanto preferências
+globais continuam no TOML. Cada branch recebe um mestre PHP-FPM independente;
+isso evita que um projeto em PHP 8.3 dependa do socket ou do worker pool de PHP
+8.5. O padrão é um pool compartilhado por versão, com `pm=ondemand`; um
+override por projeto pode criar um pool isolado.
+
+O socket legado `/run/php/php-fpm.sock` é preservado quando não há versões
+registradas, para que upgrades da Fase 1 não quebrem a instalação existente.
+Composer usa `phpVERSAO composer` no ambiente `per-version` e nunca executa
+scripts de projeto durante a detecção, instalação ou reload.
+
 ## Wails para a interface
 
 Wails ocupa para Go um papel semelhante ao Tauri para Rust: backend nativo e interface feita com tecnologias web, renderizada pela WebView do sistema.

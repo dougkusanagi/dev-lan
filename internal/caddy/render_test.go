@@ -78,7 +78,7 @@ func TestRenderWindowsWithInternalTLS(t *testing.T) {
 	}
 	for _, expected := range []string{
 		"default_sni 192.168.10.77", "http://:80", "https://192.168.10.77:443", "tls internal",
-		"redir https://{http.request.host}{http.request.uri} 308",
+		"redir https://{http.request.host}{http.request.uri} 307",
 		"header_up X-DevLAN-HTTPS on", "header_up -X-DevLAN-HTTPS",
 	} {
 		if !strings.Contains(result, expected) {
@@ -102,8 +102,40 @@ func TestRenderWindowsRedirectsOnlyProjectsWithTLSPreference(t *testing.T) {
 	if !strings.Contains(result, "@devlan_secure_0 path /secure /secure/*") {
 		t.Fatalf("redirect do projeto seguro ausente:\n%s", result)
 	}
+	if !strings.Contains(result, "@devlan_secure_referer_0 header_regexp Referer ^https://[^/]+/secure(?:/|$)") {
+		t.Fatalf("assets absolutos do projeto seguro não estão protegidos:\n%s", result)
+	}
 	if strings.Contains(result, "path /plain /plain/*") {
 		t.Fatalf("projeto sem preferência TLS não deveria receber redirect:\n%s", result)
+	}
+}
+
+func TestRenderWindowsClearsSecureBrowserStateBeforeDowngradingAProject(t *testing.T) {
+	cfg := domain.NewConfig()
+	cfg.LANAddress = "192.168.10.77"
+	cfg.TLSEnabled = true
+	secure := false
+	cfg.Projects = []domain.Project{
+		{Name: "plain", Path: "/home/dev/plain", Secure: &secure},
+	}
+	result, err := RenderWindows(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"@devlan_unsecure_0 path /plain /plain/*",
+		`header Clear-Site-Data "\"cache\", \"cookies\""`,
+		"redir http://{http.request.host}{http.request.uri} 302",
+	} {
+		if !strings.Contains(result, expected) {
+			t.Fatalf("transição para HTTP não contém %q:\n%s", expected, result)
+		}
+	}
+	if strings.Contains(result, "redir @devlan_secure_") {
+		t.Fatalf("projeto sem TLS não deveria redirecionar HTTP para HTTPS:\n%s", result)
+	}
+	if strings.Contains(result, "handle {\n        header Clear-Site-Data") {
+		t.Fatalf("limpeza não deve atingir recursos HTTPS fora do projeto:\n%s", result)
 	}
 }
 
@@ -113,5 +145,49 @@ func TestRenderRejectsFutureModeUntilImplemented(t *testing.T) {
 	cfg.Projects = []domain.Project{{Name: "painel", Path: "/home/dev/painel", Mode: &mode}}
 	if _, err := RenderWSL(cfg); err == nil || !strings.Contains(err.Error(), "não implementado") {
 		t.Fatalf("modo futuro deveria ser rejeitado: %v", err)
+	}
+}
+
+func TestRenderWSLUsesOneSocketPerPHPVersionAndProjectPool(t *testing.T) {
+	cfg := domain.NewConfig()
+	if _, err := cfg.AddPHPVersion("8.3", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.AddPHPVersion("8.5", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.SetDefaultPHPVersion("8.5"); err != nil {
+		t.Fatal(err)
+	}
+	version := "8.3"
+	isolated := true
+	cfg.Projects = []domain.Project{
+		{Name: "old", Path: "/home/dev/old", PHPVersion: &version, PHPIsolatedPool: &isolated},
+		{Name: "new", Path: "/home/dev/new"},
+	}
+	result, err := RenderWSL(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"php_fastcgi unix//run/devlan/php/8.3/old.sock",
+		"php_fastcgi unix//run/devlan/php/8.5/shared.sock",
+	} {
+		if !strings.Contains(result, expected) {
+			t.Fatalf("socket PHP ausente %q:\n%s", expected, result)
+		}
+	}
+}
+
+func TestRenderWSLUsesGenericDocumentRoot(t *testing.T) {
+	cfg := domain.NewConfig()
+	preset := domain.PHPPresetGeneric
+	cfg.Projects = []domain.Project{{Name: "site", Path: "/home/dev/site", PHPPreset: &preset}}
+	result, err := RenderWSL(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, `root * "/home/dev/site"`) {
+		t.Fatalf("document root genérico inesperado:\n%s", result)
 	}
 }

@@ -48,7 +48,9 @@ Conhece os projetos, seus document roots, modos de atendimento e sockets PHP-FPM
 
 ### PHP-FPM
 
-No MVP haverá uma versão de PHP e um pool compartilhado, usando:
+Projetos registrados podem apontar para versões PHP diferentes. Cada versão
+gerenciada tem um mestre PHP-FPM independente e, por padrão, um pool
+compartilhado:
 
 ```ini
 pm = ondemand
@@ -57,7 +59,40 @@ pm.process_idle_timeout = 10s
 pm.max_requests = 500
 ```
 
-O processo mestre permanece ativo, mas workers ociosos são encerrados. Versões e pools por projeto entram depois do MVP.
+O processo mestre permanece ativo, mas workers ociosos são encerrados por
+`pm.process_idle_timeout`. Um projeto pode receber um pool isolado, com socket
+e logs próprios, sem compartilhar workers com os demais projetos da mesma
+versão. A resolução da versão é `projeto > global`; a configuração de pool é
+`projeto > versão > global`.
+
+Os sockets gerenciados seguem:
+
+```text
+/run/devlan/php/8.3/shared.sock
+/run/devlan/php/8.3/financeiro.sock
+/run/devlan/php/8.5/shared.sock
+```
+
+As configurações de mestres ficam em `generated/php/php-VERSAO.conf`. O
+gerenciador WSL cria os diretórios de runtime, inicia cada mestre com
+argumentos estruturados e recarrega um mestre existente pelo PID, tornando
+`reload` idempotente.
+
+Composer é executado como `composer` no ambiente `system` ou como
+`phpVERSAO composer` no ambiente `per-version`. Os argumentos do projeto são
+encaminhados como argumentos separados; nenhum script do projeto é executado
+durante detecção ou instalação.
+
+### Presets e informações PHP
+
+O detector reconhece Laravel por `artisan` + `public/index.php`, Symfony por
+`bin/console` + `public/index.php` e o preset genérico por `public/index.php`
+ou `index.php` na raiz. A detecção usa somente markers e não executa Composer,
+CLI do framework ou código da aplicação.
+
+`php info` é renderizado por um template HTML com escape contextual e uma
+allowlist de campos. A página não é um `phpinfo()` e não inclui ambiente,
+headers, valores de request ou segredos.
 
 ### Runtime JavaScript futuro
 
@@ -119,16 +154,20 @@ Proposta:
   config.toml
   state.json
   generated/Caddyfile.windows
+  generated/Caddyfile.wsl
+  generated/php/php-8-5.conf
+  generated/php/info/index.html
   logs/
 
 /etc/devlan/
   generated/Caddyfile
+  generated/php/
   snippets/
   backups/
 ```
 
 - TOML guarda preferências editáveis.
-- O MVP usa JSON para o registro de projetos e parks; SQLite fica reservado
+- O estado JSON contém registro, overrides de projeto e versões PHP; SQLite fica reservado
   para quando processos, portas e migrações de schema entrarem no produto.
 - Arquivos em `generated` não devem ser editados manualmente.
 - Personalizações entram por snippets com pontos de extensão definidos.
