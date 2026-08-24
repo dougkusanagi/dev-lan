@@ -5,7 +5,12 @@ import (
 	"testing"
 
 	"github.com/dougkusanagi/dev-lan/internal/detect"
+	"github.com/dougkusanagi/dev-lan/internal/platform"
 )
+
+type successfulRunner struct{}
+
+func (successfulRunner) Run(context.Context, ...string) (string, error) { return "", nil }
 
 func TestParkDiscoversOnlyLaravelChildren(t *testing.T) {
 	inspector := detect.StaticInspector{
@@ -22,6 +27,8 @@ func TestParkDiscoversOnlyLaravelChildren(t *testing.T) {
 	}
 	service := New(t.TempDir())
 	service.Detector = detect.Detector{Inspector: inspector}
+	service.WindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
+	service.WSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
 	if _, _, err := service.Park(context.Background(), "/home/dev"); err != nil {
 		t.Fatal(err)
 	}

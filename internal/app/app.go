@@ -33,7 +33,7 @@ func New(dataDir string) *App {
 		Store:        config.NewStore(dataDir),
 		Detector:     detect.Detector{Inspector: detect.SmartInspector{WSL: wsl}},
 		WSL:          wsl,
-		WindowsCaddy: platform.NewLocalCaddy("caddy"),
+		WindowsCaddy: platform.NewLocalCaddy(""),
 		WSLCaddy:     platform.NewWSLCaddy(wsl),
 		Now:          time.Now,
 	}
@@ -119,7 +119,7 @@ func (a *App) Link(ctx context.Context, name, projectPath string) (domain.Projec
 	if err != nil {
 		return domain.Project{}, ApplyResult{}, err
 	}
-	result, err := a.saveAndApply(ctx, cfg, false)
+	result, err := a.saveAndApply(ctx, cfg, true)
 	if err != nil {
 		return domain.Project{}, result, err
 	}
@@ -136,7 +136,7 @@ func (a *App) Unlink(ctx context.Context, name string) (domain.Project, ApplyRes
 	if err != nil {
 		return domain.Project{}, ApplyResult{}, err
 	}
-	result, err := a.saveAndApply(ctx, cfg, false)
+	result, err := a.saveAndApply(ctx, cfg, true)
 	if err != nil {
 		return domain.Project{}, result, err
 	}
@@ -164,7 +164,7 @@ func (a *App) Park(ctx context.Context, projectPath string) (domain.Park, ApplyR
 	if err != nil {
 		return domain.Park{}, ApplyResult{}, err
 	}
-	result, err := a.saveAndApply(ctx, cfg, false)
+	result, err := a.saveAndApply(ctx, cfg, true)
 	if err != nil {
 		return domain.Park{}, result, err
 	}
@@ -182,7 +182,7 @@ func (a *App) Unpark(ctx context.Context, projectPath string) (domain.Park, Appl
 	if err != nil {
 		return domain.Park{}, ApplyResult{}, err
 	}
-	result, err := a.saveAndApply(ctx, cfg, false)
+	result, err := a.saveAndApply(ctx, cfg, true)
 	if err != nil {
 		return domain.Park{}, result, err
 	}
@@ -198,7 +198,7 @@ func (a *App) SetDefaultMode(ctx context.Context, mode domain.Mode) (ApplyResult
 	if err := cfg.SetDefaultMode(mode); err != nil {
 		return ApplyResult{}, err
 	}
-	result, err := a.saveAndApply(ctx, cfg, false)
+	result, err := a.saveAndApply(ctx, cfg, true)
 	if err == nil {
 		_ = a.appendLog("modo global %s", mode)
 	}
@@ -213,7 +213,7 @@ func (a *App) SetProjectMode(ctx context.Context, name string, mode *domain.Mode
 	if err := cfg.SetProjectMode(name, mode); err != nil {
 		return ApplyResult{}, err
 	}
-	result, err := a.saveAndApply(ctx, cfg, false)
+	result, err := a.saveAndApply(ctx, cfg, true)
 	if err == nil {
 		if mode == nil {
 			_ = a.appendLog("modo do projeto %s herdado", name)
@@ -303,7 +303,7 @@ func (a *App) apply(ctx context.Context, cfg domain.Config, validate, reload boo
 	if reload {
 		paths := a.Store.Paths()
 		if windowsReady {
-			if err := a.WindowsCaddy.Reload(ctx, paths.WindowsCaddy); err != nil {
+			if err := a.WindowsCaddy.EnsureRunning(ctx, paths.WindowsCaddy); err != nil {
 				_ = a.Store.RollbackGenerated()
 				return result, fmt.Errorf("recarregar Caddy Windows: %w", err)
 			}

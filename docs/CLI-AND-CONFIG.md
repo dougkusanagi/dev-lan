@@ -127,7 +127,9 @@ diretório contém `config.toml`, `state.json`, os Caddyfiles gerados e logs.
 `park PATH` registra a pasta, mas não copia projetos para o estado. Em cada
 geração, filhos diretos são examinados sem executar scripts; somente os que
 contêm `artisan` e `public/index.php` tornam-se rotas. Um `link` explícito tem
-prioridade se houver colisão de nome.
+prioridade se houver colisão de nome. `link`, `unlink`, `park`, `unpark` e as
+mudanças de modo aplicam a configuração automaticamente: a CLI recarrega um
+Caddy em execução ou inicia o Caddy Windows quando ele ainda não estiver ativo.
 
 `reload` cria arquivos temporários, valida os Caddyfiles disponíveis, substitui
 os arquivos gerados e só então tenta o reload. Se o reload falhar, restaura o
