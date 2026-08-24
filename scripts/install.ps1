@@ -359,6 +359,7 @@ function Install-WslDependencies {
 
 function Sync-WslCaddy {
     param([Parameter(Mandatory = $true)][string]$WslDistribution, [Parameter(Mandatory = $true)][string]$ConfigPath)
+    Write-Step "Sincronizando Caddy no WSL ($WslDistribution)"
     $wslConfig = ConvertTo-WslPath $ConfigPath
     Invoke-Native 'wsl.exe' @('--distribution', $WslDistribution, '--user', 'root', '--exec', '/bin/mkdir', '-p', '/etc/caddy') | Write-Host
     Invoke-Native 'wsl.exe' @('--distribution', $WslDistribution, '--user', 'root', '--exec', '/bin/cp', $wslConfig, '/etc/caddy/Caddyfile') | Write-Host
@@ -371,10 +372,23 @@ function Sync-WslCaddy {
 
 function Start-WindowsCaddy {
     param([Parameter(Mandatory = $true)][string]$CaddyPath, [Parameter(Mandatory = $true)][string]$ConfigPath)
+    Write-Step 'Iniciando ou recarregando Caddy no Windows'
     try {
         Invoke-Native $CaddyPath @('reload', '--address', '127.0.0.1:2019', '--config', $ConfigPath, '--adapter', 'caddyfile') | Write-Host
     } catch {
-        Invoke-Native $CaddyPath @('start', '--config', $ConfigPath, '--adapter', 'caddyfile') | Write-Host
+        # `caddy start` launches a background child that inherits stdout/stderr.
+        # Capturing those pipes makes Windows PowerShell wait forever for EOF.
+        $previousErrorAction = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            & $CaddyPath start --config $ConfigPath --adapter caddyfile
+            $exitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorAction
+        }
+        if ($exitCode -ne 0) {
+            throw "Caddy não iniciou (código $exitCode). Verifique se a porta HTTP configurada está disponível."
+        }
     }
 }
 
