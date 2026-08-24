@@ -51,6 +51,12 @@ devlan status
 - `devlan.exe` em `%LOCALAPPDATA%\DevLAN\bin`, PATH do usuário e a regra de
   firewall privada do DevLAN.
 
+O bootstrap pode ser executado novamente com segurança. Go e Caddy no Windows
+são reutilizados quando já existem; no WSL, PHP-FPM da versão escolhida, suas
+extensões, Composer e Caddy são verificados antes de executar `apt update` ou
+`apt install`. A CLI é recompilada e os arquivos gerenciados são sincronizados
+para aplicar atualizações do DevLAN.
+
 O script não executa `composer install` nos projetos e não instala bancos,
 Node ou dependências de aplicação. Esses passos continuam explícitos e fora do
 MVP.

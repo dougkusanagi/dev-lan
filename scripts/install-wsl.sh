@@ -25,6 +25,15 @@ has_package() {
     apt-cache show "$1" >/dev/null 2>&1
 }
 
+packages_installed() {
+    local package
+    for package in "$@"; do
+        if [[ "$(dpkg-query -W -f='${db:Status-Abbrev}' "$package" 2>/dev/null || true)" != "ii " ]]; then
+            return 1
+        fi
+    done
+}
+
 restart_service() {
     local service_name="$1"
     if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files "$service_name.service" >/dev/null 2>&1; then
@@ -37,47 +46,59 @@ restart_service() {
     fi
 }
 
-export DEBIAN_FRONTEND=noninteractive
-"${SUDO[@]}" apt-get update
-apt_install ca-certificates curl gnupg debian-keyring debian-archive-keyring apt-transport-https lsb-release software-properties-common unzip git
-
 php_prefix="php${php_minor}"
-if ! has_package "${php_prefix}-fpm"; then
-    # Ubuntu's official repository may lag behind the requested active branch.
-    # The maintained Ondřej Surý PPA is used only on Ubuntu in that case.
-    . /etc/os-release
-    if [[ "${ID:-}" == "ubuntu" ]] && command -v add-apt-repository >/dev/null 2>&1; then
-        "${SUDO[@]}" add-apt-repository -y ppa:ondrej/php
-        "${SUDO[@]}" apt-get update
+php_packages=(
+    "${php_prefix}-fpm"
+    "${php_prefix}-cli"
+    "${php_prefix}-mbstring"
+    "${php_prefix}-xml"
+    "${php_prefix}-curl"
+    "${php_prefix}-zip"
+    "${php_prefix}-mysql"
+    "${php_prefix}-pgsql"
+    "${php_prefix}-bcmath"
+    "${php_prefix}-intl"
+    "${php_prefix}-gd"
+)
+required_packages=("${php_packages[@]}" composer)
+if [[ "$install_caddy" == "1" ]]; then
+    required_packages+=(caddy)
+fi
+
+if packages_installed "${required_packages[@]}"; then
+    printf 'WSL packages already installed; skipping apt update/install\n'
+else
+    export DEBIAN_FRONTEND=noninteractive
+    "${SUDO[@]}" apt-get update
+    apt_install ca-certificates curl gnupg debian-keyring debian-archive-keyring apt-transport-https lsb-release software-properties-common unzip git
+
+    if ! has_package "${php_prefix}-fpm"; then
+        # Ubuntu's official repository may lag behind the requested active branch.
+        # The maintained Ondřej Surý PPA is used only on Ubuntu in that case.
+        . /etc/os-release
+        if [[ "${ID:-}" == "ubuntu" ]] && command -v add-apt-repository >/dev/null 2>&1; then
+            "${SUDO[@]}" add-apt-repository -y ppa:ondrej/php
+            "${SUDO[@]}" apt-get update
+        fi
+    fi
+
+    if has_package "${php_prefix}-fpm"; then
+        apt_install "${php_packages[@]}" composer
+    else
+        # Distribution packages are the safe fallback when the requested branch
+        # is unavailable. doctor reports the exact branch afterward.
+        php_packages=(php-fpm php-cli php-mbstring php-xml php-curl php-zip php-mysql php-pgsql php-bcmath php-intl php-gd)
+        apt_install "${php_packages[@]}" composer
     fi
 fi
 
-if has_package "${php_prefix}-fpm"; then
-    php_packages=(
-        "${php_prefix}-fpm"
-        "${php_prefix}-cli"
-        "${php_prefix}-mbstring"
-        "${php_prefix}-xml"
-        "${php_prefix}-curl"
-        "${php_prefix}-zip"
-        "${php_prefix}-mysql"
-        "${php_prefix}-pgsql"
-        "${php_prefix}-bcmath"
-        "${php_prefix}-intl"
-        "${php_prefix}-gd"
-    )
-    fpm_service="${php_prefix}-fpm"
-else
-    # Distribution packages are the safe fallback when the requested branch
-    # is unavailable. doctor reports the exact branch afterward.
-    php_packages=(php-fpm php-cli php-mbstring php-xml php-curl php-zip php-mysql php-pgsql php-bcmath php-intl php-gd)
+fpm_service="${php_prefix}-fpm"
+if ! systemctl list-unit-files "$fpm_service.service" >/dev/null 2>&1 && [[ ! -e "/etc/init.d/$fpm_service" ]]; then
     fpm_service="$(find /etc/init.d -maxdepth 1 -type f -name 'php*-fpm' -printf '%f\n' 2>/dev/null | sort | head -n1 || true)"
     if [[ -z "$fpm_service" ]]; then
         fpm_service="php-fpm"
     fi
 fi
-
-apt_install "${php_packages[@]}" composer
 
 # Use Caddy's official Debian/Ubuntu repository. The package installs the
 # service files; install.ps1 supplies the DevLAN Caddyfile afterward.
