@@ -46,6 +46,10 @@ func TestRenderWSLIsDeterministicAndSorted(t *testing.T) {
 		!strings.Contains(first, "header_down Location ^/(.*)$ /alpha/$1") {
 		t.Fatal("normalização de redirects relativos ausente")
 	}
+	if !strings.Contains(first, "header_regexp Referer ^https?://[^/]+/alpha(?:/|$)") ||
+		!strings.Contains(first, "handle @devlan_compat_0") {
+		t.Fatal("compatibilidade com URLs absolutas do frontend ausente")
+	}
 	if !strings.Contains(first, "admin 127.0.0.1:2020") {
 		t.Fatal("porta administrativa dedicada do WSL ausente")
 	}

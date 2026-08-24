@@ -3,6 +3,7 @@ package caddy
 import (
 	"fmt"
 	pathpkg "path"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -81,6 +82,26 @@ func RenderWSL(cfg domain.Config) (string, error) {
 		publicRoot := pathpkg.Join(route.Project.Path, "public")
 		fmt.Fprintf(&b, "    redir /%s /%s/ 308\n", name, name)
 		fmt.Fprintf(&b, "    handle_path /%s/* {\n", name)
+		fmt.Fprintf(&b, "        root * %s\n", quoteCaddy(publicRoot))
+		b.WriteString("        vars devlan_request_uri {http.request.uri}\n")
+		fmt.Fprintf(&b, "        php_fastcgi unix/%s {\n", cfg.PHPFPMOsocket)
+		fmt.Fprintf(&b, "            env REQUEST_URI /%s{vars.devlan_request_uri}\n", name)
+		fmt.Fprintf(&b, "            env SCRIPT_NAME /%s/index.php\n", name)
+		fmt.Fprintf(&b, "            header_down Location ^/%s/(.*)$ /$1\n", name)
+		fmt.Fprintf(&b, "            header_down Location ^/(.*)$ /%s/$1\n", name)
+		b.WriteString("        }\n")
+		b.WriteString("        file_server\n")
+		b.WriteString("    }\n\n")
+	}
+
+	// Frontends compiled for the domain root can still emit /login, /build/...
+	// and similar URLs. Route those requests back to the project identified by
+	// the same-origin Referer, avoiding ambiguous global paths between projects.
+	for index, route := range routes {
+		name := route.Project.Name
+		publicRoot := pathpkg.Join(route.Project.Path, "public")
+		fmt.Fprintf(&b, "    @devlan_compat_%d header_regexp Referer ^https?://[^/]+/%s(?:/|$)\n", index, regexp.QuoteMeta(name))
+		fmt.Fprintf(&b, "    handle @devlan_compat_%d {\n", index)
 		fmt.Fprintf(&b, "        root * %s\n", quoteCaddy(publicRoot))
 		b.WriteString("        vars devlan_request_uri {http.request.uri}\n")
 		fmt.Fprintf(&b, "        php_fastcgi unix/%s {\n", cfg.PHPFPMOsocket)
