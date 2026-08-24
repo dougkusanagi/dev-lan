@@ -48,9 +48,16 @@ func (a *App) Install(ctx context.Context) (ApplyResult, error) {
 }
 
 func (a *App) InstallWithOptions(ctx context.Context, configureFirewall bool) (ApplyResult, error) {
+	return a.InstallWithPort(ctx, configureFirewall, 0)
+}
+
+func (a *App) InstallWithPort(ctx context.Context, configureFirewall bool, windowsPort int) (ApplyResult, error) {
 	cfg, err := a.Store.Load()
 	if err != nil {
 		return ApplyResult{}, err
+	}
+	if windowsPort != 0 {
+		cfg.WindowsPort = windowsPort
 	}
 	result, err := a.apply(ctx, cfg, false, false)
 	if err != nil {

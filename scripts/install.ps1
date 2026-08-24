@@ -12,6 +12,8 @@ param(
     [string]$InstallRoot = '',
     [string]$Distribution = '',
     [string]$SourceDir = '',
+    [ValidateRange(0, 65535)]
+    [int]$WindowsPort = 0,
     [switch]$SkipWSL,
     [switch]$SkipCaddy,
     [switch]$NoFirewall,
@@ -98,6 +100,55 @@ function Add-UserPath {
         [Environment]::SetEnvironmentVariable('Path', (($parts + $resolved) -join ';'), 'User')
     }
     $env:Path = "$resolved;$env:Path"
+}
+
+function Test-TcpPortAvailable {
+    param([Parameter(Mandatory = $true)][int]$Port)
+    $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Any, $Port)
+    try {
+        $listener.Start()
+        return $true
+    } catch {
+        return $false
+    } finally {
+        $listener.Stop()
+    }
+}
+
+function Test-TcpEndpoint {
+    param([Parameter(Mandatory = $true)][string]$Address, [Parameter(Mandatory = $true)][int]$Port)
+    $client = [Net.Sockets.TcpClient]::new()
+    try {
+        return $client.ConnectAsync($Address, $Port).Wait(500)
+    } catch {
+        return $false
+    } finally {
+        $client.Dispose()
+    }
+}
+
+function Select-WindowsPort {
+    if ($WindowsPort -gt 0) {
+        return $WindowsPort
+    }
+    $configured = 80
+    $configPath = Join-Path $InstallRoot 'config.toml'
+    if (Test-Path -LiteralPath $configPath) {
+        $line = Get-Content -LiteralPath $configPath | Where-Object { $_ -match '^windows_port\s*=\s*\d+' } | Select-Object -First 1
+        if ($line -and $line -match '(\d+)') {
+            $configured = [int]$Matches[1]
+        }
+    }
+    if ((Test-TcpPortAvailable $configured) -or (Test-TcpEndpoint '127.0.0.1' 2019)) {
+        return $configured
+    }
+    foreach ($candidate in @(8080, 8081, 8888)) {
+        if (Test-TcpPortAvailable $candidate) {
+            Write-Warning "A porta $configured já está ocupada; o DevLAN usará a porta $candidate."
+            return $candidate
+        }
+    }
+    throw 'Nenhuma porta HTTP disponível entre 80, 8080, 8081 e 8888.'
 }
 
 function Require-Administrator {
@@ -367,7 +418,8 @@ try {
 
     $devlanPath = Build-Devlan $goPath $sourceRoot
     $dataDir = $InstallRoot
-    $installArgs = @('--data-dir', $dataDir, 'install')
+    $selectedWindowsPort = Select-WindowsPort
+    $installArgs = @('--data-dir', $dataDir, 'install', '--windows-port', [string]$selectedWindowsPort)
     if ($NoFirewall) {
         $installArgs += '--no-firewall'
     }

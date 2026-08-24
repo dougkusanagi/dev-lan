@@ -81,6 +81,7 @@ Quando a distribuição não oferece a branch escolhida, o script tenta o PPA
 ```text
 -Distribution Ubuntu-24.04  escolhe a distribuição WSL
 -PhpVersion 8.3|8.4|8.5     escolhe a branch PHP (padrão: 8.5)
+-WindowsPort PORT            fixa a porta HTTP do Windows (padrão: automática)
 -InstallRoot PATH            altera o diretório gerenciado
 -SkipWSL                     não instala dependências no WSL
 -SkipCaddy                   não instala Caddy
@@ -88,6 +89,10 @@ Quando a distribuição não oferece a branch escolhida, o script tenta o PPA
 -NoPath                      não persiste alterações no PATH do usuário
 -Ref TAG_OU_COMMIT           fixa a versão do código baixado
 ```
+
+O bootstrap prefere a porta `80`. Se ela estiver ocupada por Docker, Podman,
+WSL ou outro serviço, escolhe automaticamente `8080`, `8081` ou `8888` e salva
+essa escolha na configuração. Use `-WindowsPort` para exigir uma porta específica.
 
 Para uma instalação reproduzível, fixe `-Ref` em uma tag ou commit e revise o
 script antes de executá-lo. O instalador exige elevação porque WSL, porta 80 e

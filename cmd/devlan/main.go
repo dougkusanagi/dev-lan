@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -48,14 +49,25 @@ func run(args []string) error {
 	switch command {
 	case "install":
 		configureFirewall := true
-		for _, argument := range args {
+		windowsPort := 0
+		for index := 0; index < len(args); index++ {
+			argument := args[index]
 			if argument == "--no-firewall" {
 				configureFirewall = false
 				continue
 			}
-			return fmt.Errorf("uso: devlan install [--no-firewall]")
+			if argument == "--windows-port" && index+1 < len(args) {
+				index++
+				parsed, err := strconv.Atoi(args[index])
+				if err != nil || parsed < 1 || parsed > 65535 {
+					return fmt.Errorf("porta Windows inválida: %q", args[index])
+				}
+				windowsPort = parsed
+				continue
+			}
+			return fmt.Errorf("uso: devlan install [--no-firewall] [--windows-port PORT]")
 		}
-		result, err := service.InstallWithOptions(ctx, configureFirewall)
+		result, err := service.InstallWithPort(ctx, configureFirewall, windowsPort)
 		printWarnings(result.Warnings)
 		if err != nil {
 			return err
@@ -358,7 +370,8 @@ Uso:
   devlan [--data-dir DIR] COMANDO [ARGUMENTOS]
 
 Fundação e registro:
-  install [--no-firewall]   inicializa arquivos gerenciados
+  install [--no-firewall] [--windows-port PORT]
+                              inicializa arquivos gerenciados
   uninstall                  remove arquivos gerenciados, preserva projetos
   link NAME PATH             registra um projeto Laravel
   unlink NAME                remove registro e rota
