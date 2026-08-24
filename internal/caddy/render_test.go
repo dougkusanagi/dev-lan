@@ -30,8 +30,14 @@ func TestRenderWSLIsDeterministicAndSorted(t *testing.T) {
 	if !strings.Contains(first, `root * "/home/dev/alpha/public"`) {
 		t.Fatal("document root Laravel ausente")
 	}
-	if !strings.Contains(first, "request_header X-Forwarded-Prefix /alpha") {
-		t.Fatal("prefixo encaminhado ausente")
+	if !strings.Contains(first, "handle_path /alpha/*") {
+		t.Fatal("remoção de prefixo nativa ausente")
+	}
+	if !strings.Contains(first, "header_down Location ^/(.*)$ /alpha/$1") {
+		t.Fatal("reescrita de redirect relativo ausente")
+	}
+	if !strings.Contains(first, "env REQUEST_URI {http.request.uri}") {
+		t.Fatal("URI interna do FastCGI ausente")
 	}
 	if !strings.Contains(first, "admin 127.0.0.1:2020") {
 		t.Fatal("porta administrativa dedicada do WSL ausente")

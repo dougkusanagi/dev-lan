@@ -79,12 +79,13 @@ func RenderWSL(cfg domain.Config) (string, error) {
 	for _, route := range routes {
 		name := route.Project.Name
 		publicRoot := pathpkg.Join(route.Project.Path, "public")
-		fmt.Fprintf(&b, "    @%s path /%s /%s/*\n", name, name, name)
-		fmt.Fprintf(&b, "    handle @%s {\n", name)
-		fmt.Fprintf(&b, "        uri strip_prefix /%s\n", name)
-		fmt.Fprintf(&b, "        request_header X-Forwarded-Prefix /%s\n", name)
+		fmt.Fprintf(&b, "    redir /%s /%s/ 308\n", name, name)
+		fmt.Fprintf(&b, "    handle_path /%s/* {\n", name)
 		fmt.Fprintf(&b, "        root * %s\n", quoteCaddy(publicRoot))
-		fmt.Fprintf(&b, "        php_fastcgi unix/%s\n", cfg.PHPFPMOsocket)
+		fmt.Fprintf(&b, "        php_fastcgi unix/%s {\n", cfg.PHPFPMOsocket)
+		b.WriteString("            env REQUEST_URI {http.request.uri}\n")
+		fmt.Fprintf(&b, "            header_down Location ^/(.*)$ /%s/$1\n", name)
+		b.WriteString("        }\n")
 		b.WriteString("        file_server\n")
 		b.WriteString("    }\n\n")
 	}

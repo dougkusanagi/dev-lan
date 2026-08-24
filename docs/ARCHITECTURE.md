@@ -87,7 +87,9 @@ Servir Laravel em `/nome` exige cuidado porque redirects, assets, cookies e URLs
 No MVP, o adaptador Laravel deve:
 
 - exigir `public/index.php` como document root;
-- fornecer `X-Forwarded-Host`, `X-Forwarded-Proto` e `X-Forwarded-Prefix`;
+- preservar headers `X-Forwarded-Host` e `X-Forwarded-Proto` do proxy;
+- reescrever o header `Location` de redirects relativos para preservar o
+  subpath externo;
 - orientar `APP_URL=http://IP/nome`;
 - verificar cache de configuração do Laravel;
 - testar uma rota, redirect e asset no `doctor`;
