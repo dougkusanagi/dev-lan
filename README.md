@@ -87,13 +87,11 @@ O MVP está implementado como uma CLI Go em `cmd/devlan`. O núcleo cobre:
 
 ## Instalação rápida via curl
 
-Como este repositório ainda é privado, o comando abaixo usa o token da sessão do `gh`:
-
 ```powershell
-$env:GH_TOKEN = gh auth token; $p = Join-Path $env:TEMP 'devlan-install.ps1'; curl.exe -fsSL -H "Authorization: Bearer $env:GH_TOKEN" https://raw.githubusercontent.com/dougkusanagi/dev-lan/master/scripts/install.ps1 -o $p; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p
+curl.exe -fsSL https://raw.githubusercontent.com/dougkusanagi/dev-lan/master/scripts/install.ps1 -o "$env:TEMP\devlan-install.ps1"; powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\devlan-install.ps1"
 ```
 
-O fluxo completo, opções e a variante para repositório público estão em [docs/INSTALL.md](docs/INSTALL.md).
+O fluxo completo e as opções estão em [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Desenvolvimento
 

@@ -6,18 +6,10 @@ dependências do host, compila a CLI e prepara os dois Caddys.
 
 ## Instalação rápida
 
-Abra o PowerShell como Administrador. Como este repositório ainda é privado,
-use o token da sessão do GitHub para que `curl.exe` possa baixar o script e o
-arquivo-fonte:
+Abra o PowerShell como Administrador e execute:
 
 ```powershell
-$env:GH_TOKEN = gh auth token; $p = Join-Path $env:TEMP 'devlan-install.ps1'; curl.exe -fsSL -H "Authorization: Bearer $env:GH_TOKEN" https://raw.githubusercontent.com/dougkusanagi/dev-lan/master/scripts/install.ps1 -o $p; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p
-```
-
-Se o repositório for público, o header de autorização pode ser removido:
-
-```powershell
-$p = Join-Path $env:TEMP 'devlan-install.ps1'; curl.exe -fsSL https://raw.githubusercontent.com/dougkusanagi/dev-lan/master/scripts/install.ps1 -o $p; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p
+curl.exe -fsSL https://raw.githubusercontent.com/dougkusanagi/dev-lan/master/scripts/install.ps1 -o "$env:TEMP\devlan-install.ps1"; powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\devlan-install.ps1"
 ```
 
 Ao executar o script a partir de um clone local, não é necessário baixar o
