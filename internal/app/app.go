@@ -1501,7 +1501,7 @@ func (a *App) StopDev(ctx context.Context, selector string) error {
 	port := cfg.DevPort(project)
 	var stopErr error
 	if a.DevProxy != nil && os.Getenv("DEVLAN_TEST_MOCK") != "1" {
-		stopErr = a.DevProxy.StopNow(ctx, project.Name)
+		stopErr = a.DevProxy.StopProject(ctx, project, port)
 	} else {
 		stopErr = a.Dev.StopDev(ctx, project, port)
 	}
@@ -1523,7 +1523,7 @@ func (a *App) RestartDev(ctx context.Context, selector string) error {
 	port := cfg.DevPort(project)
 	cmd := cfg.DevCommand(project)
 	if a.DevProxy != nil && os.Getenv("DEVLAN_TEST_MOCK") != "1" {
-		if err := a.DevProxy.StopNow(ctx, project.Name); err != nil {
+		if err := a.DevProxy.StopProject(ctx, project, port); err != nil {
 			return err
 		}
 		if err := a.DevProxy.StartNow(ctx, project, port, cmd, cfg.ProjectIdleTimeout(project)); err != nil {

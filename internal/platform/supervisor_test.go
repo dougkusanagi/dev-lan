@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/dougkusanagi/dev-lan/internal/domain"
@@ -46,6 +47,15 @@ func TestViteCommandUsesRequestedPort(t *testing.T) {
 	}
 }
 
+func TestDevUnitName(t *testing.T) {
+	if got, want := devUnitName("cj-spec-sheet"), "devlan-dev-cj-spec-sheet"; got != want {
+		t.Fatalf("devUnitName() = %q, want %q", got, want)
+	}
+	if got, want := devUnitName("My Project/One"), "devlan-dev-my-project-one"; got != want {
+		t.Fatalf("devUnitName() = %q, want %q", got, want)
+	}
+}
+
 func TestUsesViteDetectsConfigOrFramework(t *testing.T) {
 	manager := NewWSLDevManager(WSLRunner{})
 	dir := t.TempDir()
@@ -59,5 +69,19 @@ func TestUsesViteDetectsConfigOrFramework(t *testing.T) {
 	framework := "vite"
 	if !manager.usesVite(context.Background(), domain.Project{Path: t.TempDir(), DevFramework: &framework}) {
 		t.Fatal("framework vite deveria ser detectado")
+	}
+}
+
+func TestUsesViteDetectsWSLConfig(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("teste específico do WSL no Windows")
+	}
+
+	manager := NewWSLDevManager(NewWSLRunner("wsl.exe", ""))
+	if _, err := manager.WSL.Run(context.Background(), "/usr/bin/test", "-f", "/home/silver/Sites/cj-spec-sheet/vite.config.ts"); err != nil {
+		t.Skipf("projeto WSL de validação não está disponível: %v", err)
+	}
+	if !manager.usesVite(context.Background(), domain.Project{Path: "/home/silver/Sites/cj-spec-sheet"}) {
+		t.Fatal("vite.config.ts deveria ser detectado no projeto WSL")
 	}
 }

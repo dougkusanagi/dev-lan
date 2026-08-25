@@ -60,6 +60,8 @@ var viteConfigNames = []string{
 	"vite.config.cts",
 }
 
+const devStartupTimeout = 30 * time.Second
+
 func (m WSLDevManager) usesWSL(projectPath string) bool {
 	return runtime.GOOS == "windows" && strings.HasPrefix(projectPath, "/")
 }
@@ -143,6 +145,23 @@ func viteHostSpecified(command string) bool {
 	return false
 }
 
+func devUnitName(projectName string) string {
+	var builder strings.Builder
+	for _, char := range strings.ToLower(projectName) {
+		switch {
+		case char >= 'a' && char <= 'z', char >= '0' && char <= '9', char == '-', char == '_':
+			builder.WriteRune(char)
+		default:
+			builder.WriteRune('-')
+		}
+	}
+	name := strings.Trim(builder.String(), "-_")
+	if name == "" {
+		name = "project"
+	}
+	return "devlan-dev-" + name
+}
+
 func isPortListening(port int) bool {
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 500*time.Millisecond)
 	if err == nil {
@@ -207,10 +226,39 @@ func (m WSLDevManager) StartDev(ctx context.Context, project domain.Project, por
 	}
 
 	if m.usesWSL(project.Path) {
-		// Launch background process inside WSL using nohup and recording PID
-		script := fmt.Sprintf("cd %s && PORT=%d PORT_DEV=%d nohup /bin/sh -c %s > %s 2>&1 </dev/null & echo $! > %s",
-			shellQuote(project.Path), port, port, shellQuote(command), shellQuote(logFile), shellQuote(pidFile))
-		_, err := m.WSL.Run(ctx, "/bin/sh", "-c", script)
+		// WSL can terminate ordinary background jobs when the wsl.exe session
+		// exits. Prefer a user systemd unit when available, with nohup as the
+		// fallback for distributions without systemd.
+		unit := devUnitName(project.Name)
+		script := `
+PROJECT="$1"
+COMMAND="$2"
+LOG="$3"
+PIDFILE="$4"
+UNIT="$5"
+PORT="$6"
+
+if command -v systemd-run >/dev/null 2>&1 && systemctl --user is-system-running >/dev/null 2>&1; then
+    systemctl --user stop "$UNIT" >/dev/null 2>&1 || true
+    rm -f "$PIDFILE"
+    if systemd-run --user --unit="$UNIT" --collect --working-directory="$PROJECT" \
+        --setenv="PORT=$PORT" --setenv="PORT_DEV=$PORT" \
+        /bin/sh -c 'exec /bin/sh -c "$1" >"$2" 2>&1' devlan "$COMMAND" "$LOG" >/dev/null 2>&1; then
+        for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+            PID=$(systemctl --user show --property=MainPID --value "$UNIT" 2>/dev/null || true)
+            case "$PID" in
+                ''|0) sleep 0.1 ;;
+                *) printf '%s\n' "$PID" > "$PIDFILE"; exit 0 ;;
+            esac
+        done
+        systemctl --user stop "$UNIT" >/dev/null 2>&1 || true
+    fi
+fi
+
+cd -- "$PROJECT" && PORT="$PORT" PORT_DEV="$PORT" nohup /bin/sh -c "$COMMAND" >"$LOG" 2>&1 </dev/null &
+printf '%s\n' "$!" > "$PIDFILE"
+`
+		_, err := m.WSL.Run(ctx, "/bin/sh", "-c", script, "devlan", project.Path, command, logFile, pidFile, unit, strconv.Itoa(port))
 		if err != nil {
 			return fmt.Errorf("iniciar servidor dev no WSL: %w", err)
 		}
@@ -238,7 +286,7 @@ func (m WSLDevManager) StartDev(ctx context.Context, project domain.Project, por
 
 	// Do not report success until the server is actually accepting connections.
 	// A background shell can exit successfully even when npm/bun fails.
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(devStartupTimeout)
 	for time.Now().Before(deadline) {
 		if isPortListening(port) {
 			return nil
@@ -254,13 +302,14 @@ func (m WSLDevManager) StartDev(ctx context.Context, project domain.Project, por
 	if len(message) > 2000 {
 		message = message[len(message)-2000:]
 	}
-	return fmt.Errorf("servidor dev não abriu a porta %d após 10s; logs: %s", port, message)
+	return fmt.Errorf("servidor dev não abriu a porta %d após %s; logs: %s", port, devStartupTimeout, message)
 }
 
 func (m WSLDevManager) StopDev(ctx context.Context, project domain.Project, port int) error {
 	if m.usesWSL(project.Path) {
 		// Kill by PID or port
 		script := fmt.Sprintf(`
+			systemctl --user stop %s >/dev/null 2>&1 || true
 			if [ -f "/tmp/devlan-%s.pid" ]; then
 				PID=$(cat "/tmp/devlan-%s.pid")
 				if [ -n "$PID" ]; then
@@ -269,7 +318,7 @@ func (m WSLDevManager) StopDev(ctx context.Context, project domain.Project, port
 				rm -f "/tmp/devlan-%s.pid"
 			fi
 			fuser -k %d/tcp 2>/dev/null || true
-		`, project.Name, project.Name, project.Name, port)
+		`, shellQuote(devUnitName(project.Name)), project.Name, project.Name, project.Name, port)
 		_, _ = m.WSL.Run(ctx, "/bin/sh", "-c", script)
 	} else {
 		pidFile := m.devPIDPath(project)
