@@ -1565,19 +1565,43 @@ func (a *App) BuildProject(ctx context.Context, selector string) (string, error)
 }
 
 func (a *App) InstallDeps(ctx context.Context, selector string) (string, error) {
-	if a.Dev == nil {
-		return "", fmt.Errorf("gerenciador dev não configurado")
-	}
 	project, cfg, err := a.resolveProject(ctx, selector)
 	if err != nil {
 		return "", err
 	}
-	pm := cfg.PackageManager(project)
-	out, err := a.Dev.InstallDeps(ctx, project, pm)
-	if err == nil {
+	outputs := make([]string, 0, 2)
+	if a.projectHasManifest(ctx, project, "package.json") {
+		if a.Dev == nil {
+			return "", fmt.Errorf("gerenciador dev não configurado")
+		}
+		pm := cfg.PackageManager(project)
+		out, installErr := a.Dev.InstallDeps(ctx, project, pm)
+		outputs = append(outputs, out)
+		if installErr != nil {
+			return strings.Join(outputs, "\n"), installErr
+		}
 		_ = a.appendLog("deps install %s (%s)", project.Name, pm)
 	}
-	return out, err
+	if a.projectHasManifest(ctx, project, "composer.json") {
+		out, installErr := a.RunComposer(ctx, project.Name, "", []string{"--working-dir=" + project.Path, "install", "--no-interaction"})
+		outputs = append(outputs, out)
+		if installErr != nil {
+			return strings.Join(outputs, "\n"), installErr
+		}
+		_ = a.appendLog("deps install %s (composer)", project.Name)
+	}
+	if len(outputs) == 0 {
+		return "", fmt.Errorf("nenhum package.json ou composer.json encontrado em %s", project.Name)
+	}
+	return strings.Join(outputs, "\n"), nil
+}
+
+func (a *App) projectHasManifest(ctx context.Context, project domain.Project, name string) bool {
+	if _, err := os.Stat(filepath.Join(filepath.FromSlash(project.Path), name)); err == nil {
+		return true
+	}
+	_, err := a.WSL.Run(ctx, "/bin/sh", "-c", `test -f "$1/$2"`, "devlan", project.Path, name)
+	return err == nil
 }
 
 func (a *App) ProjectDevLogs(ctx context.Context, selector string, lines int) (string, error) {

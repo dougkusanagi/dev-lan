@@ -1,6 +1,15 @@
 :root {
-  --bg: #0d0e10; --surface: #121315; --panel: #171719; --panel-hover: #1d1e21;
-  --border: rgba(255,255,255,.09); --text: #f5f7fa; --muted: #8b97aa;
-  --accent: #673ab7; --success: #00c58e; --warning: #ffa500; --danger: #ff3045;
+  --bg: #0d0e10; --surface: #121315; --panel: #171719; --panel-hover: #24252a;
+  --border: rgba(255,255,255,.16); --text: #f5f7fa; --muted: #aeb8c8;
+  --accent: #673ab7; --accent-strong: #b39ddb; --selected-project-text: #b39ddb; --success: #00c58e; --warning: #f4b942; --danger: #ff5a68;
   --radius: 8px; color-scheme: dark;
 }
+
+:root:not(.dark) {
+  --bg: #f5f7fb; --surface: #ffffff; --panel: #ffffff; --panel-hover: #eef1f7;
+  --border: rgba(24,32,48,.16); --text: #182030; --muted: #526079;
+  --accent: #b39ddb; --accent-strong: #4b278f; --selected-project-text: #4b278f; --success: #087f5b; --warning: #9a6500; --danger: #c92a3a;
+  color-scheme: light;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
