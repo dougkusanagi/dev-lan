@@ -68,6 +68,7 @@ Sem `devlan secure financeiro`, a URL permanece `http://192.168.1.50/financeiro`
 - [Instalação](docs/INSTALL.md)
 - [Roadmap](docs/ROADMAP.md)
 - [Operação, recuperação e suporte](docs/OPERATIONS.md)
+- [Plano de reimplementação da interface Wails](docs/UI-REIMPLEMENTATION-PLAN.md)
 - [Decisões técnicas](docs/DECISIONS.md)
 
 ## Fora do escopo da primeira instalação
