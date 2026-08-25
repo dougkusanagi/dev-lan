@@ -25,6 +25,11 @@ type Paths struct {
 	Dir             string
 	Config          string
 	State           string
+	APIToken        string
+	APIEndpoint     string
+	Telemetry       string
+	TelemetryQueue  string
+	CARootExport    string
 	GeneratedDir    string
 	PHPGeneratedDir string
 	PHPPreviousDir  string
@@ -45,6 +50,11 @@ func (s Store) Paths() Paths {
 		Dir:             s.Dir,
 		Config:          filepath.Join(s.Dir, "config.toml"),
 		State:           filepath.Join(s.Dir, "state.json"),
+		APIToken:        filepath.Join(s.Dir, "api.token"),
+		APIEndpoint:     filepath.Join(s.Dir, "api.endpoint.json"),
+		Telemetry:       filepath.Join(s.Dir, "telemetry.json"),
+		TelemetryQueue:  filepath.Join(s.Dir, "telemetry.queue.jsonl"),
+		CARootExport:    filepath.Join(s.Dir, "devlan-ca-root.crt"),
 		GeneratedDir:    generated,
 		PHPGeneratedDir: filepath.Join(generated, "php"),
 		PHPPreviousDir:  filepath.Join(generated, "php.previous"),
@@ -612,17 +622,17 @@ func copyManagedTree(source, target string) error {
 
 func (s Store) RemoveManagedFiles() error {
 	paths := s.Paths()
-	files := []string{paths.Config, paths.State, paths.WindowsCaddy, paths.WSLCaddy, paths.WindowsPrevious, paths.WSLPrevious}
+	files := []string{paths.Config, paths.State, paths.APIToken, paths.APIEndpoint, paths.Telemetry, paths.TelemetryQueue, paths.CARootExport}
 	for _, file := range files {
 		if err := os.Remove(file); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remover %s: %w", file, err)
 		}
 	}
-	if err := os.RemoveAll(paths.PHPGeneratedDir); err != nil {
-		return fmt.Errorf("remover arquivos PHP gerenciados: %w", err)
+	if err := os.RemoveAll(paths.GeneratedDir); err != nil {
+		return fmt.Errorf("remover arquivos gerados: %w", err)
 	}
-	if err := os.RemoveAll(paths.PHPPreviousDir); err != nil {
-		return fmt.Errorf("remover rollback PHP gerenciado: %w", err)
+	if err := os.RemoveAll(paths.LogsDir); err != nil {
+		return fmt.Errorf("remover logs gerenciados: %w", err)
 	}
 	return nil
 }

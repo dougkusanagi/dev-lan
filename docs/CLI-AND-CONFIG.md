@@ -33,9 +33,14 @@ separada no WSL. Até essa fase ser implementada, caminhos WSL devem ser passado
 devlan park /home/silver/dev
 devlan unpark /home/silver/dev
 devlan parked
+devlan park ignore dougdesign-seo
+devlan park unignore /home/silver/dev/dougdesign-seo
 ```
 
-Cada filho direto contendo um projeto reconhecido pode ser publicado com o nome do diretório. A descoberta não deve executar scripts.
+Cada filho direto contendo um projeto reconhecido pode ser publicado com o nome do diretório. A descoberta não deve executar scripts. Quando um projeto
+descoberto não deve aparecer na lista, `park ignore NAME|PATH` o oculta sem
+remover arquivos ou desestacionar a pasta; `park unignore PATH` desfaz a
+ocultação.
 
 ## Modos de atendimento
 
@@ -234,7 +239,8 @@ diretório contém `config.toml`, `state.json`, os Caddyfiles gerados e logs.
 `park PATH` registra a pasta, mas não copia projetos para o estado. Em cada
 geração, filhos diretos são examinados sem executar scripts; somente os que
 contêm `artisan` e `public/index.php` tornam-se rotas. Um `link` explícito tem
-prioridade se houver colisão de nome. `link`, `unlink`, `park`, `unpark` e as
+prioridade se houver colisão de nome. `park ignore` registra uma exclusão no
+próprio park; `park unignore` remove essa exclusão. `link`, `unlink`, `park`, `unpark` e as
 mudanças de modo aplicam a configuração automaticamente: a CLI recarrega um
 Caddy em execução ou inicia o Caddy Windows quando ele ainda não estiver ativo.
 
@@ -346,3 +352,48 @@ devlan security posture
 devlan security audit --lines 50
 ```
 
+## Operação completa (Fase 6)
+
+O serviço Windows opcional mantém a API local ativa sem depender da UI:
+
+```powershell
+devlan service install|remove|start|stop|status
+devlan startup enable [gui|service]
+devlan startup disable|status
+devlan api serve|status
+```
+
+O protocolo exige token Bearer e aceita somente conexões loopback. O token e o
+endpoint efêmero ficam em `api.token` e `api.endpoint.json` dentro do diretório
+de dados; eles não são exportados nem incluídos no diagnóstico.
+
+Exportação, importação e suporte:
+
+```powershell
+devlan config export [PATH]
+devlan config import PATH
+devlan diagnostic [PATH]
+```
+
+O JSON de configuração é versionado e não contém hashes de senha, usuários de
+autenticação ou exposições temporárias. O pacote de diagnóstico é um ZIP com
+allowlist de arquivos gerenciados e Caddyfiles redigidos.
+
+Telemetria é desativada por padrão e não envia nada automaticamente:
+
+```powershell
+devlan telemetry enable https://collector.example.invalid/devlan
+devlan telemetry status
+devlan telemetry send
+devlan telemetry disable
+```
+
+Updates usam canais explícitos e manifesto com SHA-256:
+
+```powershell
+devlan update check stable MANIFEST_URL
+devlan update download stable MANIFEST_URL PATH
+```
+
+O segundo comando apenas prepara um artefato verificado; a troca do binário
+continua sob responsabilidade de um instalador assinado.

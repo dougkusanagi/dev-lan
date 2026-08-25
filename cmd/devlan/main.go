@@ -5,18 +5,25 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
 
+	localapi "github.com/dougkusanagi/dev-lan/internal/api"
 	"github.com/dougkusanagi/dev-lan/internal/app"
 	"github.com/dougkusanagi/dev-lan/internal/detect"
 	"github.com/dougkusanagi/dev-lan/internal/domain"
 	"github.com/dougkusanagi/dev-lan/internal/gui"
 	"github.com/dougkusanagi/dev-lan/internal/platform"
+	backgroundservice "github.com/dougkusanagi/dev-lan/internal/service"
+	"github.com/dougkusanagi/dev-lan/internal/startup"
+	devlanupdate "github.com/dougkusanagi/dev-lan/internal/update"
 )
 
 const version = "0.1.0-mvp"
@@ -46,15 +53,22 @@ func run(args []string) error {
 		return nil
 	}
 
-	service := app.New(dataDir)
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-	defer cancel()
 	command := commandArgs[0]
 	args = commandArgs[1:]
 	if containsHelp(args) {
 		printCommandUsage(command)
 		return nil
 	}
+	service := app.New(dataDir)
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if (command == "api" && len(args) > 0 && args[0] == "serve") ||
+		(command == "service" && len(args) > 0 && args[0] == "run") {
+		ctx, cancel = signal.NotifyContext(context.Background(), os.Interrupt)
+	} else {
+		ctx, cancel = context.WithTimeout(context.Background(), 45*time.Second)
+	}
+	defer cancel()
 
 	switch command {
 	case "install":
@@ -89,6 +103,17 @@ func run(args []string) error {
 	case "uninstall":
 		if len(args) != 0 {
 			return fmt.Errorf("uso: devlan uninstall")
+		}
+		if runtime.GOOS == "windows" {
+			manager := backgroundservice.NewManager()
+			if status, statusErr := manager.Status(ctx); statusErr == nil && status.Installed {
+				if removeErr := manager.Remove(ctx); removeErr != nil {
+					fmt.Fprintf(os.Stderr, "[aviso] não foi possível remover o serviço DevLAN: %v\n", removeErr)
+				}
+			}
+			if startupErr := startup.Disable(ctx); startupErr != nil {
+				fmt.Fprintf(os.Stderr, "[aviso] não foi possível remover a inicialização automática: %v\n", startupErr)
+			}
 		}
 		result, err := service.Uninstall(ctx)
 		printWarnings(result.Warnings)
@@ -137,8 +162,26 @@ func run(args []string) error {
 		return printProjects(service, filter, asJSON)
 
 	case "park":
+		if len(args) == 2 && args[0] == "ignore" {
+			result, err := service.IgnoreProject(ctx, args[1])
+			printWarnings(result.Warnings)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Projeto %s ocultado da lista de projetos estacionados.\n", args[1])
+			return nil
+		}
+		if len(args) == 2 && args[0] == "unignore" {
+			result, err := service.UnignoreProject(ctx, args[1])
+			printWarnings(result.Warnings)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Projeto %s voltou à lista de projetos estacionados.\n", args[1])
+			return nil
+		}
 		if len(args) != 1 {
-			return fmt.Errorf("uso: devlan park PATH")
+			return fmt.Errorf("uso: devlan park PATH | devlan park ignore NAME|PATH | devlan park unignore PATH")
 		}
 		park, result, err := service.Park(ctx, args[0])
 		printWarnings(result.Warnings)
@@ -384,8 +427,350 @@ func run(args []string) error {
 	case "security":
 		return runSecurity(ctx, service, args)
 
+	case "config":
+		return runConfig(ctx, service, args)
+
+	case "diagnostic":
+		if len(args) > 1 {
+			return fmt.Errorf("uso: devlan diagnostic [PATH]")
+		}
+		target := ""
+		if len(args) == 1 {
+			target = args[0]
+		}
+		path, err := service.DiagnosticBundle(ctx, target)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Diagnóstico exportado para %s\n", path)
+		return nil
+
+	case "api":
+		return runAPI(ctx, service, args)
+
+	case "service":
+		return runBackgroundService(ctx, dataDir, args)
+
+	case "startup":
+		return runStartup(ctx, dataDir, args)
+
+	case "telemetry":
+		return runTelemetry(ctx, service, args)
+
+	case "update":
+		return runUpdate(ctx, args)
+
 	default:
 		return fmt.Errorf("comando desconhecido %q; use `devlan help`", command)
+	}
+}
+
+func runConfig(ctx context.Context, service *app.App, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("uso: devlan config export [PATH] | devlan config import PATH")
+	}
+	switch args[0] {
+	case "export":
+		if len(args) > 2 {
+			return fmt.Errorf("uso: devlan config export [PATH]")
+		}
+		data, err := service.ExportConfig()
+		if err != nil {
+			return err
+		}
+		if len(args) == 1 || args[1] == "-" {
+			_, err = os.Stdout.Write(data)
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(filepath.Clean(args[1])), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(args[1], data, 0o600); err != nil {
+			return fmt.Errorf("gravar exportação: %w", err)
+		}
+		fmt.Printf("Configuração exportada para %s (sem credenciais)\n", args[1])
+		return nil
+	case "import":
+		if len(args) != 2 || strings.TrimSpace(args[1]) == "" || args[1] == "-" {
+			return fmt.Errorf("uso: devlan config import PATH")
+		}
+		data, err := os.ReadFile(args[1])
+		if err != nil {
+			return fmt.Errorf("ler importação: %w", err)
+		}
+		result, err := service.ImportConfig(ctx, data)
+		printWarnings(result.Warnings)
+		if err != nil {
+			return err
+		}
+		fmt.Println("Configuração importada, validada e aplicada.")
+		return nil
+	default:
+		return fmt.Errorf("subcomando config desconhecido: %s", args[0])
+	}
+}
+
+func runAPI(ctx context.Context, service *app.App, args []string) error {
+	if len(args) == 0 || args[0] == "serve" {
+		if len(args) > 1 {
+			return fmt.Errorf("uso: devlan api serve")
+		}
+		server := localapi.New(service)
+		endpoint, err := server.Start()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("API local autenticada em %s\n", endpoint.Address)
+		<-ctx.Done()
+		return server.Close(context.Background())
+	}
+	if args[0] == "status" && len(args) == 1 {
+		client := localapi.Client{Store: service.Store}
+		response, err := client.Do(ctx, http.MethodGet, "/v1/health", nil)
+		if err != nil {
+			return fmt.Errorf("API local indisponível: %w", err)
+		}
+		defer response.Body.Close()
+		data, readErr := io.ReadAll(response.Body)
+		if readErr != nil {
+			return readErr
+		}
+		fmt.Print(string(data))
+		if response.StatusCode >= 400 {
+			return fmt.Errorf("API local respondeu HTTP %d", response.StatusCode)
+		}
+		return nil
+	}
+	return fmt.Errorf("uso: devlan api serve | devlan api status")
+}
+
+func runBackgroundService(ctx context.Context, dataDir string, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("uso: devlan service install|remove|start|stop|status|run")
+	}
+	manager := backgroundservice.NewManager()
+	switch args[0] {
+	case "run":
+		if len(args) != 1 {
+			return fmt.Errorf("uso: devlan service run")
+		}
+		return backgroundservice.Run(ctx, dataDir)
+	case "install":
+		if len(args) != 1 {
+			return fmt.Errorf("uso: devlan service install")
+		}
+		options, err := backgroundservice.DefaultOptions(dataDir)
+		if err != nil {
+			return err
+		}
+		if err := manager.Install(ctx, options); err != nil {
+			return err
+		}
+		fmt.Println("Serviço DevLAN instalado para iniciar automaticamente no boot.")
+		return nil
+	case "remove":
+		if len(args) != 1 {
+			return fmt.Errorf("uso: devlan service remove")
+		}
+		if err := manager.Remove(ctx); err != nil {
+			return err
+		}
+		fmt.Println("Serviço DevLAN removido.")
+		return nil
+	case "start", "stop":
+		if len(args) != 1 {
+			return fmt.Errorf("uso: devlan service %s", args[0])
+		}
+		var err error
+		if args[0] == "start" {
+			err = manager.Start(ctx)
+		} else {
+			err = manager.Stop(ctx)
+		}
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Serviço DevLAN: %s.\n", args[0])
+		return nil
+	case "status":
+		if len(args) != 1 {
+			return fmt.Errorf("uso: devlan service status")
+		}
+		status, err := manager.Status(ctx)
+		if err != nil {
+			return err
+		}
+		data, _ := json.MarshalIndent(status, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	default:
+		return fmt.Errorf("subcomando service desconhecido: %s", args[0])
+	}
+}
+
+func runStartup(ctx context.Context, dataDir string, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("uso: devlan startup enable [gui|service] | disable | status")
+	}
+	switch args[0] {
+	case "enable":
+		if len(args) > 2 {
+			return fmt.Errorf("uso: devlan startup enable [gui|service]")
+		}
+		mode := startup.ModeGUI
+		if len(args) == 2 {
+			parsed, err := startup.ParseMode(args[1])
+			if err != nil {
+				return err
+			}
+			mode = parsed
+		}
+		executable, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		if err := startup.Enable(ctx, executable, dataDir, mode); err != nil {
+			return err
+		}
+		fmt.Printf("Inicialização automática habilitada (%s).\n", mode)
+		return nil
+	case "disable":
+		if len(args) != 1 {
+			return fmt.Errorf("uso: devlan startup disable")
+		}
+		if err := startup.Disable(ctx); err != nil {
+			return err
+		}
+		fmt.Println("Inicialização automática desabilitada.")
+		return nil
+	case "status":
+		if len(args) != 1 {
+			return fmt.Errorf("uso: devlan startup status")
+		}
+		state, err := startup.Status(ctx)
+		if err != nil {
+			return err
+		}
+		data, _ := json.MarshalIndent(state, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	default:
+		return fmt.Errorf("subcomando startup desconhecido: %s", args[0])
+	}
+}
+
+func runTelemetry(ctx context.Context, service *app.App, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("uso: devlan telemetry status|enable ENDPOINT|disable|send")
+	}
+	store := service.Telemetry
+	switch args[0] {
+	case "status":
+		if len(args) != 1 {
+			return fmt.Errorf("uso: devlan telemetry status")
+		}
+		consent, err := store.Load()
+		if err != nil {
+			return err
+		}
+		queued, err := store.QueueSize()
+		if err != nil {
+			return err
+		}
+		data, _ := json.MarshalIndent(map[string]any{
+			"enabled":  consent.Enabled,
+			"endpoint": consent.Endpoint,
+			"queued":   queued,
+		}, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	case "enable":
+		if len(args) != 2 {
+			return fmt.Errorf("uso: devlan telemetry enable ENDPOINT")
+		}
+		if err := store.SetConsent(true, args[1]); err != nil {
+			return err
+		}
+		fmt.Println("Telemetria habilitada com consentimento explícito; o envio continua manual (`devlan telemetry send`).")
+		return nil
+	case "disable":
+		if len(args) != 1 {
+			return fmt.Errorf("uso: devlan telemetry disable")
+		}
+		if err := store.SetConsent(false, ""); err != nil {
+			return err
+		}
+		fmt.Println("Telemetria desabilitada e fila local removida.")
+		return nil
+	case "send":
+		if len(args) != 1 {
+			return fmt.Errorf("uso: devlan telemetry send")
+		}
+		count, err := store.Send(ctx)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%d evento(s) de telemetria enviado(s).\n", count)
+		return nil
+	default:
+		return fmt.Errorf("subcomando telemetry desconhecido: %s", args[0])
+	}
+}
+
+func runUpdate(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("uso: devlan update check CHANNEL [MANIFEST_URL] | devlan update download CHANNEL MANIFEST_URL PATH")
+	}
+	if len(args) < 2 {
+		return fmt.Errorf("canal obrigatório: stable ou preview")
+	}
+	channel, err := devlanupdate.ParseChannel(args[1])
+	if err != nil {
+		return err
+	}
+	switch args[0] {
+	case "check":
+		if len(args) > 3 {
+			return fmt.Errorf("uso: devlan update check CHANNEL [MANIFEST_URL]")
+		}
+		manifestURL := ""
+		if len(args) == 3 {
+			manifestURL = args[2]
+		} else {
+			manifestURL = os.Getenv("DEVLAN_UPDATE_MANIFEST_" + strings.ToUpper(string(channel)) + "_URL")
+		}
+		if strings.TrimSpace(manifestURL) == "" {
+			return fmt.Errorf("informe MANIFEST_URL ou DEVLAN_UPDATE_MANIFEST_%s_URL", strings.ToUpper(string(channel)))
+		}
+		manifest, err := devlanupdate.FetchManifest(ctx, nil, manifestURL, channel)
+		if err != nil {
+			return err
+		}
+		data, _ := json.MarshalIndent(map[string]any{
+			"channel":      channel,
+			"current":      version,
+			"available":    manifest.Version,
+			"update":       devlanupdate.IsNewer(version, manifest.Version),
+			"sha256":       manifest.SHA256,
+			"artifact_url": manifest.URL,
+		}, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	case "download":
+		if len(args) != 4 {
+			return fmt.Errorf("uso: devlan update download CHANNEL MANIFEST_URL PATH")
+		}
+		manifest, err := devlanupdate.FetchManifest(ctx, nil, args[2], channel)
+		if err != nil {
+			return err
+		}
+		if err := devlanupdate.DownloadVerified(ctx, nil, manifest, channel, args[3]); err != nil {
+			return err
+		}
+		fmt.Printf("Update %s verificado por SHA-256 e preparado em %s.\n", manifest.Version, args[3])
+		return nil
+	default:
+		return fmt.Errorf("subcomando update desconhecido: %s", args[0])
 	}
 }
 
@@ -854,7 +1239,7 @@ func printProjects(service *app.App, filter string, asJSON bool) error {
 			return err
 		}
 		url := resolved.URL(host, cfg.WindowsPort, cfg.HTTPSPort, effective.SecureProject(project))
-		
+
 		runtimeStr := "-"
 		typeStr := string(resolved.Mode)
 		switch resolved.Mode {
@@ -1001,6 +1386,8 @@ Fundação e registro:
   unlink NAME                remove registro e rota
   links [FILTRO] [--json]    lista projetos registrados e descobertos
   park PATH                  registra uma pasta de projetos
+  park ignore NAME|PATH      oculta um projeto estacionado da lista
+  park unignore PATH         mostra novamente um projeto oculto
   unpark PATH                remove uma pasta estacionada
   parked                     lista pastas estacionadas
 
@@ -1025,6 +1412,14 @@ Operação:
   open [NAME]                abre URL ou mostra o dashboard textual
   mode default MODE          define o modo global (php, dev, static, auto)
   mode NAME MODE|inherit     sobrescreve ou restaura herança
+  config export [PATH]       exporta configuração sem credenciais
+  config import PATH          valida e importa uma configuração
+  diagnostic [PATH]           gera pacote único de diagnóstico sanitizado
+  api serve|status            API local autenticada para CLI/UI/serviço
+  service install|...         instala e controla o serviço Windows opcional
+  startup enable|disable      configura início automático no login
+  telemetry status|...        telemetria opt-in, sanitizada e manual
+  update check|download       consulta/prepara artefato com SHA-256
 
 Rotas e Segurança:
   route [default|NAME] [MODE] [--port N] [--host DOMAIN]
@@ -1082,31 +1477,38 @@ func printCommandUsage(command string) {
 	}
 
 	usages := map[string]string{
-		"install":   "uso: devlan install [--no-firewall] [--windows-port PORT]",
-		"uninstall": "uso: devlan uninstall",
-		"link":      "uso: devlan link NAME PATH",
-		"unlink":    "uso: devlan unlink NAME",
-		"links":     "uso: devlan links [FILTRO] [--json]",
-		"park":      "uso: devlan park PATH",
-		"unpark":    "uso: devlan unpark PATH",
-		"parked":    "uso: devlan parked",
-		"status":    "uso: devlan status",
-		"reload":    "uso: devlan reload",
-		"trust":     "uso: devlan trust",
-		"secure":    "uso: devlan secure NAME|PATH",
-		"unsecure":  "uso: devlan unsecure NAME|PATH",
-		"doctor":    "uso: devlan doctor [NAME]",
-		"logs":      "uso: devlan logs [COMPONENT]",
-		"open":      "uso: devlan open [NAME]",
-		"mode":      "uso: devlan mode default MODE | devlan mode NAME MODE|inherit",
-		"route":     "uso: devlan route [default|NAME] [path|port|host|inherit] [--port PORT] [--host HOST]",
-		"expose":    "uso: devlan expose NAME [--duration 30m|1h|2h] [--mode path|port|host]",
-		"unexpose":  "uso: devlan unexpose NAME",
-		"allowlist": "uso: devlan allowlist [default|NAME] [set|add|remove|clear CIDR...]",
-		"auth":      "uso: devlan auth enable default|NAME USERNAME PASSWORD | devlan auth disable default|NAME",
-		"ca":        "uso: devlan ca info | devlan ca export [PATH] | devlan ca rotate",
-		"dns":       "uso: devlan dns entries | devlan dns sync",
-		"security":  "uso: devlan security posture | devlan security audit [--lines N]",
+		"install":    "uso: devlan install [--no-firewall] [--windows-port PORT]",
+		"uninstall":  "uso: devlan uninstall",
+		"link":       "uso: devlan link NAME PATH",
+		"unlink":     "uso: devlan unlink NAME",
+		"links":      "uso: devlan links [FILTRO] [--json]",
+		"park":       "uso: devlan park PATH | devlan park ignore NAME|PATH | devlan park unignore PATH",
+		"unpark":     "uso: devlan unpark PATH",
+		"parked":     "uso: devlan parked",
+		"status":     "uso: devlan status",
+		"reload":     "uso: devlan reload",
+		"trust":      "uso: devlan trust",
+		"secure":     "uso: devlan secure NAME|PATH",
+		"unsecure":   "uso: devlan unsecure NAME|PATH",
+		"doctor":     "uso: devlan doctor [NAME]",
+		"logs":       "uso: devlan logs [COMPONENT]",
+		"open":       "uso: devlan open [NAME]",
+		"mode":       "uso: devlan mode default MODE | devlan mode NAME MODE|inherit",
+		"route":      "uso: devlan route [default|NAME] [path|port|host|inherit] [--port PORT] [--host HOST]",
+		"expose":     "uso: devlan expose NAME [--duration 30m|1h|2h] [--mode path|port|host]",
+		"unexpose":   "uso: devlan unexpose NAME",
+		"allowlist":  "uso: devlan allowlist [default|NAME] [set|add|remove|clear CIDR...]",
+		"auth":       "uso: devlan auth enable default|NAME USERNAME PASSWORD | devlan auth disable default|NAME",
+		"ca":         "uso: devlan ca info | devlan ca export [PATH] | devlan ca rotate",
+		"dns":        "uso: devlan dns entries | devlan dns sync",
+		"security":   "uso: devlan security posture | devlan security audit [--lines N]",
+		"config":     "uso: devlan config export [PATH] | devlan config import PATH",
+		"diagnostic": "uso: devlan diagnostic [PATH]",
+		"api":        "uso: devlan api serve | devlan api status",
+		"service":    "uso: devlan service install|remove|start|stop|status|run",
+		"startup":    "uso: devlan startup enable [gui|service] | disable | status",
+		"telemetry":  "uso: devlan telemetry status|enable ENDPOINT|disable|send",
+		"update":     "uso: devlan update check CHANNEL [MANIFEST_URL] | devlan update download CHANNEL MANIFEST_URL PATH",
 	}
 	if usage, ok := usages[command]; ok {
 		fmt.Printf("%s\n\nOpções:\n  -h, --help    mostra esta ajuda\n", usage)
@@ -1604,4 +2006,3 @@ func runSecurity(ctx context.Context, service *app.App, args []string) error {
 	}
 	return fmt.Errorf("subcomando security desconhecido: %s (use posture, audit)", args[0])
 }
-

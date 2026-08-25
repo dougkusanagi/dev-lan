@@ -2,6 +2,7 @@ package gui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	localapi "github.com/dougkusanagi/dev-lan/internal/api"
 	"github.com/dougkusanagi/dev-lan/internal/app"
 	"github.com/dougkusanagi/dev-lan/internal/domain"
 	"github.com/dougkusanagi/dev-lan/internal/platform"
@@ -88,10 +90,12 @@ type ProjectConfigUpdate struct {
 type App struct {
 	service *app.App
 	ctx     context.Context
+	api     *localapi.Server
+	ownsAPI bool
 }
 
 func NewApp(service *app.App) *App {
-	return &App{service: service}
+	return &App{service: service, api: localapi.New(service)}
 }
 
 func (a *App) Startup(ctx context.Context) {
@@ -99,11 +103,23 @@ func (a *App) Startup(ctx context.Context) {
 	if os.Getenv("DEVLAN_TEST_MOCK") == "1" {
 		return
 	}
+	if _, err := a.api.Start(); err == nil {
+		a.ownsAPI = true
+	} else if !errors.Is(err, localapi.ErrAlreadyRunning) {
+		_ = a.service.Store.AppendSecurityAudit("API_GUI_WARN", "UI não iniciou a API local: "+err.Error())
+	}
 	go func() {
 		startupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		_, _ = a.service.Reload(startupCtx)
 	}()
+}
+
+func (a *App) Shutdown(ctx context.Context) {
+	if a.ownsAPI {
+		_ = a.api.Close(ctx)
+		a.ownsAPI = false
+	}
 }
 
 func (a *App) GetProjects(filter string) ([]ProjectView, error) {
@@ -136,6 +152,15 @@ func (a *App) GetProjects(filter string) ([]ProjectView, error) {
 
 	filterLower := strings.ToLower(strings.TrimSpace(filter))
 	result := make([]ProjectView, 0, len(effective.Projects))
+	// Resolve.Source describes where the effective mode came from, not where
+	// the project was registered. A project discovered inside a park gets a
+	// concrete mode during EffectiveConfig and would therefore look like a
+	// linked project if we used Resolve.Source here. Keep the registration
+	// source from the persisted config for actions such as unlink.
+	linkedProjects := make(map[string]struct{}, len(cfg.Projects))
+	for _, linked := range cfg.Projects {
+		linkedProjects[linked.Name] = struct{}{}
+	}
 
 	for _, project := range effective.Projects {
 		if filterLower != "" &&
@@ -152,9 +177,9 @@ func (a *App) GetProjects(filter string) ([]ProjectView, error) {
 		tlsActive := effective.SecureProject(project)
 		url := resolved.URL(host, cfg.WindowsPort, cfg.HTTPSPort, tlsActive)
 
-		kind := "linked"
-		if resolved.Source == domain.SourcePark {
-			kind = "parked"
+		kind := "parked"
+		if _, linked := linkedProjects[project.Name]; linked {
+			kind = "linked"
 		}
 
 		framework := "generic"
@@ -439,6 +464,13 @@ func (a *App) UnlinkProject(name string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	_, _, err := a.service.Unlink(ctx, name)
+	return err
+}
+
+func (a *App) HideProject(name string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	_, err := a.service.IgnoreProject(ctx, name)
 	return err
 }
 

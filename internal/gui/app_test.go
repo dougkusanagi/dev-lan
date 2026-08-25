@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/dougkusanagi/dev-lan/internal/app"
+	"github.com/dougkusanagi/dev-lan/internal/detect"
 	"github.com/dougkusanagi/dev-lan/internal/domain"
 	"github.com/dougkusanagi/dev-lan/internal/gui"
 )
@@ -68,6 +69,37 @@ func TestGUI_GetProjects(t *testing.T) {
 	}
 	if projects[0].Status != "ready" {
 		t.Errorf("expected status ready, got %s", projects[0].Status)
+	}
+}
+
+func TestGUI_GetProjectsMarksDiscoveredParkedProjectAsParked(t *testing.T) {
+	t.Setenv("DEVLAN_TEST_MOCK", "1")
+	tempDir := t.TempDir()
+	service := app.New(tempDir)
+	service.Detector = detect.Detector{Inspector: detect.StaticInspector{
+		Directories: map[string]bool{"/home/dev": true},
+		Children:    map[string][]string{"/home/dev": {"/home/dev/dougdesign-seo"}},
+		Files: map[string]bool{
+			"/home/dev/dougdesign-seo/artisan":          true,
+			"/home/dev/dougdesign-seo/public/index.php": true,
+		},
+	}}
+
+	cfg := domain.NewConfig()
+	cfg.Parks = []domain.Park{{Path: "/home/dev"}}
+	if err := service.Store.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	projects, err := gui.NewApp(service).GetProjects("")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(projects) != 1 || projects[0].Name != "dougdesign-seo" {
+		t.Fatalf("unexpected projects: %#v", projects)
+	}
+	if projects[0].Kind != "parked" {
+		t.Fatalf("discovered project should be parked, got %q", projects[0].Kind)
 	}
 }
 

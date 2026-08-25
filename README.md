@@ -10,8 +10,8 @@ http://192.168.1.50/meu-projeto
 
 O núcleo PHP suporta Laravel, Symfony e aplicações genéricas, inclusive com
 múltiplas versões de PHP em paralelo. Sites estáticos, servidores JavaScript
-sob demanda, dashboard e menu na área de notificação continuam nas fases
-seguintes.
+sob demanda, dashboard e menu na área de notificação já estão disponíveis; a
+operação persistente e a recuperação evoluem na Fase 6.
 
 ## Princípios
 
@@ -38,7 +38,8 @@ Caddy no WSL :8181
 PHP-FPM ── projeto Laravel
 ```
 
-No futuro, projetos JavaScript serão atendidos por um supervisor no WSL, que poderá iniciar o script `dev` no primeiro acesso e encerrar o processo depois de um período ocioso.
+Projetos JavaScript são atendidos por um supervisor no WSL, que inicia o
+script `dev` sob demanda e encerra o processo depois de um período ocioso.
 
 ## Experiência esperada no MVP
 
@@ -66,12 +67,11 @@ Sem `devlan secure financeiro`, a URL permanece `http://192.168.1.50/financeiro`
 - [CLI e configuração](docs/CLI-AND-CONFIG.md)
 - [Instalação](docs/INSTALL.md)
 - [Roadmap](docs/ROADMAP.md)
+- [Operação, recuperação e suporte](docs/OPERATIONS.md)
 - [Decisões técnicas](docs/DECISIONS.md)
 
-## Fora do escopo do MVP
+## Fora do escopo da primeira instalação
 
-- Interface gráfica ou menu na tray.
-- Servidores JavaScript sob demanda.
 - DNS interno e distribuição automática da CA para outros dispositivos.
 - Containers e bancos de dados.
 - Instalação automática de dependências dos projetos.
@@ -93,8 +93,13 @@ O núcleo está implementado como uma CLI Go em `cmd/devlan`. Ele cobre:
 - `install`, `uninstall`, `status`, `reload`, `doctor`, `logs`, `open` e os comandos de registro;
 - `php install|list|remove|use|extensions|pool|preset|info` e `composer`;
 - regra de firewall DevLAN limitada ao perfil privado e à sub-rede local.
+- serviço Windows opcional, inicialização no login e API local autenticada por token;
+- exportação/importação sem credenciais, diagnóstico ZIP sanitizado e telemetria opt-in;
+- preparação de updates `stable`/`preview` com validação SHA-256.
 
 `devlan install` prepara os arquivos gerenciados e tenta criar a regra de firewall. Para uma máquina limpa, use o [bootstrap de instalação](docs/INSTALL.md): ele instala Go, WSL/Ubuntu, Caddy, PHP-FPM 8.5, extensões Laravel e Composer, compila a CLI e executa `devlan install`. Dependências dos projetos continuam explícitas; o bootstrap não executa `composer install` automaticamente.
+
+Os procedimentos da Fase 6 estão em [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
 ## Instalação rápida via curl
 
@@ -123,3 +128,15 @@ Durante o desenvolvimento, `--data-dir` permite usar um diretório isolado:
 go run ./cmd/devlan --data-dir .devlan install
 go run ./cmd/devlan --data-dir .devlan doctor
 ```
+
+Para compilar a versão desktop no Windows, use o script que já inclui as tags
+e flags necessárias do Wails:
+
+```powershell
+.\scripts\build.ps1
+devlan gui
+```
+
+Para escolher outro executável, use `.\scripts\build.ps1 -OutputPath .\bin\devlan.exe`.
+Um `go build` sem essas tags compila a CLI, mas o Wails exibe uma mensagem
+informando que a aplicação desktop foi construída sem as tags corretas.

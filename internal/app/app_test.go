@@ -84,6 +84,54 @@ func TestParkDiscoversOnlyLaravelChildren(t *testing.T) {
 	}
 }
 
+func TestIgnoreParkedProjectRemovesItFromEffectiveConfig(t *testing.T) {
+	service := New(t.TempDir())
+	service.Detector = detect.Detector{Inspector: detect.StaticInspector{
+		Directories: map[string]bool{"/home/dev": true},
+		Children:    map[string][]string{"/home/dev": {"/home/dev/dougdesign-seo"}},
+		Files: map[string]bool{
+			"/home/dev/dougdesign-seo/artisan":          true,
+			"/home/dev/dougdesign-seo/public/index.php": true,
+		},
+	}}
+	service.WindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
+	service.WSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
+	ctx := context.Background()
+
+	if _, _, err := service.Park(ctx, "/home/dev"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.IgnoreProject(ctx, "dougdesign-seo"); err != nil {
+		t.Fatalf("ignore parked project: %v", err)
+	}
+
+	cfg, err := service.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Parks) != 1 || len(cfg.Parks[0].IgnoredPaths) != 1 || cfg.Parks[0].IgnoredPaths[0] != "/home/dev/dougdesign-seo" {
+		t.Fatalf("ignored project was not persisted: %#v", cfg.Parks)
+	}
+	effective, err := service.EffectiveConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(effective.Projects) != 0 {
+		t.Fatalf("ignored project should not be discovered: %#v", effective.Projects)
+	}
+
+	if err := cfg.UnignoreParkProject("/home/dev/dougdesign-seo"); err != nil {
+		t.Fatalf("unignore parked project: %v", err)
+	}
+	effective, err = service.EffectiveConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(effective.Projects) != 1 || effective.Projects[0].Name != "dougdesign-seo" {
+		t.Fatalf("unignored project should be discovered again: %#v", effective.Projects)
+	}
+}
+
 func TestLinkRequiresLaravelMarkers(t *testing.T) {
 	service := New(t.TempDir())
 	service.Detector = detect.Detector{Inspector: detect.StaticInspector{}}
@@ -395,4 +443,3 @@ func TestPhase4AppMethods(t *testing.T) {
 		t.Fatalf("Audit log missing event: %s", logs)
 	}
 }
-

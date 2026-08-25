@@ -73,6 +73,22 @@ O script não executa `composer install` nos projetos e não instala bancos,
 Node ou dependências de aplicação. Esses passos continuam explícitos e fora do
 MVP.
 
+## Operação após a instalação
+
+Para manter o controlador disponível sem a UI, instale o serviço opcional em
+um PowerShell elevado:
+
+```powershell
+devlan service install
+devlan service start
+devlan service status
+```
+
+O serviço usa a mesma configuração da CLI e escuta somente a API autenticada
+em loopback. Para uma inicialização de login sem SCM, use
+`devlan startup enable gui`; detalhes de recuperação, exportação e diagnóstico
+estão em [Operação, recuperação e suporte](OPERATIONS.md).
+
 ## Fase 2: mais de uma versão PHP
 
 O bootstrap continua instalando a versão inicial escolhida por `-PhpVersion`.

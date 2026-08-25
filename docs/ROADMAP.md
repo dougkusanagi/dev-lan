@@ -2,7 +2,7 @@
 
 ## Status da implementação
 
-O repositório contém a fundação Go da Fase 0, o núcleo operacional da Fase 1, o suporte WSL da Fase 1.1, o núcleo PHP completo da Fase 2 e o suporte a Estáticos e JavaScript da Fase 3.
+O repositório contém a fundação Go da Fase 0, o núcleo operacional da Fase 1, o suporte WSL da Fase 1.1, o núcleo PHP completo da Fase 2, o suporte a Estáticos e JavaScript da Fase 3, as rotas e segurança da Fase 4 e a interface Wails da Fase 5. A Fase 6 está em andamento: serviço/API local, exportação/importação, diagnóstico, telemetria opt-in e preparação de updates já estão implementados.
 
 As etapas são cumulativas. Uma fase termina somente quando seus critérios de aceite e documentação estiverem concluídos.
 
@@ -152,16 +152,20 @@ Objetivo: oferecer operação visual sem duplicar o núcleo.
 
 Objetivo: tornar a ferramenta confiável para uso diário por equipes e produção local.
 
-- [ ] Serviço Windows opcional em background (independente da UI)
-- [ ] Inicialização no boot/login configurável
-- [ ] API local autenticada (IPC/mTLS/token) entre CLI, UI e serviço
+- [x] Serviço Windows opcional em background (independente da UI)
+- [x] Inicialização no boot/login configurável
+- [x] API local autenticada por token entre CLI, UI e serviço
 - [ ] Instalador Windows assinado
 - [ ] Atualização automática com verificação de checksum e canal estável/preview
-- [ ] Exportação/importação de configurações (sem credenciais/segredos)
-- [ ] Telemetria puramente opt-in e sanitizada
-- [ ] Diagnóstico exportável em arquivo único para suporte
-- [ ] Documentação completa de troubleshooting, recuperação e desinstalação
+- [x] Exportação/importação de configurações (sem credenciais/segredos)
+- [x] Telemetria puramente opt-in e sanitizada
+- [x] Diagnóstico exportável em arquivo único para suporte
+- [x] Documentação completa de troubleshooting, recuperação e desinstalação
 - [ ] Matriz de testes automatizados Windows 10/11, WSL2 e Ubuntu
+
+O verificador de manifesto e o download em staging com SHA-256 já existem;
+essa linha permanece pendente até haver um endpoint de release estável/preview,
+troca automática coordenada pelo serviço e instalador Windows assinado.
 
 **Critério de aceite:** Instalação, atualização, recuperação e remoção são previsíveis em máquinas limpas e não deixam arquivos órfãos.
 
@@ -179,4 +183,3 @@ O produto é considerado completo quando:
 - [ ] Processos ociosos são encerrados conforme política de idle timeout
 - [ ] Instalação e desinstalação não deixam firewall, serviço ou arquivos órfãos
 - [ ] Testes e documentação cobrem todos os fluxos suportados
-

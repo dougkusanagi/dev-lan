@@ -28,7 +28,8 @@ import {
   Unlock,
   RefreshCw,
   Terminal,
-  Layers
+  Layers,
+  EyeOff
 } from 'lucide-react';
 import { api } from './api';
 import { ProjectInfo, SystemStatus, DoctorCheck, GlobalConfig, ProjectConfigUpdate, ProjectStatus } from './types';
@@ -231,6 +232,17 @@ export default function App() {
       showToast(`Projeto ${name} desvinculado.`);
     } catch (err: any) {
       showToast(`Erro ao desvincular: ${err?.message || err}`);
+    }
+  };
+
+  const handleHide = async (name: string) => {
+    if (!confirm(`Ocultar o projeto "${name}" da lista? Os arquivos e o diretório estacionado NÃO serão alterados.`)) return;
+    try {
+      await api.hideProject(name);
+      await refreshData();
+      showToast(`Projeto ${name} ocultado da lista.`);
+    } catch (err: any) {
+      showToast(`Erro ao ocultar: ${err?.message || err}`);
     }
   };
 
@@ -726,13 +738,21 @@ export default function App() {
                         >
                           <Settings className="w-4 h-4" />
                         </button>
-                        {project.kind === 'linked' && (
+                        {project.kind === 'linked' ? (
                           <button
                             onClick={() => handleUnlink(project.name)}
                             className="p-1.5 rounded hover:bg-rose-50 dark:hover:bg-rose-950 text-slate-400 hover:text-rose-600 transition-colors"
                             title="Desvincular Projeto"
                           >
                             <Trash2 className="w-4 h-4" />
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleHide(project.name)}
+                            className="p-1.5 rounded hover:bg-amber-50 dark:hover:bg-amber-950 text-slate-400 hover:text-amber-600 transition-colors"
+                            title="Ocultar Projeto Estacionado"
+                          >
+                            <EyeOff className="w-4 h-4" />
                           </button>
                         )}
                       </div>

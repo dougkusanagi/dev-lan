@@ -176,3 +176,39 @@ func TestStoreRoundTripPhase4FieldsAndAudit(t *testing.T) {
 		t.Fatalf("log de auditoria não contém evento esperado: %s", audit)
 	}
 }
+
+func TestExportRemovesCredentialsAndTemporaryExposure(t *testing.T) {
+	store := NewStore(t.TempDir())
+	mode := domain.ModePHP
+	auth := true
+	exposed := "2030-01-01T00:00:00Z"
+	cfg := domain.NewConfig()
+	cfg.AuthUsers = []domain.AuthUser{{Username: "admin", PasswordHash: "$2a$secret"}}
+	cfg.Projects = []domain.Project{{
+		Name:         "portal",
+		Path:         "/home/dev/portal",
+		Mode:         &mode,
+		AuthEnabled:  &auth,
+		AuthUsers:    []domain.AuthUser{{Username: "user", PasswordHash: "project-hash"}},
+		ExposedUntil: &exposed,
+	}}
+	data, err := MarshalExport(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"$2a$secret", "project-hash", "admin", "2030-01-01"} {
+		if strings.Contains(string(data), secret) {
+			t.Fatalf("exportação contém dado sensível %q: %s", secret, data)
+		}
+	}
+	imported, err := UnmarshalExport(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(imported.AuthUsers) != 0 || len(imported.Projects[0].AuthUsers) != 0 || imported.Projects[0].AuthEnabled != nil || imported.Projects[0].ExposedUntil != nil {
+		t.Fatalf("dados sensíveis não foram removidos no import: %#v", imported)
+	}
+	if err := store.Save(imported); err != nil {
+		t.Fatal(err)
+	}
+}

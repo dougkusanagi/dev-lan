@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -16,9 +17,11 @@ import (
 	"github.com/dougkusanagi/dev-lan/internal/caddy"
 	"github.com/dougkusanagi/dev-lan/internal/config"
 	"github.com/dougkusanagi/dev-lan/internal/detect"
+	"github.com/dougkusanagi/dev-lan/internal/diagnostic"
 	"github.com/dougkusanagi/dev-lan/internal/domain"
 	phpconfig "github.com/dougkusanagi/dev-lan/internal/php"
 	"github.com/dougkusanagi/dev-lan/internal/platform"
+	"github.com/dougkusanagi/dev-lan/internal/telemetry"
 )
 
 type App struct {
@@ -27,6 +30,7 @@ type App struct {
 	WSL          platform.WSLRunner
 	PHP          platform.PHPManager
 	Dev          platform.DevManager
+	Telemetry    telemetry.Store
 	WindowsCaddy platform.CaddyClient
 	WSLCaddy     platform.CaddyClient
 	Now          func() time.Time
@@ -50,6 +54,7 @@ func New(dataDir string) *App {
 		WSL:          wsl,
 		PHP:          platform.NewWSLPHPManager(wsl),
 		Dev:          platform.NewWSLDevManager(wsl),
+		Telemetry:    telemetry.NewStore(dataDir),
 		WindowsCaddy: winCaddy,
 		WSLCaddy:     wslCaddy,
 		Now:          time.Now,
@@ -120,18 +125,20 @@ func (a *App) InstallWithPort(ctx context.Context, configureFirewall bool, windo
 		result.Warnings = append(result.Warnings, "PHP-FPM não encontrado no WSL; instale uma versão suportada e execute devlan doctor")
 	}
 	_ = a.appendLog("install concluído")
+	a.recordTelemetry("install", map[string]string{"result": "ok"})
 	return result, nil
 }
 
 func (a *App) Uninstall(ctx context.Context) (ApplyResult, error) {
 	result := ApplyResult{}
+	_ = a.appendLog("uninstall iniciado")
 	if err := platform.RemoveFirewall(ctx); err != nil && runtime.GOOS == "windows" {
 		result.Warnings = append(result.Warnings, "não foi possível remover a regra de firewall DevLAN; execute uninstall como administrador")
 	}
 	if err := a.Store.RemoveManagedFiles(); err != nil {
 		return result, err
 	}
-	_ = a.appendLog("uninstall concluído")
+	a.recordTelemetry("uninstall", map[string]string{"result": "ok"})
 	return result, nil
 }
 
@@ -196,6 +203,7 @@ func (a *App) Link(ctx context.Context, name, projectPath string) (domain.Projec
 		return domain.Project{}, result, err
 	}
 	_ = a.appendLog("link %s %s", project.Name, project.Path)
+	a.recordTelemetry("link", map[string]string{"mode": string(detected.Kind), "result": "ok"})
 	return project, result, nil
 }
 
@@ -213,7 +221,54 @@ func (a *App) Unlink(ctx context.Context, name string) (domain.Project, ApplyRes
 		return domain.Project{}, result, err
 	}
 	_ = a.appendLog("unlink %s", project.Name)
+	a.recordTelemetry("unlink", map[string]string{"result": "ok"})
 	return project, result, nil
+}
+
+// IgnoreProject hides a project discovered from a parked directory without
+// registering it as an explicit project and without touching its files.
+func (a *App) IgnoreProject(ctx context.Context, selector string) (ApplyResult, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	effective, err := a.EffectiveConfig(ctx, cfg)
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	selected, found := projectBySelector(effective.Projects, strings.TrimSpace(selector))
+	if !found {
+		return ApplyResult{}, fmt.Errorf("projeto não encontrado: %s", selector)
+	}
+	if _, linked := cfg.Project(selected.Name); linked {
+		return ApplyResult{}, fmt.Errorf("projeto %s está vinculado; use desvincular", selected.Name)
+	}
+	if err := cfg.IgnoreParkProject(selected.Path); err != nil {
+		return ApplyResult{}, err
+	}
+	result, err := a.saveAndApply(ctx, cfg, true)
+	if err != nil {
+		return result, err
+	}
+	_ = a.appendLog("projeto estacionado ocultado %s", selected.Name)
+	return result, nil
+}
+
+// UnignoreProject makes a project below a parked directory discoverable again.
+func (a *App) UnignoreProject(ctx context.Context, projectPath string) (ApplyResult, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	if err := cfg.UnignoreParkProject(projectPath); err != nil {
+		return ApplyResult{}, err
+	}
+	result, err := a.saveAndApply(ctx, cfg, true)
+	if err != nil {
+		return result, err
+	}
+	_ = a.appendLog("projeto estacionado exibido novamente %s", projectPath)
+	return result, nil
 }
 
 func (a *App) Park(ctx context.Context, projectPath string) (domain.Park, ApplyResult, error) {
@@ -795,6 +850,7 @@ func (a *App) Reload(ctx context.Context) (ApplyResult, error) {
 	result, err := a.apply(ctx, cfg, true, true)
 	if err == nil {
 		_ = a.appendLog("reload aplicado")
+		a.recordTelemetry("reload", map[string]string{"result": "ok"})
 	}
 	return result, err
 }
@@ -940,6 +996,16 @@ func (a *App) EffectiveConfig(ctx context.Context, cfg domain.Config) (domain.Co
 		for _, item := range discovered {
 			childPath, err := domain.NormalizePath(item.ProjectPath)
 			if err != nil {
+				continue
+			}
+			ignored := false
+			for _, ignoredPath := range park.IgnoredPaths {
+				if ignoredPath == childPath {
+					ignored = true
+					break
+				}
+			}
+			if ignored {
 				continue
 			}
 			if _, exists := knownPaths[childPath]; exists {
@@ -1788,7 +1854,7 @@ func (a *App) ExportCA(ctx context.Context, targetPath string) (string, error) {
 		return "", fmt.Errorf("ler CA raiz (%s): %w", src, err)
 	}
 	if targetPath == "" {
-		targetPath = filepath.Join(a.Store.Paths().Dir, "devlan-ca-root.crt")
+		targetPath = a.Store.Paths().CARootExport
 	}
 	if err := os.WriteFile(targetPath, data, 0o644); err != nil {
 		return "", fmt.Errorf("gravar certificado em %s: %w", targetPath, err)
@@ -1863,4 +1929,122 @@ func (a *App) SyncHosts(ctx context.Context) (ApplyResult, error) {
 
 func (a *App) SecurityAuditLogs(ctx context.Context, lines int) (string, error) {
 	return a.Store.ReadSecurityAudit(lines)
+}
+
+func (a *App) recordTelemetry(name string, attributes map[string]string) {
+	_ = a.Telemetry.Record(name, attributes)
+}
+
+// ExportConfig returns the portable configuration envelope. It deliberately
+// excludes authentication hashes and expiring exposure state.
+func (a *App) ExportConfig() ([]byte, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return nil, err
+	}
+	return config.MarshalExport(cfg)
+}
+
+// ImportConfig validates a portable configuration before applying it. The
+// generated files are validated/reloaded first; the persisted state changes
+// only after the new runtime configuration is accepted.
+func (a *App) ImportConfig(ctx context.Context, data []byte) (ApplyResult, error) {
+	cfg, err := config.UnmarshalExport(data)
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	result, err := a.SaveConfigAndApply(ctx, cfg, true)
+	if err == nil {
+		_ = a.appendLog("configuração importada")
+		_ = a.Store.AppendSecurityAudit("CONFIG_IMPORT", "configuração portátil importada sem credenciais")
+	}
+	return result, err
+}
+
+// DiagnosticBundle creates a support artifact from an explicit allowlist of
+// managed files. Project contents, environment variables and credentials are
+// never traversed or included.
+func (a *App) DiagnosticBundle(ctx context.Context, targetPath string) (string, error) {
+	now := time.Now()
+	if a.Now != nil {
+		now = a.Now()
+	}
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return "", err
+	}
+	exported, err := config.MarshalExport(cfg)
+	if err != nil {
+		return "", err
+	}
+	checks, doctorErr := a.Doctor(ctx, "")
+	if doctorErr != nil {
+		checks = []Check{{Name: "doctor", Status: "WARN", Detail: doctorErr.Error()}}
+	}
+	doctorData, err := json.MarshalIndent(checks, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("serializar diagnóstico: %w", err)
+	}
+
+	entries := map[string][]byte{
+		"config.json": exported,
+		"doctor.json": append(doctorData, '\n'),
+		"runtime.txt": []byte(fmt.Sprintf("runtime=%s\ndata_dir=%s\n", RuntimeDescription(), a.Store.Paths().Dir)),
+	}
+	paths := a.Store.Paths()
+	for archiveName, sourcePath := range map[string]string{
+		"generated/Caddyfile.windows": paths.WindowsCaddy,
+		"generated/Caddyfile.wsl":     paths.WSLCaddy,
+		"logs/devlan.log":             filepath.Join(paths.LogsDir, "devlan.log"),
+		"logs/security.log":           paths.SecurityLog,
+	} {
+		data, readErr := os.ReadFile(sourcePath)
+		if errors.Is(readErr, os.ErrNotExist) {
+			continue
+		}
+		if readErr != nil {
+			return "", fmt.Errorf("ler %s para o diagnóstico: %w", sourcePath, readErr)
+		}
+		if strings.HasSuffix(archiveName, "Caddyfile.windows") || strings.HasSuffix(archiveName, "Caddyfile.wsl") {
+			data = redactDiagnosticConfig(data)
+		}
+		entries[archiveName] = data
+	}
+
+	if targetPath == "" {
+		stamp := now.UTC().Format("20060102-150405")
+		targetPath = filepath.Join(paths.Dir, "devlan-diagnostic-"+stamp+".zip")
+	}
+	manifest := diagnostic.Manifest{
+		Format:    diagnostic.Format,
+		Version:   diagnostic.Version,
+		CreatedAt: now.UTC().Format(time.RFC3339),
+		OS:        runtime.GOOS,
+		Arch:      runtime.GOARCH,
+	}
+	if err := diagnostic.Write(targetPath, manifest, entries); err != nil {
+		return "", err
+	}
+	_ = a.appendLog("diagnóstico exportado: %s", targetPath)
+	return targetPath, nil
+}
+
+func redactDiagnosticConfig(data []byte) []byte {
+	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	inBasicAuth := false
+	for index, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "basicauth {" {
+			inBasicAuth = true
+			continue
+		}
+		if inBasicAuth {
+			if trimmed == "}" {
+				inBasicAuth = false
+				continue
+			}
+			lines[index] = "            <credencial removida do diagnóstico>"
+		}
+	}
+	return []byte(strings.Join(lines, "\n"))
 }

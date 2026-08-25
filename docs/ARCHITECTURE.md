@@ -211,3 +211,22 @@ Para projetos no filesystem Linux, o núcleo aplica ACLs restritas ao projeto:
 PHP-FPM possa servir e gravar arquivos de runtime. ACLs padrão são aplicadas a
 subdiretórios para arquivos futuros. O DevLAN não altera permissões globais do
 home do usuário.
+
+## Operação da Fase 6
+
+O serviço Windows opcional é um cliente de controle, não uma segunda
+implementação do domínio. O SCM inicia o mesmo executável com `service run`; o
+processo cria uma API HTTP em `127.0.0.1`, carrega o mesmo `config.toml`/
+`state.json`, aplica a configuração e encerra de forma controlada em
+`SERVICE_STOP` ou `SERVICE_SHUTDOWN`. A UI Wails e a CLI podem continuar usando
+o `app.App` diretamente ou o transporte versionado da API.
+
+O token da API é criado com aleatoriedade criptográfica e armazenado fora do
+estado exportável. O endpoint é escolhido em porta loopback efêmera e fica em
+um arquivo de estado de processo; nenhuma porta de controle é aberta na LAN.
+
+Exportações passam por uma cópia profunda sanitizada antes da serialização.
+Diagnósticos recebem apenas uma allowlist explícita de arquivos gerenciados e
+aplicam redação específica a blocos `basicauth`. Telemetria tem consentimento
+persistido separado, fila local e envio manual; não participa do fluxo normal
+de reload.

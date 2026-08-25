@@ -105,10 +105,11 @@ type Project struct {
 }
 
 type Park struct {
-	Path      string     `json:"path"`
-	Mode      *Mode      `json:"mode,omitempty"`
-	RouteMode *RouteMode `json:"route_mode,omitempty"`
-	Allowlist []string   `json:"allowlist,omitempty"`
+	Path         string     `json:"path"`
+	Mode         *Mode      `json:"mode,omitempty"`
+	RouteMode    *RouteMode `json:"route_mode,omitempty"`
+	Allowlist    []string   `json:"allowlist,omitempty"`
+	IgnoredPaths []string   `json:"ignored_paths,omitempty"`
 }
 
 type Config struct {
@@ -393,23 +394,23 @@ func NormalizeHost(value string) (string, error) {
 
 func NewConfig() Config {
 	return Config{
-		Version:            1,
-		DefaultMode:        ModePHP,
-		DefaultRouteMode:   RouteModePath,
-		RouteBasePort:      8080,
-		DomainSuffix:       "lan",
-		LANAddress:         "auto",
-		WindowsPort:        80,
-		HTTPSPort:          443,
-		WSLPort:            8181,
-		PHPFPMOsocket:      "/run/php/php-fpm.sock",
-		PHPDefaultVersion:  "8.5",
-		PHPFPMPool:         DefaultPHPFPMPoolConfig(),
-		Composer:           ComposerConfig{Environment: ComposerPerVersion, Binary: "composer"},
-		Allowlist:          []string{},
-		AuthUsers:          []AuthUser{},
-		Projects:           []Project{},
-		Parks:              []Park{},
+		Version:           1,
+		DefaultMode:       ModePHP,
+		DefaultRouteMode:  RouteModePath,
+		RouteBasePort:     8080,
+		DomainSuffix:      "lan",
+		LANAddress:        "auto",
+		WindowsPort:       80,
+		HTTPSPort:         443,
+		WSLPort:           8181,
+		PHPFPMOsocket:     "/run/php/php-fpm.sock",
+		PHPDefaultVersion: "8.5",
+		PHPFPMPool:        DefaultPHPFPMPoolConfig(),
+		Composer:          ComposerConfig{Environment: ComposerPerVersion, Binary: "composer"},
+		Allowlist:         []string{},
+		AuthUsers:         []AuthUser{},
+		Projects:          []Project{},
+		Parks:             []Park{},
 	}
 }
 
@@ -686,6 +687,19 @@ func (c *Config) Normalize() error {
 		}
 		sort.Strings(park.Allowlist)
 		park.Allowlist = uniqueStrings(park.Allowlist)
+		seenIgnoredPaths := map[string]struct{}{}
+		for j, ignoredPath := range park.IgnoredPaths {
+			norm, err := NormalizePath(ignoredPath)
+			if err != nil {
+				return fmt.Errorf("park %q: projeto ignorado: %w", park.Path, err)
+			}
+			if _, exists := seenIgnoredPaths[norm]; exists {
+				return fmt.Errorf("park %q: projeto ignorado duplicado: %q", park.Path, norm)
+			}
+			seenIgnoredPaths[norm] = struct{}{}
+			park.IgnoredPaths[j] = norm
+		}
+		sort.Strings(park.IgnoredPaths)
 	}
 
 	sort.Slice(c.Projects, func(i, j int) bool { return c.Projects[i].Name < c.Projects[j].Name })
@@ -798,6 +812,64 @@ func (c *Config) Unpark(path string) (Park, error) {
 		}
 	}
 	return Park{}, fmt.Errorf("diretório não estacionado: %s", normalizedPath)
+}
+
+// IgnoreParkProject prevents a project discovered below a parked directory
+// from being materialized in the effective project list. It does not alter
+// the project files or the parked directory itself.
+func (c *Config) IgnoreParkProject(projectPath string) error {
+	normalizedProjectPath, err := NormalizePath(projectPath)
+	if err != nil {
+		return err
+	}
+	found := false
+	for i := range c.Parks {
+		if !isDirectChild(c.Parks[i].Path, normalizedProjectPath) {
+			continue
+		}
+		found = true
+		alreadyIgnored := false
+		for _, ignoredPath := range c.Parks[i].IgnoredPaths {
+			if ignoredPath == normalizedProjectPath {
+				alreadyIgnored = true
+				break
+			}
+		}
+		if !alreadyIgnored {
+			c.Parks[i].IgnoredPaths = append(c.Parks[i].IgnoredPaths, normalizedProjectPath)
+		}
+	}
+	if !found {
+		return fmt.Errorf("projeto não pertence a um diretório estacionado: %s", normalizedProjectPath)
+	}
+	return c.Normalize()
+}
+
+// UnignoreParkProject makes a previously hidden parked project discoverable
+// again. It is intentionally idempotent when the path is already visible.
+func (c *Config) UnignoreParkProject(projectPath string) error {
+	normalizedProjectPath, err := NormalizePath(projectPath)
+	if err != nil {
+		return err
+	}
+	found := false
+	for i := range c.Parks {
+		if !isDirectChild(c.Parks[i].Path, normalizedProjectPath) {
+			continue
+		}
+		found = true
+		filtered := c.Parks[i].IgnoredPaths[:0]
+		for _, ignoredPath := range c.Parks[i].IgnoredPaths {
+			if ignoredPath != normalizedProjectPath {
+				filtered = append(filtered, ignoredPath)
+			}
+		}
+		c.Parks[i].IgnoredPaths = filtered
+	}
+	if !found {
+		return fmt.Errorf("projeto não pertence a um diretório estacionado: %s", normalizedProjectPath)
+	}
+	return c.Normalize()
 }
 
 func (c *Config) SetDefaultMode(mode Mode) error {
@@ -1569,4 +1641,3 @@ func (r ResolvedProject) URL(host string, httpPort, httpsPort int, secure bool) 
 }
 
 var ErrUnsupportedMode = errors.New("modo ainda não implementado")
-

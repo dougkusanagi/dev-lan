@@ -33,6 +33,9 @@ func Launch(service *app.App) error {
 		OnStartup: func(ctx context.Context) {
 			guiApp.Startup(ctx)
 		},
+		OnShutdown: func(ctx context.Context) {
+			guiApp.Shutdown(ctx)
+		},
 		Bind: []interface{}{
 			guiApp,
 		},

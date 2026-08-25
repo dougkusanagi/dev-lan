@@ -12,6 +12,7 @@ declare global {
           SaveProjectConfig: (update: ProjectConfigUpdate) => Promise<void>;
           LinkProject: (name: string, path: string) => Promise<void>;
           UnlinkProject: (name: string) => Promise<void>;
+          HideProject: (name: string) => Promise<void>;
           ParkDir: (path: string) => Promise<void>;
           UnparkDir: (path: string) => Promise<void>;
           StartDev: (name: string) => Promise<void>;
@@ -121,6 +122,10 @@ export const api = {
 
   async unlinkProject(name: string): Promise<void> {
     if (isWails) return window.go!.gui!.App!.UnlinkProject(name);
+  },
+
+  async hideProject(name: string): Promise<void> {
+    if (isWails) return window.go!.gui!.App!.HideProject(name);
   },
 
   async parkDir(path: string): Promise<void> {

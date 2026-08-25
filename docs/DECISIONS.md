@@ -112,3 +112,18 @@ O MVP usa `http://IP/nome` por ser a opção que não depende de DNS. O produto 
 - `host`: melhor experiência, requer DNS ou hosts distribuído.
 
 A ferramenta deve recomendar o modo com base no tipo de projeto, sem alterar automaticamente uma escolha explícita.
+
+## Transporte de controle na Fase 6
+
+O serviço Windows e os clientes locais usam uma API HTTP limitada a loopback,
+com token aleatório persistido fora do estado exportável. O token foi escolhido
+como primeiro transporte porque funciona entre processo Go, Wails e CLI sem
+exigir uma dependência de mTLS ou uma segunda implementação de protocolo; o
+binding em `127.0.0.1`, a validação do endpoint e a comparação em tempo
+constante reduzem a superfície enquanto IPC nativo continua opcional.
+
+Exportação e diagnóstico têm pipelines separados e sanitizados. Nenhum deles
+transporta hashes de autenticação, exposições temporárias, variáveis de
+ambiente ou conteúdo de projetos. Atualizações são baixadas para um estágio
+temporário e verificadas por SHA-256; a substituição automática permanece
+dependente do instalador Windows assinado e do pipeline de releases.
