@@ -16,18 +16,18 @@ Um executável Go concentra regras de negócio e oferece a CLI. Ele será respon
 
 Operações administrativas devem ser pequenas e explícitas. A execução normal de `link`, `status` e `open` não deve pedir elevação.
 
-### CLI no WSL planejada
+### CLI no WSL
 
-O bootstrap instalará também um binário Linux `devlan` no WSL. Ele será um
-cliente do núcleo controlador no Windows, não uma segunda implementação do
-domínio. Sua função será interpretar caminhos e variáveis no namespace Linux,
-identificar `WSL_DISTRO_NAME` e enviar comandos estruturados ao controlador.
+O bootstrap instala também um binário Linux `devlan` no WSL. Ele é um cliente
+fino do núcleo controlador no Windows, não uma segunda implementação do
+domínio. Sua função é interpretar caminhos no namespace Linux e enviar
+comandos estruturados pelo endpoint loopback autenticado `/v1/command`.
 
-O estado continuará autoritativo em `%LOCALAPPDATA%/DevLAN`. O cliente WSL não
-manterá configuração concorrente em `$HOME`, e a comunicação deverá validar
-versão, distribuição, operação e argumentos. O agente Linux futuro para
-processos JavaScript poderá compartilhar o transporte, mas terá responsabilidade
-separada da CLI interativa.
+O estado continua autoritativo em `%LOCALAPPDATA%/DevLAN`. O cliente WSL não
+mantém configuração concorrente em `$HOME`; a distribuição usa um arquivo
+somente de configuração que aponta para o diretório montado do Windows. A API
+valida versão, token, origem loopback, operação e argumentos. O agente Linux
+para processos JavaScript continua sendo uma responsabilidade separada.
 
 ### Caddy no Windows
 
@@ -94,17 +94,18 @@ CLI do framework ou código da aplicação.
 allowlist de campos. A página não é um `phpinfo()` e não inclui ambiente,
 headers, valores de request ou segredos.
 
-### Runtime JavaScript futuro
+### Runtime JavaScript
 
-Um agente no WSL será supervisor e reverse proxy para projetos JS. Ele deverá:
+O supervisor mantém um gateway estável para cada projeto JS e atua como reverse
+proxy para o processo backend. Ele:
 
 - detectar Bun, pnpm, Yarn ou npm pelo lockfile;
 - ler apenas scripts permitidos do `package.json`;
-- iniciar o servidor dev sob demanda;
+- iniciar o servidor dev sob demanda após a primeira requisição;
 - reservar uma porta estável por projeto;
 - aguardar readiness antes de encaminhar;
 - suportar WebSocket/HMR;
-- encerrar processos após um idle timeout;
+- encerrar processos após um idle timeout medido pela atividade do gateway;
 - nunca instalar dependências apenas porque ocorreu uma requisição HTTP.
 
 ## Fluxo de uma requisição PHP no MVP
@@ -153,6 +154,7 @@ Proposta:
 %LOCALAPPDATA%/DevLAN/
   config.toml
   state.json
+  wsl-distribution
   generated/Caddyfile.windows
   generated/Caddyfile.wsl
   generated/php/php-8-5.conf
@@ -182,13 +184,14 @@ comandos shell.
 `scripts/install.ps1` é um adaptador de instalação, separado do domínio. Ele
 baixa o código-fonte, instala Go e Caddy no Windows, chama
 `scripts/install-wsl.sh` com argumentos separados para instalar PHP-FPM,
-Composer, extensões Laravel e Caddy no WSL, compila `devlan.exe` e delega a
-configuração final para o comando `devlan install`. A seleção de versões é
+Composer, extensões Laravel e Caddy no WSL, compila `devlan.exe` e o cliente
+Linux do WSL e delega a configuração final para o comando `devlan install`. A
+seleção de versões é
 explícita; o script não instala dependências de projetos nem executa scripts
 encontrados nos diretórios registrados.
 
-Na Fase 1.1, o mesmo bootstrap também fará cross-compilation do cliente Linux e
-o instalará como `/usr/local/bin/devlan` na distribuição selecionada.
+O cliente Linux é instalado como `/usr/local/bin/devlan` na distribuição
+selecionada e usa o diretório montado do estado Windows.
 
 ## Aplicação segura de configuração
 

@@ -56,6 +56,13 @@ export interface GlobalConfig {
   defaultRouteMode: string;
 }
 
+export interface PHPVersion {
+  version: string;
+  installed: boolean;
+  configured: boolean;
+  extensions?: string[];
+}
+
 export interface ProjectConfigUpdate {
   name: string;
   mode?: string;

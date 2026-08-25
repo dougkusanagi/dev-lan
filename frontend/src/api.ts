@@ -1,4 +1,4 @@
-import { ProjectInfo, SystemStatus, DoctorCheck, GlobalConfig, ProjectConfigUpdate } from './types';
+import { ProjectInfo, SystemStatus, DoctorCheck, GlobalConfig, ProjectConfigUpdate, PHPVersion } from './types';
 
 declare global {
   interface Window {
@@ -8,6 +8,10 @@ declare global {
           GetProjects: (filter: string) => Promise<ProjectInfo[]>;
           GetStatus: () => Promise<SystemStatus>;
           GetGlobalConfig: () => Promise<GlobalConfig>;
+          GetPHPVersions: () => Promise<PHPVersion[]>;
+          InstallPHPVersion: (version: string) => Promise<void>;
+          RemovePHPVersion: (version: string) => Promise<void>;
+          SetDefaultPHPVersion: (version: string) => Promise<void>;
           SaveGlobalConfig: (cfg: GlobalConfig) => Promise<void>;
           SaveProjectConfig: (update: ProjectConfigUpdate) => Promise<void>;
           LinkProject: (name: string, path: string) => Promise<void>;
@@ -26,6 +30,10 @@ declare global {
           OpenURL: (url: string) => Promise<void>;
           CopyURL: (url: string) => Promise<void>;
           Reload: () => Promise<void>;
+          ExportConfigJSON: () => Promise<string>;
+          ExportDiagnostic: () => Promise<string>;
+          TrustCA: () => Promise<void>;
+          GetSecurityAudit: (lines: number) => Promise<string>;
         };
       };
     };
@@ -106,6 +114,23 @@ export const api = {
       allowlist: ['192.168.0.0/16', '10.0.0.0/8'],
       defaultRouteMode: 'path',
     };
+  },
+
+  async getPHPVersions(): Promise<PHPVersion[]> {
+    if (isWails) return window.go!.gui!.App!.GetPHPVersions();
+    return [];
+  },
+
+  async installPHPVersion(version: string): Promise<void> {
+    if (isWails) return window.go!.gui!.App!.InstallPHPVersion(version);
+  },
+
+  async removePHPVersion(version: string): Promise<void> {
+    if (isWails) return window.go!.gui!.App!.RemovePHPVersion(version);
+  },
+
+  async setDefaultPHPVersion(version: string): Promise<void> {
+    if (isWails) return window.go!.gui!.App!.SetDefaultPHPVersion(version);
   },
 
   async saveGlobalConfig(cfg: GlobalConfig): Promise<void> {
@@ -193,5 +218,24 @@ export const api = {
 
   async reload(): Promise<void> {
     if (isWails) return window.go!.gui!.App!.Reload();
+  },
+
+  async exportConfigJSON(): Promise<string> {
+    if (isWails) return window.go!.gui!.App!.ExportConfigJSON();
+    return JSON.stringify({}, null, 2);
+  },
+
+  async exportDiagnostic(): Promise<string> {
+    if (isWails) return window.go!.gui!.App!.ExportDiagnostic();
+    return '';
+  },
+
+  async trustCA(): Promise<void> {
+    if (isWails) return window.go!.gui!.App!.TrustCA();
+  },
+
+  async getSecurityAudit(lines = 100): Promise<string> {
+    if (isWails) return window.go!.gui!.App!.GetSecurityAudit(lines);
+    return '';
   }
 };

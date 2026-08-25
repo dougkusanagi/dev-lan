@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -81,6 +82,17 @@ func TestParkDiscoversOnlyLaravelChildren(t *testing.T) {
 	}
 	if _, err := effective.Resolve("financeiro"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestNewLoadsConfiguredWSLDistribution(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dataDir, "wsl-distribution"), []byte("Ubuntu-24.04\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service := New(dataDir)
+	if service.WSL.Distribution != "Ubuntu-24.04" {
+		t.Fatalf("distribuição WSL não carregada: %q", service.WSL.Distribution)
 	}
 }
 

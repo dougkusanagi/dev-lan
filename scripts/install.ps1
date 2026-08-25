@@ -411,6 +411,46 @@ function Build-Devlan {
     return $target
 }
 
+function Build-DevlanWsl {
+    param([Parameter(Mandatory = $true)][string]$GoPath, [Parameter(Mandatory = $true)][string]$SourceRoot)
+    Write-Step 'Compilando cliente Linux do DevLAN para o WSL'
+    $target = Join-Path $script:TempWork 'devlan-linux-amd64'
+    Push-Location $SourceRoot
+    $oldGoos = $env:GOOS
+    $oldGoarch = $env:GOARCH
+    $oldCgo = $env:CGO_ENABLED
+    try {
+        $env:GOOS = 'linux'
+        $env:GOARCH = 'amd64'
+        $env:CGO_ENABLED = '0'
+        Invoke-Native $GoPath @('build', '-trimpath', '-ldflags', '-s -w', '-o', $target, './cmd/devlan') | Write-Host
+    } finally {
+        if ($null -eq $oldGoos) { Remove-Item Env:GOOS -ErrorAction SilentlyContinue } else { $env:GOOS = $oldGoos }
+        if ($null -eq $oldGoarch) { Remove-Item Env:GOARCH -ErrorAction SilentlyContinue } else { $env:GOARCH = $oldGoarch }
+        if ($null -eq $oldCgo) { Remove-Item Env:CGO_ENABLED -ErrorAction SilentlyContinue } else { $env:CGO_ENABLED = $oldCgo }
+        Pop-Location
+    }
+    return $target
+}
+
+function Install-WslClient {
+    param(
+        [Parameter(Mandatory = $true)][string]$WslDistribution,
+        [Parameter(Mandatory = $true)][string]$LinuxBinary,
+        [Parameter(Mandatory = $true)][string]$WindowsDataDir
+    )
+    Write-Step "Instalando cliente devlan no WSL ($WslDistribution)"
+    $binaryPath = ConvertTo-WslPath $LinuxBinary
+    $dataFile = Join-Path $script:TempWork 'windows-data-dir'
+    [IO.File]::WriteAllText($dataFile, (ConvertTo-WslPath $WindowsDataDir) + "`n", [System.Text.UTF8Encoding]::new($false))
+    $dataPath = ConvertTo-WslPath $dataFile
+    Invoke-Native 'wsl.exe' @('--distribution', $WslDistribution, '--user', 'root', '--exec', '/bin/mkdir', '-p', '/etc/devlan') | Write-Host
+    Invoke-Native 'wsl.exe' @('--distribution', $WslDistribution, '--user', 'root', '--exec', '/bin/cp', $binaryPath, '/usr/local/bin/devlan') | Write-Host
+    Invoke-Native 'wsl.exe' @('--distribution', $WslDistribution, '--user', 'root', '--exec', '/bin/chmod', '0755', '/usr/local/bin/devlan') | Write-Host
+    Invoke-Native 'wsl.exe' @('--distribution', $WslDistribution, '--user', 'root', '--exec', '/bin/cp', $dataPath, '/etc/devlan/windows-data-dir') | Write-Host
+    Invoke-Native 'wsl.exe' @('--distribution', $WslDistribution, '--user', 'root', '--exec', '/bin/chmod', '0644', '/etc/devlan/windows-data-dir') | Write-Host
+}
+
 try {
     if (-not $InstallRoot) {
         $InstallRoot = Join-Path $env:LOCALAPPDATA 'DevLAN'
@@ -433,8 +473,14 @@ try {
         Install-WslDependencies $distribution (Join-Path $sourceRoot 'scripts\install-wsl.sh')
     }
 
-    $devlanPath = Build-Devlan $goPath $sourceRoot
     $dataDir = $InstallRoot
+    $devlanPath = Build-Devlan $goPath $sourceRoot
+    $wslClientPath = $null
+    if ($distribution) {
+        $wslClientPath = Build-DevlanWsl $goPath $sourceRoot
+        Install-WslClient $distribution $wslClientPath $dataDir
+        Set-Content -LiteralPath (Join-Path $dataDir 'wsl-distribution') -Value $distribution -Encoding utf8
+    }
     $selectedWindowsPort = Select-WindowsPort
     $installArgs = @('--data-dir', $dataDir, 'install', '--windows-port', [string]$selectedWindowsPort)
     if ($NoFirewall) {

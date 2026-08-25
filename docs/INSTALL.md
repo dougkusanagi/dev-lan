@@ -115,9 +115,11 @@ devlan php pool meu-projeto isolated
 explicitamente por um projeto. Diretórios dos projetos e suas dependências não
 são removidos.
 
-O binário `devlan` nativo para uso direto dentro do WSL está planejado para a
-Fase 1.1 e ainda não é instalado pelo bootstrap atual. Ele será um cliente da
-CLI/controlador Windows, preservando uma única fonte de estado.
+O bootstrap também compila e instala `/usr/local/bin/devlan` como cliente Linux
+para uso direto dentro do WSL. Ele encaminha as operações essenciais ao
+controlador Windows pela API local autenticada e preserva uma única fonte de
+estado em `%LOCALAPPDATA%/DevLAN`. O serviço Windows (ou a UI) precisa estar
+em execução para receber os comandos.
 
 ## Versão do PHP
 

@@ -2,7 +2,13 @@
 
 ## Status da implementação
 
-O repositório contém a fundação Go da Fase 0, o núcleo operacional da Fase 1, o suporte WSL da Fase 1.1, o núcleo PHP completo da Fase 2, o suporte a Estáticos e JavaScript da Fase 3, as rotas e segurança da Fase 4 e a interface Wails da Fase 5. A Fase 6 está em andamento: serviço/API local, exportação/importação, diagnóstico, telemetria opt-in e preparação de updates já estão implementados.
+O repositório contém a fundação Go da Fase 0, o núcleo operacional da Fase 1,
+o suporte WSL da Fase 1.1, o núcleo PHP completo da Fase 2, o suporte a
+Estáticos e JavaScript da Fase 3 e as rotas e segurança da Fase 4. A interface
+Wails e a operação da Fase 6 estão parcialmente implementadas: serviço/API
+local, exportação/importação, diagnóstico, telemetria opt-in e preparação de
+updates já existem, enquanto tray real, UI completa, instalador assinado,
+atualização automática e matriz multiplataforma continuam pendentes.
 
 As etapas são cumulativas. Uma fase termina somente quando seus critérios de aceite e documentação estiverem concluídos.
 
@@ -140,9 +146,11 @@ Objetivo: oferecer operação visual sem duplicar o núcleo.
 - [x] Ações rápidas: abrir URL, copiar URL, start, stop, restart e visualizador de logs
 - [x] Editor visual de configuração global e overrides de projeto
 - [x] Diagnóstico integrado com correções guiadas
-- [x] Menu na system tray com notificações acionáveis
+- [ ] Menu na system tray com notificações acionáveis (o menu de aplicação
+      existe, mas o tray ainda não é registrado no ciclo Wails)
 - [x] Acessibilidade por teclado e suporte a tema claro/escuro
-- [x] Empacotador e atualizador seguro
+- [ ] Empacotador e atualizador seguro (há apenas staging/verificação de
+      checksum; falta troca coordenada do executável)
 
 **Critério de aceite:** Todas as operações diárias podem ser executadas pela UI ou CLI com exata paridade e sem divergência de estado.
 
@@ -183,3 +191,36 @@ O produto é considerado completo quando:
 - [ ] Processos ociosos são encerrados conforme política de idle timeout
 - [ ] Instalação e desinstalação não deixam firewall, serviço ou arquivos órfãos
 - [ ] Testes e documentação cobrem todos os fluxos suportados
+
+---
+
+## Correções verificadas após auditoria (2026-08-25)
+
+Esta seção registra as lacunas encontradas na implementação existente. Cada
+item só deve ser marcado depois de haver código integrado, teste automatizado
+e validação do critério descrito. Itens que dependem de infraestrutura externa
+continuam pendentes mesmo que o código de preparação já exista.
+
+- [x] Cliente WSL instalado pelo bootstrap, com protocolo versionado e paridade
+      operacional com o controlador Windows (operações essenciais).
+- [x] Proxy de desenvolvimento com cold start sob demanda, página de
+      inicialização e `Retry-After` para clientes não interativos (ativo no
+      ciclo de vida do serviço/UI).
+- [x] Idle timeout real para servidores JavaScript, baseado em atividade de
+      requisições e com encerramento gracioso (ativo no gateway persistente).
+- [x] API local autenticada com protocolo versionado para as operações
+      essenciais usadas pelo cliente WSL e pelo controlador.
+- [x] UI Wails expõe configuração sanitizada, diagnóstico exportável e
+      confiança da CA local.
+- [x] UI Wails permite listar, instalar, remover e selecionar a versão PHP
+      padrão.
+- [ ] UI Wails expõe todas as operações restantes de PHP, segurança,
+      exportação/importação, telemetria e atualização que já existem na CLI.
+- [x] Testes automatizados para API autenticada e supervisor JS (cold start,
+      `Retry-After` e idle timeout).
+- [ ] Testes de integração do serviço Windows e do bootstrap WSL em máquinas
+      reais.
+- [ ] Instalador Windows assinado e atualização automática com endpoint de
+      release estável/preview (bloqueado por infraestrutura de distribuição).
+- [ ] Matriz automatizada Windows 10/11, WSL2 e Ubuntu (bloqueada por runners
+      dessas plataformas).

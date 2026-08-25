@@ -14,16 +14,16 @@ devlan links
 `CAMINHO`. Como todos os projetos compartilham a mesma borda IP/porta, `SSL`
 reflete uma política global e aparece como `on` ou `off` em todas as linhas.
 
-Uma CLI Linux está planejada para a Fase 1.1. Depois de instalada pelo
-bootstrap, permitirá executar no WSL:
+O bootstrap instala uma CLI Linux fina para executar no WSL:
 
 ```bash
 devlan park ~/Sites
 ```
 
-Ela encaminhará a operação ao controlador Windows; não manterá uma configuração
-separada no WSL. Até essa fase ser implementada, caminhos WSL devem ser passados
-à CLI Windows como caminhos Linux absolutos e com capitalização exata.
+Ela encaminha a operação ao controlador Windows pela API local autenticada e
+não mantém uma configuração separada no WSL. O serviço Windows (ou a UI) deve
+estar em execução; caminhos são interpretados no namespace Linux e enviados ao
+controlador sem conversão para um segundo estado.
 
 `link` associa um nome estável a um diretório específico e tem prioridade sobre projetos descobertos por `park`.
 

@@ -58,6 +58,7 @@ GET  /v1/status
 GET  /v1/projects
 GET  /v1/config
 POST /v1/reload
+POST /v1/command   (cliente Linux WSL; allowlist de operações)
 ```
 
 Para verificar o processo em execução:
@@ -72,9 +73,10 @@ devlan api status
 devlan api serve
 ```
 
-CLI e UI ainda podem chamar o núcleo Go diretamente; ambas as formas usam o
-mesmo modelo e a mesma validação. A API é o contrato de transporte para o
-serviço e para clientes futuros, sem expor a porta da LAN.
+CLI e UI podem chamar o núcleo Go diretamente; o cliente Linux usa `/v1/command`
+para encaminhar `link`, `unlink`, `park`, `unpark`, `links`, `status`, `reload`,
+`doctor` e `open`. Todas as formas usam o mesmo modelo e validação, sem expor a
+porta de controle na LAN.
 
 ## Exportação e importação
 

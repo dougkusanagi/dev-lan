@@ -111,6 +111,7 @@ func (program *backgroundProgram) Execute(_ []string, requests <-chan svc.Change
 		return false, 1
 	}
 	defer server.Close(context.Background())
+	defer background.CloseDevProxies()
 	startupContext, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	statuses <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}

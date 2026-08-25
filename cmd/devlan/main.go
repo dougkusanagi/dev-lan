@@ -17,6 +17,7 @@ import (
 
 	localapi "github.com/dougkusanagi/dev-lan/internal/api"
 	"github.com/dougkusanagi/dev-lan/internal/app"
+	"github.com/dougkusanagi/dev-lan/internal/config"
 	"github.com/dougkusanagi/dev-lan/internal/detect"
 	"github.com/dougkusanagi/dev-lan/internal/domain"
 	"github.com/dougkusanagi/dev-lan/internal/gui"
@@ -58,6 +59,12 @@ func run(args []string) error {
 	if containsHelp(args) {
 		printCommandUsage(command)
 		return nil
+	}
+	// The Linux artifact installed in WSL is deliberately a thin client. It
+	// never opens a second store or runs a second controller; it forwards the
+	// supported operational commands to the authenticated Windows API.
+	if runtime.GOOS == "linux" {
+		return runWSLClient(context.Background(), dataDir, command, args)
 	}
 	service := app.New(dataDir)
 	var ctx context.Context
@@ -801,11 +808,59 @@ func defaultDataDir() string {
 	if localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); localAppData != "" {
 		return filepath.Join(localAppData, "DevLAN")
 	}
+	if runtime.GOOS == "linux" {
+		if data, err := os.ReadFile("/etc/devlan/windows-data-dir"); err == nil {
+			if configured := strings.TrimSpace(string(data)); configured != "" {
+				return filepath.Clean(configured)
+			}
+		}
+	}
 	if home, err := os.UserHomeDir(); err == nil {
 		return filepath.Join(home, ".devlan")
 	}
 	return ".devlan"
 }
+
+func runWSLClient(ctx context.Context, dataDir, command string, args []string) error {
+	allowed := map[string]bool{
+		"link": true, "unlink": true, "park": true, "unpark": true,
+		"links": true, "status": true, "reload": true, "doctor": true, "open": true,
+	}
+	if !allowed[command] {
+		return fmt.Errorf("comando %q ainda não está disponível no cliente WSL; use o controlador Windows", command)
+	}
+	client := localapi.Client{Store: configStore(dataDir)}
+	requestContext, cancel := context.WithTimeout(ctx, 50*time.Second)
+	defer cancel()
+	payload, err := client.Command(requestContext, command, args)
+	if err != nil {
+		return fmt.Errorf("controlador Windows indisponível: %w (inicie `devlan service start` ou a UI)", err)
+	}
+	if message, ok := payload["message"].(string); ok && message != "" {
+		fmt.Println(message)
+	}
+	if command == "links" || command == "status" || command == "doctor" {
+		if command == "links" {
+			if projects, ok := payload["projects"]; ok {
+				data, _ := json.MarshalIndent(projects, "", "  ")
+				fmt.Println(string(data))
+			}
+		} else if command == "status" {
+			if status, ok := payload["status"]; ok {
+				data, _ := json.MarshalIndent(status, "", "  ")
+				fmt.Println(string(data))
+			}
+		} else if checks, ok := payload["checks"]; ok {
+			data, _ := json.MarshalIndent(checks, "", "  ")
+			fmt.Println(string(data))
+		}
+	}
+	return nil
+}
+
+// Kept as a helper to make the WSL transport explicit and easy to substitute
+// in tests without changing the Windows application construction path.
+func configStore(dataDir string) config.Store { return config.NewStore(dataDir) }
 
 func runMode(ctx context.Context, service *app.App, args []string) error {
 	if len(args) != 2 {

@@ -32,7 +32,7 @@ import {
   EyeOff
 } from 'lucide-react';
 import { api } from './api';
-import { ProjectInfo, SystemStatus, DoctorCheck, GlobalConfig, ProjectConfigUpdate, ProjectStatus } from './types';
+import { ProjectInfo, SystemStatus, DoctorCheck, GlobalConfig, ProjectConfigUpdate, ProjectStatus, PHPVersion } from './types';
 
 export default function App() {
   const [darkMode, setDarkMode] = useState<boolean>(() => {
@@ -50,6 +50,7 @@ export default function App() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [startingDev, setStartingDev] = useState<string | null>(null);
+  const [hidingProject, setHidingProject] = useState<string | null>(null);
 
   // Modals
   const [activeTab, setActiveTab] = useState<'projects' | 'doctor' | 'settings'>('projects');
@@ -61,11 +62,14 @@ export default function App() {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [newProject, setNewProject] = useState({ name: '', path: '', isPark: false });
   const [globalConfig, setGlobalConfig] = useState<GlobalConfig | null>(null);
+  const [phpVersions, setPhpVersions] = useState<PHPVersion[]>([]);
+  const [phpVersionInput, setPhpVersionInput] = useState('');
   const [doctorChecks, setDoctorChecks] = useState<DoctorCheck[]>([]);
   const [runningDoctor, setRunningDoctor] = useState(false);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const toastTimerRef = useRef<number | null>(null);
+  const hidingProjectsRef = useRef<Set<string>>(new Set());
 
   // Dark mode class on html root
   useEffect(() => {
@@ -97,7 +101,9 @@ export default function App() {
         api.getProjects(searchQuery),
         api.getStatus()
       ]);
-      setProjects(projs);
+      // Keep an optimistic hide from being undone by the five-second polling
+      // cycle while the backend is applying/reloading the configuration.
+      setProjects(projs.filter(project => !hidingProjectsRef.current.has(project.name)));
       setSystemStatus(status);
     } catch (err: any) {
       const message = err?.message || String(err);
@@ -237,12 +243,36 @@ export default function App() {
 
   const handleHide = async (name: string) => {
     if (!confirm(`Ocultar o projeto "${name}" da lista? Os arquivos e o diretório estacionado NÃO serão alterados.`)) return;
+    if (hidingProjectsRef.current.has(name)) return;
+
+    hidingProjectsRef.current.add(name);
+    setHidingProject(name);
+    // The list should respond immediately; Caddy/config reload can take a few
+    // seconds and does not need to block this visual change.
+    setProjects(current => current.filter(project => project.name !== name));
+    showToast(`Ocultando ${name}...`, 30000);
+
+    let applied = false;
     try {
       await api.hideProject(name);
+      applied = true;
       await refreshData();
       showToast(`Projeto ${name} ocultado da lista.`);
     } catch (err: any) {
-      showToast(`Erro ao ocultar: ${err?.message || err}`);
+      if (!applied) {
+        hidingProjectsRef.current.delete(name);
+        try {
+          await refreshData();
+        } catch {
+          // Preserve the original operation error in the toast.
+        }
+        showToast(`Erro ao ocultar: ${err?.message || err}`);
+      } else {
+        showToast(`Projeto ${name} ocultado, mas a atualização da lista demorou: ${err?.message || err}`);
+      }
+    } finally {
+      hidingProjectsRef.current.delete(name);
+      setHidingProject(null);
     }
   };
 
@@ -268,6 +298,34 @@ export default function App() {
       showToast('Correção aplicada com sucesso!');
     } catch (err: any) {
       showToast(`Erro ao aplicar correção: ${err?.message || err}`);
+    }
+  };
+
+  const handleExportConfig = async () => {
+    try {
+      const data = await api.exportConfigJSON();
+      await navigator.clipboard?.writeText(data);
+      showToast('Configuração sanitizada copiada para a área de transferência.');
+    } catch (err: any) {
+      showToast(`Erro ao exportar configuração: ${err?.message || err}`);
+    }
+  };
+
+  const handleExportDiagnostic = async () => {
+    try {
+      const path = await api.exportDiagnostic();
+      showToast(path ? `Diagnóstico exportado para ${path}` : 'Diagnóstico exportado.', 8000);
+    } catch (err: any) {
+      showToast(`Erro ao exportar diagnóstico: ${err?.message || err}`);
+    }
+  };
+
+  const handleTrustCA = async () => {
+    try {
+      await api.trustCA();
+      showToast('CA interna instalada como confiável neste computador.');
+    } catch (err: any) {
+      showToast(`Não foi possível confiar na CA: ${err?.message || err}`);
     }
   };
 
@@ -325,10 +383,45 @@ export default function App() {
   const handleOpenSettings = async () => {
     setActiveTab('settings');
     try {
-      const cfg = await api.getGlobalConfig();
+      const [cfg, versions] = await Promise.all([api.getGlobalConfig(), api.getPHPVersions()]);
       setGlobalConfig(cfg);
+      setPhpVersions(versions);
     } catch (err: any) {
       showToast(`Erro ao carregar configurações: ${err?.message || err}`);
+    }
+  };
+
+  const handleInstallPHP = async () => {
+    const version = phpVersionInput.trim();
+    if (!version) return showToast('Informe uma versão PHP, por exemplo 8.4.');
+    try {
+      await api.installPHPVersion(version);
+      setPhpVersions(await api.getPHPVersions());
+      setPhpVersionInput('');
+      showToast(`PHP ${version} instalado e registrado.`);
+    } catch (err: any) {
+      showToast(`Erro ao instalar PHP: ${err?.message || err}`);
+    }
+  };
+
+  const handleRemovePHP = async (version: string) => {
+    if (!confirm(`Remover a versão PHP ${version}?`)) return;
+    try {
+      await api.removePHPVersion(version);
+      setPhpVersions(await api.getPHPVersions());
+      showToast(`PHP ${version} removido.`);
+    } catch (err: any) {
+      showToast(`Erro ao remover PHP: ${err?.message || err}`);
+    }
+  };
+
+  const handleSetDefaultPHP = async (version: string) => {
+    try {
+      await api.setDefaultPHPVersion(version);
+      setGlobalConfig(current => current ? { ...current, phpDefaultVersion: version } : current);
+      showToast(`PHP ${version} definido como padrão.`);
+    } catch (err: any) {
+      showToast(`Erro ao definir PHP padrão: ${err?.message || err}`);
     }
   };
 
@@ -749,10 +842,11 @@ export default function App() {
                         ) : (
                           <button
                             onClick={() => handleHide(project.name)}
-                            className="p-1.5 rounded hover:bg-amber-50 dark:hover:bg-amber-950 text-slate-400 hover:text-amber-600 transition-colors"
+                            disabled={hidingProject === project.name}
+                            className="p-1.5 rounded hover:bg-amber-50 dark:hover:bg-amber-950 disabled:opacity-50 text-slate-400 hover:text-amber-600 transition-colors"
                             title="Ocultar Projeto Estacionado"
                           >
-                            <EyeOff className="w-4 h-4" />
+                            {hidingProject === project.name ? <RefreshCw className="w-4 h-4 animate-spin" /> : <EyeOff className="w-4 h-4" />}
                           </button>
                         )}
                       </div>
@@ -911,6 +1005,42 @@ export default function App() {
                 >
                   Salvar Alterações
                 </button>
+              </div>
+
+              <div className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-2">
+                <p className="font-semibold text-slate-700 dark:text-slate-300">Versões PHP-FPM</p>
+                <div className="flex gap-2">
+                  <input value={phpVersionInput} onChange={(e) => setPhpVersionInput(e.target.value)} placeholder="Ex: 8.4" className="flex-1 px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg" />
+                  <button onClick={handleInstallPHP} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold">Instalar</button>
+                </div>
+                {phpVersions.length === 0 ? <p className="text-slate-500">Nenhuma versão registrada.</p> : (
+                  <div className="space-y-1">
+                    {phpVersions.map(version => (
+                      <div key={version.version} className="flex items-center justify-between px-3 py-2 bg-slate-50 dark:bg-slate-800/60 rounded-lg">
+                        <span className="font-mono">PHP {version.version} {version.installed ? '· instalado' : '· ausente'}</span>
+                        <span className="flex gap-2">
+                          <button onClick={() => handleSetDefaultPHP(version.version)} className="text-sky-600 dark:text-sky-300 font-semibold">Usar</button>
+                          <button onClick={() => handleRemovePHP(version.version)} className="text-rose-600 dark:text-rose-300 font-semibold">Remover</button>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-2">
+                <p className="font-semibold text-slate-700 dark:text-slate-300">Operações de suporte</p>
+                <div className="flex flex-wrap gap-2">
+                  <button onClick={handleExportConfig} className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg font-semibold">
+                    Copiar configuração sanitizada
+                  </button>
+                  <button onClick={handleExportDiagnostic} className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg font-semibold">
+                    Exportar diagnóstico
+                  </button>
+                  <button onClick={handleTrustCA} className="px-3 py-1.5 bg-sky-100 hover:bg-sky-200 dark:bg-sky-950 dark:hover:bg-sky-900 text-sky-800 dark:text-sky-200 rounded-lg font-semibold">
+                    Confiar na CA local
+                  </button>
+                </div>
               </div>
             </div>
           </div>

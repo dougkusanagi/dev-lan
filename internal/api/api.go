@@ -167,6 +167,7 @@ func (s *Server) Handler(token ...string) http.Handler {
 	mux.HandleFunc("/v1/projects", guard(s.handleProjects))
 	mux.HandleFunc("/v1/config", guard(s.handleConfig))
 	mux.HandleFunc("/v1/reload", guard(s.handleReload))
+	mux.HandleFunc("/v1/command", guard(s.handleCommand))
 	mux.HandleFunc("/", func(writer http.ResponseWriter, request *http.Request) {
 		writeJSONError(writer, http.StatusNotFound, "rota da API local não encontrada")
 	})
@@ -264,6 +265,173 @@ func (s *Server) handleReload(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 	writeJSON(writer, http.StatusOK, result)
+}
+
+// commandRequest is intentionally a small allow-listed protocol surface for
+// the Linux WSL client. It is not a general-purpose remote shell: commands
+// are decoded and dispatched to domain methods below.
+type commandRequest struct {
+	Command string   `json:"command"`
+	Args    []string `json:"args,omitempty"`
+}
+
+func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer, http.MethodPost)
+		return
+	}
+	var input commandRequest
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		writeJSONError(writer, http.StatusBadRequest, "comando WSL inválido")
+		return
+	}
+	input.Command = strings.ToLower(strings.TrimSpace(input.Command))
+	for i := range input.Args {
+		input.Args[i] = strings.TrimSpace(input.Args[i])
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), 45*time.Second)
+	defer cancel()
+
+	response := map[string]any{"command": input.Command}
+	switch input.Command {
+	case "link":
+		if len(input.Args) != 2 {
+			writeJSONError(writer, http.StatusBadRequest, "uso: link NAME PATH")
+			return
+		}
+		project, result, err := s.service.Link(ctx, input.Args[0], input.Args[1])
+		if err != nil {
+			writeJSONError(writer, http.StatusConflict, err.Error())
+			return
+		}
+		response["message"] = fmt.Sprintf("Projeto %s registrado: %s", project.Name, project.Path)
+		response["warnings"] = result.Warnings
+	case "unlink":
+		if len(input.Args) != 1 {
+			writeJSONError(writer, http.StatusBadRequest, "uso: unlink NAME")
+			return
+		}
+		project, result, err := s.service.Unlink(ctx, input.Args[0])
+		if err != nil {
+			writeJSONError(writer, http.StatusConflict, err.Error())
+			return
+		}
+		response["message"] = fmt.Sprintf("Projeto %s removido do registro.", project.Name)
+		response["warnings"] = result.Warnings
+	case "park":
+		if len(input.Args) == 2 && (input.Args[0] == "ignore" || input.Args[0] == "unignore") {
+			var result app.ApplyResult
+			var err error
+			if input.Args[0] == "ignore" {
+				result, err = s.service.IgnoreProject(ctx, input.Args[1])
+			} else {
+				result, err = s.service.UnignoreProject(ctx, input.Args[1])
+			}
+			if err != nil {
+				writeJSONError(writer, http.StatusConflict, err.Error())
+				return
+			}
+			response["message"] = fmt.Sprintf("Projeto %s: %s", input.Args[0], input.Args[1])
+			response["warnings"] = result.Warnings
+			break
+		}
+		if len(input.Args) != 1 {
+			writeJSONError(writer, http.StatusBadRequest, "uso: park PATH | park ignore NAME|PATH | park unignore PATH")
+			return
+		}
+		park, result, err := s.service.Park(ctx, input.Args[0])
+		if err != nil {
+			writeJSONError(writer, http.StatusConflict, err.Error())
+			return
+		}
+		response["message"] = fmt.Sprintf("Diretório estacionado: %s", park.Path)
+		response["warnings"] = result.Warnings
+	case "unpark":
+		if len(input.Args) != 1 {
+			writeJSONError(writer, http.StatusBadRequest, "uso: unpark PATH")
+			return
+		}
+		park, result, err := s.service.Unpark(ctx, input.Args[0])
+		if err != nil {
+			writeJSONError(writer, http.StatusConflict, err.Error())
+			return
+		}
+		response["message"] = fmt.Sprintf("Diretório removido dos estacionados: %s", park.Path)
+		response["warnings"] = result.Warnings
+	case "links":
+		if len(input.Args) > 1 {
+			writeJSONError(writer, http.StatusBadRequest, "uso: links [FILTRO]")
+			return
+		}
+		cfg, err := s.store.Load()
+		if err != nil {
+			writeJSONError(writer, http.StatusInternalServerError, err.Error())
+			return
+		}
+		response["projects"] = cfg.Projects
+	case "status":
+		if len(input.Args) != 0 {
+			writeJSONError(writer, http.StatusBadRequest, "uso: status")
+			return
+		}
+		cfg, err := s.store.Load()
+		if err != nil {
+			writeJSONError(writer, http.StatusInternalServerError, err.Error())
+			return
+		}
+		response["status"] = map[string]any{"default_mode": cfg.DefaultMode, "windows_port": cfg.WindowsPort, "https_port": cfg.HTTPSPort, "tls_enabled": cfg.TLSEnabled, "project_count": len(cfg.Projects), "park_count": len(cfg.Parks)}
+	case "reload":
+		if len(input.Args) != 0 {
+			writeJSONError(writer, http.StatusBadRequest, "uso: reload")
+			return
+		}
+		result, err := s.service.Reload(ctx)
+		if err != nil {
+			writeJSONError(writer, http.StatusConflict, err.Error())
+			return
+		}
+		response["result"] = result
+		response["message"] = "Configurações recarregadas."
+	case "doctor":
+		if len(input.Args) > 1 {
+			writeJSONError(writer, http.StatusBadRequest, "uso: doctor [NAME]")
+			return
+		}
+		name := ""
+		if len(input.Args) == 1 {
+			name = input.Args[0]
+		}
+		checks, err := s.service.Doctor(ctx, name)
+		if err != nil {
+			writeJSONError(writer, http.StatusConflict, err.Error())
+			return
+		}
+		response["checks"] = checks
+	case "open":
+		if len(input.Args) > 1 {
+			writeJSONError(writer, http.StatusBadRequest, "uso: open [NAME]")
+			return
+		}
+		name := ""
+		if len(input.Args) == 1 {
+			name = input.Args[0]
+		}
+		if name == "" {
+			writeJSONError(writer, http.StatusBadRequest, "open no WSL exige NAME")
+			return
+		}
+		url, err := s.service.Open(ctx, name)
+		if err != nil {
+			writeJSONError(writer, http.StatusConflict, err.Error())
+			return
+		}
+		response["url"] = url
+		response["message"] = url
+	default:
+		writeJSONError(writer, http.StatusNotFound, "comando não permitido pelo protocolo WSL: "+input.Command)
+		return
+	}
+	writeJSON(writer, http.StatusOK, response)
 }
 
 func authorized(request *http.Request, token string) bool {
@@ -364,9 +532,12 @@ func ReadEndpoint(store config.Store) (Endpoint, error) {
 	if err := json.Unmarshal(data, &endpoint); err != nil {
 		return Endpoint{}, fmt.Errorf("ler endpoint da API local: %w", err)
 	}
-	if endpoint.Version != ProtocolVersion || endpoint.Address == "" || endpoint.TokenFile != store.Paths().APIToken {
+	if endpoint.Version != ProtocolVersion || endpoint.Address == "" || !sameTokenPath(endpoint.TokenFile, store.Paths().APIToken) {
 		return Endpoint{}, ErrInvalidEndpoint
 	}
+	// The Windows controller writes a Windows-native token path. The WSL client
+	// validates its mounted equivalent and then reads through the Linux path.
+	endpoint.TokenFile = store.Paths().APIToken
 	host, _, err := net.SplitHostPort(endpoint.Address)
 	if err != nil || (host != "127.0.0.1" && host != "::1") {
 		return Endpoint{}, ErrInvalidEndpoint
@@ -374,9 +545,46 @@ func ReadEndpoint(store config.Store) (Endpoint, error) {
 	return endpoint, nil
 }
 
+func sameTokenPath(written, expected string) bool {
+	if filepath.Clean(written) == filepath.Clean(expected) {
+		return true
+	}
+	if runtime.GOOS != "linux" || len(written) < 3 || written[1] != ':' {
+		return false
+	}
+	drive := strings.ToLower(string(written[0]))
+	mounted := "/mnt/" + drive + strings.ReplaceAll(written[2:], "\\", "/")
+	return filepath.Clean(mounted) == filepath.Clean(expected)
+}
+
 type Client struct {
 	Store      config.Store
 	HTTPClient *http.Client
+}
+
+// Command sends one of the allow-listed controller operations to the Windows
+// service. It is used by the native Linux client installed inside WSL.
+func (c Client) Command(ctx context.Context, command string, args []string) (map[string]any, error) {
+	body, err := json.Marshal(commandRequest{Command: command, Args: args})
+	if err != nil {
+		return nil, err
+	}
+	response, err := c.Do(ctx, http.MethodPost, "/v1/command", strings.NewReader(string(body)))
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	var payload map[string]any
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+	if response.StatusCode >= 400 {
+		if message, ok := payload["error"].(string); ok {
+			return nil, errors.New(message)
+		}
+		return nil, fmt.Errorf("API local respondeu HTTP %d", response.StatusCode)
+	}
+	return payload, nil
 }
 
 func (c Client) Do(ctx context.Context, method, route string, body io.Reader) (*http.Response, error) {

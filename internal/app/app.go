@@ -30,6 +30,7 @@ type App struct {
 	WSL          platform.WSLRunner
 	PHP          platform.PHPManager
 	Dev          platform.DevManager
+	DevProxy     *platform.DevProxy
 	Telemetry    telemetry.Store
 	WindowsCaddy platform.CaddyClient
 	WSLCaddy     platform.CaddyClient
@@ -41,7 +42,12 @@ type mockRunner struct{}
 func (mockRunner) Run(context.Context, ...string) (string, error) { return "", nil }
 
 func New(dataDir string) *App {
-	wsl := platform.NewWSLRunner("wsl.exe", "")
+	distribution := ""
+	if data, err := os.ReadFile(filepath.Join(dataDir, "wsl-distribution")); err == nil {
+		distribution = strings.TrimSpace(string(data))
+	}
+	wsl := platform.NewWSLRunner("wsl.exe", distribution)
+	dev := platform.NewWSLDevManager(wsl)
 	winCaddy := platform.NewLocalCaddy("")
 	wslCaddy := platform.NewWSLCaddy(wsl)
 	if os.Getenv("DEVLAN_TEST_MOCK") == "1" {
@@ -53,7 +59,8 @@ func New(dataDir string) *App {
 		Detector:     detect.Detector{Inspector: detect.SmartInspector{WSL: wsl}},
 		WSL:          wsl,
 		PHP:          platform.NewWSLPHPManager(wsl),
-		Dev:          platform.NewWSLDevManager(wsl),
+		Dev:          dev,
+		DevProxy:     platform.NewDevProxy(dev),
 		Telemetry:    telemetry.NewStore(dataDir),
 		WindowsCaddy: winCaddy,
 		WSLCaddy:     wslCaddy,
@@ -63,6 +70,13 @@ func New(dataDir string) *App {
 
 type ApplyResult struct {
 	Warnings []string
+}
+
+func (a *App) CloseDevProxies() error {
+	if a.DevProxy == nil {
+		return nil
+	}
+	return a.DevProxy.Close()
 }
 
 func (a *App) Install(ctx context.Context) (ApplyResult, error) {
@@ -973,6 +987,17 @@ func (a *App) apply(ctx context.Context, cfg domain.Config, validate, reload boo
 				return result, fmt.Errorf("iniciar/recarregar Caddy WSL: %w", err)
 			}
 		}
+		if a.DevProxy != nil && os.Getenv("DEVLAN_TEST_MOCK") != "1" {
+			for _, project := range cfg.Projects {
+				resolved, resolveErr := cfg.Resolve(project.Name)
+				if resolveErr != nil || resolved.Mode != domain.ModeDev {
+					continue
+				}
+				if proxyErr := a.DevProxy.Ensure(ctx, project, cfg.DevPort(project), cfg.DevCommand(project), cfg.ProjectIdleTimeout(project)); proxyErr != nil {
+					result.Warnings = append(result.Warnings, fmt.Sprintf("proxy dev %s não iniciado: %v", project.Name, proxyErr))
+				}
+			}
+		}
 	}
 	return result, nil
 }
@@ -1436,9 +1461,15 @@ func (a *App) StartDev(ctx context.Context, selector string) error {
 	}
 	port := cfg.DevPort(project)
 	cmd := cfg.DevCommand(project)
-	if err := a.Dev.StartDev(ctx, project, port, cmd); err != nil {
-		_ = a.appendLog("dev start %s falhou: %v", project.Name, err)
-		return err
+	var startErr error
+	if a.DevProxy != nil && os.Getenv("DEVLAN_TEST_MOCK") != "1" {
+		startErr = a.DevProxy.StartNow(ctx, project, port, cmd, cfg.ProjectIdleTimeout(project))
+	} else {
+		startErr = a.Dev.StartDev(ctx, project, port, cmd)
+	}
+	if startErr != nil {
+		_ = a.appendLog("dev start %s falhou: %v", project.Name, startErr)
+		return startErr
 	}
 	_ = a.appendLog("dev start %s (porta %d)", project.Name, port)
 	return nil
@@ -1453,8 +1484,14 @@ func (a *App) StopDev(ctx context.Context, selector string) error {
 		return err
 	}
 	port := cfg.DevPort(project)
-	if err := a.Dev.StopDev(ctx, project, port); err != nil {
-		return err
+	var stopErr error
+	if a.DevProxy != nil && os.Getenv("DEVLAN_TEST_MOCK") != "1" {
+		stopErr = a.DevProxy.StopNow(ctx, project.Name)
+	} else {
+		stopErr = a.Dev.StopDev(ctx, project, port)
+	}
+	if stopErr != nil {
+		return stopErr
 	}
 	_ = a.appendLog("dev stop %s", project.Name)
 	return nil
@@ -1470,7 +1507,14 @@ func (a *App) RestartDev(ctx context.Context, selector string) error {
 	}
 	port := cfg.DevPort(project)
 	cmd := cfg.DevCommand(project)
-	if err := a.Dev.RestartDev(ctx, project, port, cmd); err != nil {
+	if a.DevProxy != nil && os.Getenv("DEVLAN_TEST_MOCK") != "1" {
+		if err := a.DevProxy.StopNow(ctx, project.Name); err != nil {
+			return err
+		}
+		if err := a.DevProxy.StartNow(ctx, project, port, cmd, cfg.ProjectIdleTimeout(project)); err != nil {
+			return err
+		}
+	} else if err := a.Dev.RestartDev(ctx, project, port, cmd); err != nil {
 		return err
 	}
 	_ = a.appendLog("dev restart %s (porta %d)", project.Name, port)
@@ -1529,6 +1573,16 @@ func (a *App) DevStatus(ctx context.Context, selector string) (platform.DevProce
 		return platform.DevProcessStatus{}, err
 	}
 	port := cfg.DevPort(project)
+	if a.DevProxy != nil && os.Getenv("DEVLAN_TEST_MOCK") != "1" {
+		running, starting := a.DevProxy.Status(project.Name)
+		state := platform.StateStopped
+		if starting {
+			state = platform.StateStarting
+		} else if running {
+			state = platform.StateRunning
+		}
+		return platform.DevProcessStatus{ProjectName: project.Name, Port: port, State: state}, nil
+	}
 	return a.Dev.Status(ctx, project, port)
 }
 

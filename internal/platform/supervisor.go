@@ -221,8 +221,9 @@ func (m WSLDevManager) InstallDeps(ctx context.Context, project domain.Project, 
 	}
 	cmd := pm + " install"
 	if m.usesWSL(project.Path) {
-		script := fmt.Sprintf(`cd "%s" && %s`, project.Path, cmd)
-		return m.WSL.Run(ctx, "/bin/sh", "-c", script)
+		// Keep the project path and package manager as positional arguments;
+		// neither is interpolated into the shell program.
+		return m.WSL.Run(ctx, "/bin/sh", "-c", `cd -- "$1" && exec "$2" install`, "devlan", project.Path, pm)
 	}
 	parts := strings.Fields(cmd)
 	execCmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
@@ -237,8 +238,7 @@ func (m WSLDevManager) Build(ctx context.Context, project domain.Project, pm str
 	}
 	cmd := pm + " run build"
 	if m.usesWSL(project.Path) {
-		script := fmt.Sprintf(`cd "%s" && %s`, project.Path, cmd)
-		return m.WSL.Run(ctx, "/bin/sh", "-c", script)
+		return m.WSL.Run(ctx, "/bin/sh", "-c", `cd -- "$1" && exec "$2" run build`, "devlan", project.Path, pm)
 	}
 	parts := strings.Fields(cmd)
 	execCmd := exec.CommandContext(ctx, parts[0], parts[1:]...)

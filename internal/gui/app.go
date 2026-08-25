@@ -55,6 +55,13 @@ type SystemStatusView struct {
 	TotalProjects       int      `json:"totalProjects"`
 }
 
+type PHPVersionView struct {
+	Version    string   `json:"version"`
+	Installed  bool     `json:"installed"`
+	Configured bool     `json:"configured"`
+	Extensions []string `json:"extensions,omitempty"`
+}
+
 type DoctorCheckView struct {
 	Name      string `json:"name"`
 	Status    string `json:"status"` // "OK", "WARN", "FAIL"
@@ -116,6 +123,7 @@ func (a *App) Startup(ctx context.Context) {
 }
 
 func (a *App) Shutdown(ctx context.Context) {
+	_ = a.service.CloseDevProxies()
 	if a.ownsAPI {
 		_ = a.api.Close(ctx)
 		a.ownsAPI = false
@@ -345,6 +353,41 @@ func (a *App) GetGlobalConfig() (GlobalConfigView, error) {
 		Allowlist:         cfg.Allowlist,
 		DefaultRouteMode:  string(cfg.DefaultRouteMode),
 	}, nil
+}
+
+func (a *App) GetPHPVersions() ([]PHPVersionView, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	items, err := a.service.PHPVersions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]PHPVersionView, 0, len(items))
+	for _, item := range items {
+		result = append(result, PHPVersionView{Version: item.Version, Installed: item.Installed, Configured: item.Configured, Extensions: item.Extensions})
+	}
+	return result, nil
+}
+
+func (a *App) InstallPHPVersion(version string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	_, err := a.service.PHPInstall(ctx, version, nil)
+	return err
+}
+
+func (a *App) RemovePHPVersion(version string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	_, err := a.service.PHPRemove(ctx, version)
+	return err
+}
+
+func (a *App) SetDefaultPHPVersion(version string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, err := a.service.SetDefaultPHPVersion(ctx, version)
+	return err
 }
 
 func (a *App) SaveGlobalConfig(view GlobalConfigView) error {
@@ -622,6 +665,34 @@ func (a *App) Reload() error {
 	defer cancel()
 	_, err := a.service.Reload(ctx)
 	return err
+}
+
+// ExportConfigJSON exposes the same sanitized export used by the CLI, so the
+// UI never receives API tokens, passwords or temporary exposure state.
+func (a *App) ExportConfigJSON() (string, error) {
+	data, err := a.service.ExportConfig()
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func (a *App) ExportDiagnostic() (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return a.service.DiagnosticBundle(ctx, "")
+}
+
+func (a *App) TrustCA() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return a.service.Trust(ctx)
+}
+
+func (a *App) GetSecurityAudit(lines int) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return a.service.SecurityAuditLogs(ctx, lines)
 }
 
 func openBrowser(target string) error {
