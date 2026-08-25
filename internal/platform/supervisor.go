@@ -145,6 +145,15 @@ func viteHostSpecified(command string) bool {
 	return false
 }
 
+func (m WSLDevManager) configureViteHotFile(ctx context.Context, project domain.Project) error {
+	hotFile := pathpkg.Join(project.Path, "public", "hot")
+	if m.usesWSL(project.Path) {
+		_, err := m.WSL.Run(ctx, "/bin/sh", "-c", `printf 'https://%s.localhost\n' "$1" > "$2"`, "devlan", project.Name, hotFile)
+		return err
+	}
+	return os.WriteFile(filepath.Join(filepath.FromSlash(project.Path), "public", "hot"), []byte("https://"+project.Name+".localhost\n"), 0o644)
+}
+
 func devUnitName(projectName string) string {
 	var builder strings.Builder
 	for _, char := range strings.ToLower(projectName) {
@@ -211,7 +220,13 @@ func (m WSLDevManager) Status(ctx context.Context, project domain.Project, port 
 }
 
 func (m WSLDevManager) StartDev(ctx context.Context, project domain.Project, port int, command string) error {
+	isVite := m.usesVite(ctx, project)
 	if isPortListening(port) {
+		if isVite {
+			if err := m.configureViteHotFile(ctx, project); err != nil {
+				return fmt.Errorf("configurar URL pública do Vite: %w", err)
+			}
+		}
 		return nil
 	}
 
@@ -221,7 +236,7 @@ func (m WSLDevManager) StartDev(ctx context.Context, project domain.Project, por
 	if command == "" {
 		command = "npm run dev"
 	}
-	if m.usesVite(ctx, project) {
+	if isVite {
 		command = viteCommand(command, port)
 	}
 
@@ -289,6 +304,11 @@ printf '%s\n' "$!" > "$PIDFILE"
 	deadline := time.Now().Add(devStartupTimeout)
 	for time.Now().Before(deadline) {
 		if isPortListening(port) {
+			if isVite {
+				if err := m.configureViteHotFile(ctx, project); err != nil {
+					return fmt.Errorf("configurar URL pública do Vite: %w", err)
+				}
+			}
 			return nil
 		}
 		time.Sleep(300 * time.Millisecond)
@@ -318,7 +338,8 @@ func (m WSLDevManager) StopDev(ctx context.Context, project domain.Project, port
 				rm -f "/tmp/devlan-%s.pid"
 			fi
 			fuser -k %d/tcp 2>/dev/null || true
-		`, shellQuote(devUnitName(project.Name)), project.Name, project.Name, project.Name, port)
+			rm -f %s
+		`, shellQuote(devUnitName(project.Name)), project.Name, project.Name, project.Name, port, shellQuote(pathpkg.Join(project.Path, "public", "hot")))
 		_, _ = m.WSL.Run(ctx, "/bin/sh", "-c", script)
 	} else {
 		pidFile := m.devPIDPath(project)
@@ -331,6 +352,7 @@ func (m WSLDevManager) StopDev(ctx context.Context, project domain.Project, port
 			}
 			_ = os.Remove(pidFile)
 		}
+		_ = os.Remove(filepath.Join(filepath.FromSlash(project.Path), "public", "hot"))
 	}
 	return nil
 }

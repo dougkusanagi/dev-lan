@@ -1640,4 +1640,11 @@ func (r ResolvedProject) URL(host string, httpPort, httpsPort int, secure bool) 
 	}
 }
 
+// LocalDevURL is deliberately independent from the LAN route. The .localhost
+// suffix is resolved by the browser to the developer's own machine and keeps
+// Vite HMR, cookies, and absolute asset URLs on one origin.
+func LocalDevURL(projectName string) string {
+	return fmt.Sprintf("https://%s.localhost", projectName)
+}
+
 var ErrUnsupportedMode = errors.New("modo ainda não implementado")

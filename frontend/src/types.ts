@@ -9,6 +9,9 @@ export interface ProjectInfo {
   framework: string; // 'laravel' | 'symfony' | 'generic' | 'vite' | 'astro' | 'nextjs' | 'nuxt' | 'sveltekit' | 'static' | 'unknown'
   url: string;
   lanUrl: string;
+  localDevUrl: string;
+  localDevState: 'active' | 'starting' | 'stopped' | 'available';
+  lanPreviewState: 'ready' | 'paused';
   tlsEnabled: boolean;
   routingMode: 'path' | 'port' | 'host';
   port?: number;

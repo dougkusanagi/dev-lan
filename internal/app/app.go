@@ -1544,6 +1544,18 @@ func (a *App) BuildProject(ctx context.Context, selector string) (string, error)
 	if err != nil {
 		return "", err
 	}
+	resolved, err := cfg.Resolve(project.Name)
+	if err != nil {
+		return "", err
+	}
+	// A production/LAN preview must consume the compiled manifest, never the
+	// Vite hot file. Stop the local HMR process first; StopDev also removes
+	// public/hot, including a process started by the CLI in another session.
+	if resolved.Mode == domain.ModeDev || isLaravelDevScript(cfg, project) {
+		if err := a.StopDev(ctx, project.Name); err != nil {
+			return "", fmt.Errorf("preparar preview LAN: %w", err)
+		}
+	}
 	pm := cfg.PackageManager(project)
 	out, err := a.Dev.Build(ctx, project, pm)
 	if err == nil {
