@@ -27,7 +27,7 @@ import (
 	devlanupdate "github.com/dougkusanagi/dev-lan/internal/update"
 )
 
-const version = "0.1.0-mvp"
+const version = "0.0.1"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
