@@ -51,6 +51,15 @@ func NewWSLDevManager(wsl WSLRunner) WSLDevManager {
 	return WSLDevManager{WSL: wsl}
 }
 
+var viteConfigNames = []string{
+	"vite.config.js",
+	"vite.config.mjs",
+	"vite.config.cjs",
+	"vite.config.ts",
+	"vite.config.mts",
+	"vite.config.cts",
+}
+
 func (m WSLDevManager) usesWSL(projectPath string) bool {
 	return runtime.GOOS == "windows" && strings.HasPrefix(projectPath, "/")
 }
@@ -67,6 +76,71 @@ func (m WSLDevManager) devPIDPath(project domain.Project) string {
 		return pathpkg.Join("/tmp", fmt.Sprintf("devlan-%s.pid", project.Name))
 	}
 	return filepath.Join(os.TempDir(), fmt.Sprintf("devlan-%s.pid", project.Name))
+}
+
+func (m WSLDevManager) usesVite(ctx context.Context, project domain.Project) bool {
+	if project.DevFramework != nil && strings.EqualFold(strings.TrimSpace(*project.DevFramework), "vite") {
+		return true
+	}
+	if m.usesWSL(project.Path) {
+		args := append([]string{"/bin/sh", "-c", `for file in "$@"; do [ -f "$file" ] && { printf vite; exit 0; }; done`, "devlan"}, viteConfigPaths(project.Path)...)
+		output, err := m.WSL.Run(ctx, args...)
+		return err == nil && strings.TrimSpace(output) == "vite"
+	}
+	for _, name := range viteConfigNames {
+		if info, err := os.Stat(filepath.Join(filepath.FromSlash(project.Path), name)); err == nil && !info.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+func viteConfigPaths(projectPath string) []string {
+	paths := make([]string, 0, len(viteConfigNames))
+	for _, name := range viteConfigNames {
+		paths = append(paths, pathpkg.Join(projectPath, name))
+	}
+	return paths
+}
+
+func viteCommand(command string, port int) string {
+	command = strings.TrimSpace(command)
+	if vitePortSpecified(command) {
+		return command
+	}
+
+	args := []string{}
+	if !viteHostSpecified(command) {
+		args = append(args, "--host", "0.0.0.0")
+	}
+	args = append(args, "--port", strconv.Itoa(port))
+
+	fields := strings.Fields(command)
+	if len(fields) >= 3 && (fields[0] == "npm" || fields[0] == "pnpm" || fields[0] == "bun") && fields[1] == "run" {
+		if strings.Contains(command, " -- ") {
+			return command + " " + strings.Join(args, " ")
+		}
+		return command + " -- " + strings.Join(args, " ")
+	}
+	return command + " " + strings.Join(args, " ")
+}
+
+func vitePortSpecified(command string) bool {
+	for _, field := range strings.Fields(command) {
+		if field == "--port" || field == "-p" || strings.HasPrefix(field, "--port=") || (strings.HasPrefix(field, "-p") && len(field) > 2) {
+			return true
+		}
+	}
+	return false
+}
+
+func viteHostSpecified(command string) bool {
+	for _, field := range strings.Fields(command) {
+		if field == "--host" || field == "-h" || strings.HasPrefix(field, "--host=") {
+			return true
+		}
+	}
+	return false
 }
 
 func isPortListening(port int) bool {
@@ -127,6 +201,9 @@ func (m WSLDevManager) StartDev(ctx context.Context, project domain.Project, por
 
 	if command == "" {
 		command = "npm run dev"
+	}
+	if m.usesVite(ctx, project) {
+		command = viteCommand(command, port)
 	}
 
 	if m.usesWSL(project.Path) {
