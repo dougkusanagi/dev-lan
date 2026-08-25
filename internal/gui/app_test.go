@@ -2,9 +2,11 @@ package gui_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/dougkusanagi/dev-lan/internal/app"
 	"github.com/dougkusanagi/dev-lan/internal/detect"
@@ -69,6 +71,25 @@ func TestGUI_GetProjects(t *testing.T) {
 	}
 	if projects[0].Status != "ready" {
 		t.Errorf("expected status ready, got %s", projects[0].Status)
+	}
+}
+
+func TestGUI_GetMetricsReadsManagedAccessLog(t *testing.T) {
+	guiApp, tempDir := setupTestApp(t)
+	stamp := float64(time.Now().UnixNano()) / float64(time.Second)
+	line := fmt.Sprintf("{\"ts\":%f,\"duration\":0.084,\"status\":200,\"request\":{\"method\":\"GET\",\"uri\":\"/sample-project/orders/42?secret=value\"}}\n", stamp)
+	if err := os.WriteFile(filepath.Join(tempDir, "logs", "access.jsonl"), []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := guiApp.GetMetrics("sample-project", "1h")
+	if err != nil {
+		t.Fatalf("GetMetrics retornou erro: %v", err)
+	}
+	if snapshot == nil || snapshot.Requests != 1 || snapshot.P50Ms == nil || *snapshot.P50Ms != 84 {
+		t.Fatalf("snapshot inesperado: %#v", snapshot)
+	}
+	if len(snapshot.Routes) != 1 || snapshot.Routes[0].NormalizedPath != "/orders/:id" {
+		t.Fatalf("rota não sanitizada: %#v", snapshot.Routes)
 	}
 }
 

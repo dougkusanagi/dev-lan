@@ -29,7 +29,6 @@ func Launch(service *app.App) error {
 		AssetServer: &assetserver.Options{
 			Assets: frontend.Assets,
 		},
-		Menu: BuildAppMenu(context.Background(), guiApp),
 		OnStartup: func(ctx context.Context) {
 			guiApp.Startup(ctx)
 		},

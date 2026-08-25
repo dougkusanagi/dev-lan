@@ -228,6 +228,12 @@ func hasProjectTLSPreferences(cfg domain.Config) bool {
 
 // RenderWSL generates deterministic routes for PHP, static, and dev projects across all route modes.
 func RenderWSL(cfg domain.Config) (string, error) {
+	return RenderWSLWithAccessLog(cfg, "")
+}
+
+// RenderWSLWithAccessLog adds a managed JSON access log when accessLogPath is
+// provided. The path must already be translated to WSL notation by the caller.
+func RenderWSLWithAccessLog(cfg domain.Config, accessLogPath string) (string, error) {
 	routes, err := Routes(cfg)
 	if err != nil {
 		return "", err
@@ -242,6 +248,27 @@ func RenderWSL(cfg domain.Config) (string, error) {
 	// Main listener in WSL handles all requests forwarded from Windows edge
 	fmt.Fprintf(&b, ":%d {\n", cfg.WSLPort)
 	b.WriteString("    encode gzip\n")
+	if accessLogPath != "" {
+		// Caddy's JSON log omits request bodies and headers by default; the
+		// aggregator additionally strips query strings and sensitive fields.
+		b.WriteString("    log {\n")
+		fmt.Fprintf(&b, "        output file %s {\n", quoteCaddy(accessLogPath))
+		b.WriteString("            roll_size 10MiB\n")
+		b.WriteString("            roll_keep 3\n")
+		b.WriteString("            roll_keep_for 168h\n")
+		b.WriteString("        }\n")
+		b.WriteString("        format filter {\n")
+		b.WriteString("            request>remote_ip delete\n")
+		b.WriteString("            request>remote_port delete\n")
+		b.WriteString("            request>client_ip delete\n")
+		b.WriteString("            request>headers delete\n")
+		b.WriteString("            request>uri regexp \\?.*$ \"\"\n")
+		b.WriteString("            resp_headers delete\n")
+		b.WriteString("            user_id delete\n")
+		b.WriteString("            wrap json\n")
+		b.WriteString("        }\n")
+		b.WriteString("    }\n")
+	}
 	b.WriteString("    @devlan_health path /__devlan/health\n")
 	b.WriteString("    respond @devlan_health \"ok\" 200\n\n")
 

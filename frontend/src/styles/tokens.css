@@ -1,0 +1,6 @@
+:root {
+  --bg: #0d0e10; --surface: #121315; --panel: #171719; --panel-hover: #1d1e21;
+  --border: rgba(255,255,255,.09); --text: #f5f7fa; --muted: #8b97aa;
+  --accent: #673ab7; --success: #00c58e; --warning: #ffa500; --danger: #ff3045;
+  --radius: 8px; color-scheme: dark;
+}

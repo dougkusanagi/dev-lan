@@ -63,6 +63,23 @@ export interface PHPVersion {
   extensions?: string[];
 }
 
+export type MetricsRange = '15m' | '1h' | '24h' | '7d';
+export interface MetricsSnapshot {
+  project: string;
+  range: MetricsRange;
+  generatedAt: string;
+  excludedColdStarts: number;
+  requests: number;
+  requestsPerMinute: number;
+  errorCount: number;
+  errorRate: number;
+  p50Ms: number | null;
+  p95Ms: number | null;
+  latencyBuckets: { upperBoundMs: number | null; count: number }[];
+  traffic: { at: string; requestsPerMinute: number }[];
+  routes: { method: string; normalizedPath: string; p50Ms: number | null; p95Ms: number | null; requests: number; errors: number }[];
+}
+
 export interface ProjectConfigUpdate {
   name: string;
   mode?: string;

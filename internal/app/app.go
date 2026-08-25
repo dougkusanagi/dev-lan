@@ -906,7 +906,15 @@ func (a *App) apply(ctx context.Context, cfg domain.Config, validate, reload boo
 	if err != nil {
 		return ApplyResult{}, err
 	}
-	wsl, err := caddy.RenderWSL(cfg)
+	if err := a.Store.Ensure(); err != nil {
+		return ApplyResult{}, err
+	}
+	accessLogPath := filepath.Join(a.Store.Paths().LogsDir, "access.jsonl")
+	wslAccessLogPath, err := platform.ToWSLPath(accessLogPath)
+	if err != nil {
+		return ApplyResult{}, fmt.Errorf("resolver caminho do access log no WSL: %w", err)
+	}
+	wsl, err := caddy.RenderWSLWithAccessLog(cfg, wslAccessLogPath)
 	if err != nil {
 		return ApplyResult{}, err
 	}
@@ -1456,7 +1464,7 @@ func (a *App) StartDev(ctx context.Context, selector string) error {
 	if err != nil {
 		return err
 	}
-	if resolved.Mode != domain.ModeDev && resolved.Mode != domain.ModeAuto {
+	if resolved.Mode != domain.ModeDev && resolved.Mode != domain.ModeAuto && !isLaravelDevScript(cfg, project) {
 		return fmt.Errorf("o projeto %s usa o modo %s e não possui servidor dev", project.Name, resolved.Mode)
 	}
 	port := cfg.DevPort(project)
@@ -1473,6 +1481,13 @@ func (a *App) StartDev(ctx context.Context, selector string) error {
 	}
 	_ = a.appendLog("dev start %s (porta %d)", project.Name, port)
 	return nil
+}
+
+// Laravel projects commonly serve PHP through FPM while their Vite assets run
+// through `npm run dev`. Keep that asset process available without changing
+// the project's PHP routing mode.
+func isLaravelDevScript(cfg domain.Config, project domain.Project) bool {
+	return cfg.PHPProjectPreset(project) == domain.PHPPresetLaravel
 }
 
 func (a *App) StopDev(ctx context.Context, selector string) error {

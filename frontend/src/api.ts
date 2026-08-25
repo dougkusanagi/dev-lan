@@ -1,4 +1,4 @@
-import { ProjectInfo, SystemStatus, DoctorCheck, GlobalConfig, ProjectConfigUpdate, PHPVersion } from './types';
+import { MetricsRange, MetricsSnapshot, ProjectInfo, SystemStatus, DoctorCheck, GlobalConfig, ProjectConfigUpdate, PHPVersion } from './types';
 
 declare global {
   interface Window {
@@ -7,6 +7,7 @@ declare global {
         App?: {
           GetProjects: (filter: string) => Promise<ProjectInfo[]>;
           GetStatus: () => Promise<SystemStatus>;
+          GetMetrics?: (project: string, range: MetricsRange) => Promise<MetricsSnapshot | null>;
           GetGlobalConfig: () => Promise<GlobalConfig>;
           GetPHPVersions: () => Promise<PHPVersion[]>;
           InstallPHPVersion: (version: string) => Promise<void>;
@@ -46,6 +47,7 @@ declare global {
 }
 
 const isWails = typeof window !== 'undefined' && !!window.go?.gui?.App;
+const mockDevProjects = new Set(['portal-vite']);
 
 export const api = {
   async getProjects(filter = ''): Promise<ProjectInfo[]> {
@@ -64,7 +66,7 @@ export const api = {
         routingMode: 'path',
         status: 'ready',
         phpVersion: '8.3',
-        devRunning: false,
+        devRunning: mockDevProjects.has('financeiro'),
       },
       {
         name: 'portal-vite',
@@ -78,7 +80,7 @@ export const api = {
         tlsEnabled: true,
         routingMode: 'path',
         status: 'ready',
-        devRunning: true,
+        devRunning: mockDevProjects.has('portal-vite'),
         devPort: 5173,
         devPid: 12450,
       }
@@ -103,6 +105,14 @@ export const api = {
     };
   },
 
+  async getMetrics(project: string, range: MetricsRange): Promise<MetricsSnapshot | null> {
+    if (isWails) {
+      const method = window.go!.gui!.App!.GetMetrics;
+      return method ? method(project, range) : null;
+    }
+    return null;
+  },
+
   async getGlobalConfig(): Promise<GlobalConfig> {
     if (isWails) return window.go!.gui!.App!.GetGlobalConfig();
     return {
@@ -118,7 +128,10 @@ export const api = {
 
   async getPHPVersions(): Promise<PHPVersion[]> {
     if (isWails) return window.go!.gui!.App!.GetPHPVersions();
-    return [];
+    return [
+      { version: '8.3', installed: true, configured: true },
+      { version: '8.5', installed: true, configured: false },
+    ];
   },
 
   async installPHPVersion(version: string): Promise<void> {
@@ -163,14 +176,17 @@ export const api = {
 
   async startDev(name: string): Promise<void> {
     if (isWails) return window.go!.gui!.App!.StartDev(name);
+    mockDevProjects.add(name);
   },
 
   async stopDev(name: string): Promise<void> {
     if (isWails) return window.go!.gui!.App!.StopDev(name);
+    mockDevProjects.delete(name);
   },
 
   async restartDev(name: string): Promise<void> {
     if (isWails) return window.go!.gui!.App!.RestartDev(name);
+    mockDevProjects.add(name);
   },
 
   async buildProject(name: string): Promise<string> {

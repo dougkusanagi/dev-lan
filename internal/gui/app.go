@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	localapi "github.com/dougkusanagi/dev-lan/internal/api"
 	"github.com/dougkusanagi/dev-lan/internal/app"
 	"github.com/dougkusanagi/dev-lan/internal/domain"
+	"github.com/dougkusanagi/dev-lan/internal/metrics"
 	"github.com/dougkusanagi/dev-lan/internal/platform"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -257,7 +259,7 @@ func (a *App) GetProjects(filter string) ([]ProjectView, error) {
 		}
 
 		// Check dev server status if applicable
-		if resolved.Mode == domain.ModeDev || resolved.Mode == domain.ModeAuto {
+		if resolved.Mode == domain.ModeDev || resolved.Mode == domain.ModeAuto || (resolved.Mode == domain.ModePHP && effective.PHPProjectPreset(project) == domain.PHPPresetLaravel) {
 			devStatus, devErr := a.service.DevStatus(ctx, project.Name)
 			if devErr == nil {
 				view.DevPort = devStatus.Port
@@ -337,6 +339,25 @@ func (a *App) GetStatus() (SystemStatusView, error) {
 		PHPVersions:         vers,
 		TotalProjects:       len(cfg.Projects),
 	}, nil
+}
+
+// GetMetrics reads only the managed, sanitized Caddy access log. An empty
+// result is returned when collection is unavailable; the UI must not invent
+// values for a project with no samples.
+func (a *App) GetMetrics(project, rawRange string) (*metrics.Snapshot, error) {
+	rangeValue := metrics.Range(rawRange)
+	if rangeValue != metrics.Range15m && rangeValue != metrics.Range1h && rangeValue != metrics.Range24h && rangeValue != metrics.Range7d {
+		return nil, fmt.Errorf("intervalo de métricas inválido: %s", rawRange)
+	}
+	data, err := os.ReadFile(filepath.Join(a.service.Store.Paths().LogsDir, "access.jsonl"))
+	if err != nil {
+		return nil, nil
+	}
+	now := time.Now()
+	if a.service.Now != nil {
+		now = a.service.Now()
+	}
+	return metrics.Aggregate(data, project, rangeValue, now), nil
 }
 
 func (a *App) GetGlobalConfig() (GlobalConfigView, error) {
