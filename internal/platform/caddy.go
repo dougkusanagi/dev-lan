@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
+	"time"
 )
 
 const (
@@ -111,7 +113,31 @@ func (c CaddyClient) HashPassword(ctx context.Context, password string) (string,
 // after a reboot or a previously interrupted installation.
 func (c CaddyClient) EnsureRunning(ctx context.Context, configPath string) error {
 	if c.WSL {
-		return c.Reload(ctx, configPath)
+		if err := c.Reload(ctx, configPath); err == nil {
+			return nil
+		}
+		wslPath, err := ToWSLPath(configPath)
+		if err != nil {
+			return err
+		}
+		// The package normally installs Caddy as a service, but WSL services can
+		// be unavailable after a reboot or when systemd is disabled. Start a
+		// detached fallback so the GUI can recover without a terminal.
+		script := fmt.Sprintf("nohup caddy run --config %s --adapter caddyfile >/tmp/devlan-caddy.log 2>&1 </dev/null &", shellQuote(wslPath))
+		if _, err := c.Runner.Run(ctx, "/bin/sh", "-c", script); err != nil {
+			return fmt.Errorf("iniciar Caddy no WSL: %w", err)
+		}
+
+		var lastErr error
+		for attempt := 0; attempt < 20; attempt++ {
+			if err := c.Reload(ctx, configPath); err == nil {
+				return nil
+			} else {
+				lastErr = err
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+		return fmt.Errorf("Caddy no WSL não respondeu após iniciar: %w", lastErr)
 	}
 	if err := c.Reload(ctx, configPath); err == nil {
 		return nil
@@ -125,10 +151,15 @@ func (c CaddyClient) EnsureRunning(ctx context.Context, configPath string) error
 	command := exec.Command(c.Binary, "run", "--config", configPath, "--adapter", "caddyfile")
 	command.Stdout = nil
 	command.Stderr = nil
+	hideProcessWindow(command)
 	if err := command.Start(); err != nil {
 		return fmt.Errorf("iniciar Caddy Windows: %w", err)
 	}
 	return nil
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
 // FindLocalCaddy resolves both a PATH installation and Caddy installed by

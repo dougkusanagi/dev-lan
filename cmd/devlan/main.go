@@ -15,6 +15,7 @@ import (
 	"github.com/dougkusanagi/dev-lan/internal/app"
 	"github.com/dougkusanagi/dev-lan/internal/detect"
 	"github.com/dougkusanagi/dev-lan/internal/domain"
+	"github.com/dougkusanagi/dev-lan/internal/gui"
 	"github.com/dougkusanagi/dev-lan/internal/platform"
 )
 
@@ -376,6 +377,9 @@ func run(args []string) error {
 
 	case "dns":
 		return runDNS(ctx, service, args)
+
+	case "gui":
+		return gui.Launch(service)
 
 	case "security":
 		return runSecurity(ctx, service, args)
@@ -1010,6 +1014,7 @@ Servidores Dev e Estáticos:
   dev NAME [OPÇÕES]          configura ou gerencia servidor dev
 
 Operação:
+  gui                        inicia a interface gráfica desktop (Wails)
   status                     mostra componentes, projetos e URLs
   reload                     valida/aplica configurações e recarrega Caddy
   trust                      instala e confia na CA interna do Caddy (Administrador*)

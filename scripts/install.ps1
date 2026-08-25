@@ -400,7 +400,10 @@ function Build-Devlan {
     $target = Join-Path $bin 'devlan.exe'
     Push-Location $SourceRoot
     try {
-        Invoke-Native $GoPath @('build', '-trimpath', '-o', $target, './cmd/devlan') | Write-Host
+        # Wails requires the desktop build tag. Production enables the
+        # production runtime path, and windowsgui prevents a console window
+        # from being created when the GUI is launched.
+        Invoke-Native $GoPath @('build', '-tags', 'desktop,production', '-ldflags', '-w -s -H windowsgui', '-trimpath', '-o', $target, './cmd/devlan') | Write-Host
     } finally {
         Pop-Location
     }

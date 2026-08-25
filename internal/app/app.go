@@ -811,6 +811,10 @@ func (a *App) saveAndApply(ctx context.Context, cfg domain.Config, reload bool) 
 	return result, nil
 }
 
+func (a *App) SaveConfigAndApply(ctx context.Context, cfg domain.Config, reload bool) (ApplyResult, error) {
+	return a.saveAndApply(ctx, cfg, reload)
+}
+
 func (a *App) apply(ctx context.Context, cfg domain.Config, validate, reload bool) (ApplyResult, error) {
 	effective, err := a.EffectiveConfig(ctx, cfg)
 	if err != nil {
@@ -907,10 +911,10 @@ func (a *App) apply(ctx context.Context, cfg domain.Config, validate, reload boo
 			}
 		}
 		if wslReady {
-			if err := a.WSLCaddy.Reload(ctx, paths.WSLCaddy); err != nil {
+			if err := a.WSLCaddy.EnsureRunning(ctx, paths.WSLCaddy); err != nil {
 				_ = a.Store.RollbackGenerated()
 				_ = a.Store.RollbackPHPFiles()
-				return result, fmt.Errorf("recarregar Caddy WSL: %w", err)
+				return result, fmt.Errorf("iniciar/recarregar Caddy WSL: %w", err)
 			}
 		}
 	}
@@ -1357,9 +1361,17 @@ func (a *App) StartDev(ctx context.Context, selector string) error {
 	if err != nil {
 		return err
 	}
+	resolved, err := cfg.Resolve(project.Name)
+	if err != nil {
+		return err
+	}
+	if resolved.Mode != domain.ModeDev && resolved.Mode != domain.ModeAuto {
+		return fmt.Errorf("o projeto %s usa o modo %s e não possui servidor dev", project.Name, resolved.Mode)
+	}
 	port := cfg.DevPort(project)
 	cmd := cfg.DevCommand(project)
 	if err := a.Dev.StartDev(ctx, project, port, cmd); err != nil {
+		_ = a.appendLog("dev start %s falhou: %v", project.Name, err)
 		return err
 	}
 	_ = a.appendLog("dev start %s (porta %d)", project.Name, port)

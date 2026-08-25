@@ -129,20 +129,20 @@ Objetivo: atender projetos incompatíveis com subpath e reduzir exposição acid
 
 ---
 
-## Fase 5 — Interface Wails (Próxima)
+## Fase 5 — Interface Wails — Implementada
 
 Objetivo: oferecer operação visual sem duplicar o núcleo.
 
-- [ ] Setup do Wails v2/v3 integrado ao núcleo Go
-- [ ] Frontend TypeScript + Tailwind compilado
-- [ ] Lista e busca em tempo real de projetos
-- [ ] Estados visuais: parado, iniciando, pronto, degradado e erro
-- [ ] Ações rápidas: abrir URL, copiar URL, start, stop, restart e visualizador de logs
-- [ ] Editor visual de configuração global e overrides de projeto
-- [ ] Diagnóstico integrado com correções guiadas
-- [ ] Menu na system tray com notificações acionáveis
-- [ ] Acessibilidade por teclado e suporte a tema claro/escuro
-- [ ] Empacotador e atualizador seguro
+- [x] Setup do Wails v2/v3 integrado ao núcleo Go
+- [x] Frontend TypeScript + Tailwind compilado
+- [x] Lista e busca em tempo real de projetos
+- [x] Estados visuais: parado, iniciando, pronto, degradado e erro
+- [x] Ações rápidas: abrir URL, copiar URL, start, stop, restart e visualizador de logs
+- [x] Editor visual de configuração global e overrides de projeto
+- [x] Diagnóstico integrado com correções guiadas
+- [x] Menu na system tray com notificações acionáveis
+- [x] Acessibilidade por teclado e suporte a tema claro/escuro
+- [x] Empacotador e atualizador seguro
 
 **Critério de aceite:** Todas as operações diárias podem ser executadas pela UI ou CLI com exata paridade e sem divergência de estado.
 

@@ -131,8 +131,8 @@ func (m WSLDevManager) StartDev(ctx context.Context, project domain.Project, por
 
 	if m.usesWSL(project.Path) {
 		// Launch background process inside WSL using nohup and recording PID
-		script := fmt.Sprintf(`cd "%s" && PORT=%d PORT_DEV=%d nohup /bin/sh -c "%s" > "%s" 2>&1 & echo $! > "%s"`,
-			project.Path, port, port, command, logFile, pidFile)
+		script := fmt.Sprintf("cd %s && PORT=%d PORT_DEV=%d nohup /bin/sh -c %s > %s 2>&1 </dev/null & echo $! > %s",
+			shellQuote(project.Path), port, port, shellQuote(command), shellQuote(logFile), shellQuote(pidFile))
 		_, err := m.WSL.Run(ctx, "/bin/sh", "-c", script)
 		if err != nil {
 			return fmt.Errorf("iniciar servidor dev no WSL: %w", err)
@@ -159,7 +159,8 @@ func (m WSLDevManager) StartDev(ctx context.Context, project domain.Project, por
 		}
 	}
 
-	// Wait up to 10s for port to open
+	// Do not report success until the server is actually accepting connections.
+	// A background shell can exit successfully even when npm/bun fails.
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if isPortListening(port) {
@@ -168,7 +169,15 @@ func (m WSLDevManager) StartDev(ctx context.Context, project domain.Project, por
 		time.Sleep(300 * time.Millisecond)
 	}
 
-	return nil
+	logOutput, _ := m.Logs(ctx, project, 80)
+	message := strings.TrimSpace(logOutput)
+	if message == "" {
+		message = "nenhuma saída foi gravada"
+	}
+	if len(message) > 2000 {
+		message = message[len(message)-2000:]
+	}
+	return fmt.Errorf("servidor dev não abriu a porta %d após 10s; logs: %s", port, message)
 }
 
 func (m WSLDevManager) StopDev(ctx context.Context, project domain.Project, port int) error {

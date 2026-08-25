@@ -30,6 +30,7 @@ func NewExecRunner(program string, prefix ...string) ExecRunner {
 func (r ExecRunner) Run(ctx context.Context, args ...string) (string, error) {
 	commandArgs := append(append([]string(nil), r.Prefix...), args...)
 	command := exec.CommandContext(ctx, r.Program, commandArgs...)
+	hideProcessWindow(command)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
