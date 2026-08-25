@@ -31,7 +31,7 @@ try {
         '-tags'
         'desktop,production'
         '-ldflags'
-        '-w -s -H windowsgui'
+        '-w -s'
         '-trimpath'
         '-o'
         $resolvedOutput
