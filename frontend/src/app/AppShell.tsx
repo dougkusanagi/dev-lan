@@ -240,7 +240,11 @@ export default function AppShell() {
               onCopyLAN={() =>
                 void api
                   .copyURL(project.lanUrl)
-                  .then(() => notify('URL LAN copiada.'))
+                  .then(() =>
+                    notify(
+                      'URL LAN copiada. Nota: cookies HTTP não são isolados por porta no mesmo IP.',
+                    ),
+                  )
                   .catch((e) => notify(String(e)))
               }
               onCopyPath={() =>

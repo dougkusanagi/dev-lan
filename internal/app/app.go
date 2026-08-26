@@ -1577,6 +1577,12 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 		checks = append(checks, Check{"Allowlist Global", "OK", "aberto para sub-rede privada"})
 	}
 
+	if caInfo, err := a.CAInfo(ctx); err == nil && caInfo["exists"] == "true" {
+		checks = append(checks, Check{"CA Local", "OK", fmt.Sprintf("certificado raiz presente (%s)", caInfo["path"])})
+	} else {
+		checks = append(checks, Check{"CA Local", "WARN", "certificado raiz não encontrado; execute `devlan trust` como Administrador"})
+	}
+
 	firewallSpec := platform.FirewallSpecForConfig(cfg)
 	if rule, inspectErr := a.inspectFirewall(ctx); inspectErr != nil {
 		if errors.Is(inspectErr, platform.ErrFirewallNotFound) {
@@ -1607,6 +1613,24 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 		resolved, err := effective.Resolve(project.Name)
 		if err != nil {
 			return nil, err
+		}
+
+		// Local name and origin validation
+		if _, err := domain.NormalizeName(project.Name); err != nil {
+			checks = append(checks, Check{"Projeto " + project.Name + " (Nome Local)", "FAIL", "nome inválido: " + err.Error()})
+		} else {
+			checks = append(checks, Check{"Projeto " + project.Name + " (Nome Local)", "OK", domain.LocalDevURL(project.Name)})
+		}
+
+		// LAN port validation
+		overrideStr := "automática"
+		if project.RoutePort != nil {
+			overrideStr = "customizada"
+		}
+		if resolved.RoutePort < 1024 || resolved.RoutePort > 65535 {
+			checks = append(checks, Check{"Projeto " + project.Name + " (Porta LAN)", "FAIL", fmt.Sprintf("porta %d inválida", resolved.RoutePort)})
+		} else {
+			checks = append(checks, Check{"Projeto " + project.Name + " (Porta LAN)", "OK", fmt.Sprintf(":%d (%s)", resolved.RoutePort, overrideStr)})
 		}
 
 		routeDetail := fmt.Sprintf("porta LAN :%d", resolved.RoutePort)

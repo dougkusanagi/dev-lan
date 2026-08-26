@@ -92,18 +92,18 @@ uma instalação elevada.
 
 ## Marco 4 — Duas origens simultâneas (P0/P1)
 
-- [ ] `M4-01` Gerar sempre `https://nome.localhost/` e `http(s)://IP:porta/` por
+- [x] `M4-01` Gerar sempre `https://nome.localhost/` e `http(s)://IP:porta/` por
   projeto, sem seletor de modo.
-- [ ] `M4-02` Aceitar `.localhost` somente de loopback e gerenciar CA/certificado
+- [x] `M4-02` Aceitar `.localhost` somente de loopback e gerenciar CA/certificado
   sem editar `hosts` ou DNS.
-- [ ] `M4-03` Fechar a confiança de `X-DevLAN-*` e forwarded headers entre os
+- [x] `M4-03` Fechar a confiança de `X-DevLAN-*` e forwarded headers entre os
   dois Caddys.
-- [ ] `M4-04` Garantir raiz `/`, redirect, HTTPS, WebSocket e HMR em ambas as
+- [x] `M4-04` Garantir raiz `/`, redirect, HTTPS, WebSocket e HMR em ambas as
   origens para todas as fixtures.
-- [ ] `M4-05` Diagnosticar nome local, CA, porta, listener, firewall e IP LAN.
-- [ ] `M4-06` Mostrar as duas URLs juntas na CLI/UI; configuração expõe apenas
+- [x] `M4-05` Diagnosticar nome local, CA, porta, listener, firewall e IP LAN.
+- [x] `M4-06` Mostrar as duas URLs juntas na CLI/UI; configuração expõe apenas
   porta LAN automática/customizada.
-- [ ] `M4-07` Explicar que cookies não são isolados por porta na URL LAN.
+- [x] `M4-07` Explicar que cookies não são isolados por porta na URL LAN.
 
 **Gate:** `cj-catalogo` e fixtures passam localmente e em outra máquina da LAN,
 sem `Referer`, hosts file ou DNS.

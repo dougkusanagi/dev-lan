@@ -749,10 +749,19 @@ func validateOptionalMode(mode *Mode) error {
 	return nil
 }
 
+var reservedProjectNames = map[string]bool{
+	"devlan":    true,
+	"localhost": true,
+	"api":       true,
+}
+
 func NormalizeName(value string) (string, error) {
 	name := strings.ToLower(strings.TrimSpace(value))
 	if !projectNamePattern.MatchString(name) {
 		return "", fmt.Errorf("nome de projeto inválido %q: use letras minúsculas, números e hífen", value)
+	}
+	if reservedProjectNames[name] {
+		return "", fmt.Errorf("nome de projeto reservado: %q", value)
 	}
 	return name, nil
 }
@@ -1596,7 +1605,7 @@ func (r ResolvedProject) URL(host string, httpPort, _ int, secure bool) string {
 // suffix is resolved by the browser to the developer's own machine and keeps
 // Vite HMR, cookies, and absolute asset URLs on one origin.
 func LocalDevURL(projectName string) string {
-	return fmt.Sprintf("https://%s.localhost", projectName)
+	return fmt.Sprintf("https://%s.localhost/", projectName)
 }
 
 var ErrUnsupportedMode = errors.New("modo ainda não implementado")

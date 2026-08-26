@@ -1297,7 +1297,8 @@ func printProjects(service *app.App, filter string, asJSON bool) error {
 		if err != nil {
 			return err
 		}
-		url := resolved.URL(host, cfg.WindowsPort, cfg.HTTPSPort, effective.SecureProject(project))
+		localURL := domain.LocalDevURL(project.Name)
+		lanURL := resolved.URL(host, cfg.WindowsPort, cfg.HTTPSPort, effective.SecureProject(project))
 
 		runtimeStr := "-"
 		typeStr := string(resolved.Mode)
@@ -1324,14 +1325,16 @@ func printProjects(service *app.App, filter string, asJSON bool) error {
 		}
 
 		rows = append(rows, projectRow{
-			Name:    project.Name,
-			Mode:    string(resolved.Mode),
-			Runtime: runtimeStr,
-			Type:    typeStr,
-			Source:  string(resolved.Source),
-			SSL:     sslState(cfg.SecureProject(project)),
-			URL:     url,
-			Path:    project.Path,
+			Name:     project.Name,
+			Mode:     string(resolved.Mode),
+			Runtime:  runtimeStr,
+			Type:     typeStr,
+			Source:   string(resolved.Source),
+			SSL:      sslState(cfg.SecureProject(project)),
+			URL:      lanURL,
+			LocalURL: localURL,
+			LANURL:   lanURL,
+			Path:     project.Path,
 		})
 	}
 	if asJSON {
@@ -1346,31 +1349,33 @@ func printProjects(service *app.App, filter string, asJSON bool) error {
 	if err := writeProjectTable(os.Stdout, rows); err != nil {
 		return err
 	}
-	fmt.Printf("\n💡 Dica: execute `devlan open %s` para abrir no navegador ou `devlan secure %s` para ativar HTTPS.\n", rows[0].Name, rows[0].Name)
+	fmt.Printf("\n💡 Dica: execute `devlan open %s` para abrir no navegador local. Na LAN, cookies HTTP não são isolados por porta.\n", rows[0].Name)
 	return nil
 }
 
 type projectRow struct {
-	Name    string `json:"name"`
-	Mode    string `json:"mode"`
-	Runtime string `json:"runtime"`
-	Type    string `json:"type"`
-	Source  string `json:"source"`
-	SSL     string `json:"ssl"`
-	URL     string `json:"url"`
-	Path    string `json:"path"`
+	Name     string `json:"name"`
+	Mode     string `json:"mode"`
+	Runtime  string `json:"runtime"`
+	Type     string `json:"type"`
+	Source   string `json:"source"`
+	SSL      string `json:"ssl"`
+	URL      string `json:"url"`
+	LocalURL string `json:"local_url"`
+	LANURL   string `json:"lan_url"`
+	Path     string `json:"path"`
 }
 
 func writeProjectTable(output io.Writer, rows []projectRow) error {
 	writer := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(writer, "PROJETO\tMODO\tRUNTIME\tTIPO\tORIGEM\tSSL\tURL\tCAMINHO"); err != nil {
+	if _, err := fmt.Fprintln(writer, "PROJETO\tMODO\tRUNTIME\tTIPO\tSSL\tURL LOCAL\tURL LAN\tCAMINHO"); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(writer, "-------\t----\t-------\t----\t------\t---\t---\t-------"); err != nil {
+	if _, err := fmt.Fprintln(writer, "-------\t----\t-------\t----\t---\t---------\t-------\t-------"); err != nil {
 		return err
 	}
 	for _, row := range rows {
-		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", row.Name, row.Mode, row.Runtime, row.Type, row.Source, row.SSL, row.URL, row.Path); err != nil {
+		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", row.Name, row.Mode, row.Runtime, row.Type, row.SSL, row.LocalURL, row.LANURL, row.Path); err != nil {
 			return err
 		}
 	}
@@ -1715,7 +1720,11 @@ func runRoute(ctx context.Context, service *app.App, args []string) error {
 			}
 			fmt.Fprintf(writer, "%s\t%d\t%s\t%s\t%s\n", p.Name, port, domain.LocalDevURL(p.Name), routeURL(cfg, p, port), override)
 		}
-		return writer.Flush()
+		if err := writer.Flush(); err != nil {
+			return err
+		}
+		fmt.Println("\n💡 Nota: Na rede local (LAN), cookies HTTP não são isolados por porta no mesmo IP.")
+		return nil
 	}
 	name := args[0]
 	if len(args) == 1 {
@@ -1737,6 +1746,7 @@ func runRoute(ctx context.Context, service *app.App, args []string) error {
 		}
 		fmt.Printf("Projeto %s: porta LAN %d (%s)\n", name, eff.EffectiveRoutePort(p), override)
 		fmt.Printf("Local: %s\nLAN: %s\n", domain.LocalDevURL(p.Name), routeURL(cfg, p, eff.EffectiveRoutePort(p)))
+		fmt.Println("\n💡 Nota: Na rede local (LAN), cookies HTTP não são isolados por porta no mesmo IP.")
 		return nil
 	}
 	if len(args) != 3 || args[1] != "--port" {

@@ -39,8 +39,16 @@ function Endpoint({
   onCopy: () => void;
   active: boolean;
 }) {
+  const cardTitle =
+    tone === 'lan'
+      ? 'Acesso pela LAN: porta dedicada. Nota: cookies HTTP não são isolados por porta no mesmo IP.'
+      : 'Acesso local (.localhost): cookies, storage e HMR isolados.';
+
   return (
-    <article className={`endpoint-card ${tone}${active ? ' active' : ' inactive'}`}>
+    <article
+      className={`endpoint-card ${tone}${active ? ' active' : ' inactive'}`}
+      title={cardTitle}
+    >
       <div className="endpoint-heading">
         <span>{label}</span>
         <small>{detail}</small>

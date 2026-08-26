@@ -98,8 +98,13 @@ func RenderWindows(cfg domain.Config) (string, error) {
 			b.WriteString("    encode gzip\n")
 		}
 		fmt.Fprintf(&b, "    reverse_proxy 127.0.0.1:%d {\n", cfg.WSLPort)
+		b.WriteString("        header_up -X-DevLAN-Port\n")
+		b.WriteString("        header_up -X-DevLAN-Project\n")
+		b.WriteString("        header_up -X-DevLAN-Local\n")
+		b.WriteString("        header_up -X-DevLAN-HTTPS\n")
 		fmt.Fprintf(&b, "        header_up X-DevLAN-Port %d\n", port)
 		fmt.Fprintf(&b, "        header_up X-DevLAN-Project %s\n", route.Project.Name)
+		fmt.Fprintf(&b, "        header_up X-Forwarded-Port %d\n", port)
 		if cfg.TLSEnabled && cfg.SecureProject(route.Project) {
 			b.WriteString("        header_up X-DevLAN-HTTPS on\n")
 		}
@@ -125,6 +130,7 @@ func renderWindowsLocalOnly(b *strings.Builder, cfg domain.Config, routes []Rout
 	b.WriteString("    tls internal\n")
 	b.WriteString("    encode gzip\n")
 	renderWindowsLocalRoutes(b, cfg, routes)
+	b.WriteString("    respond \"Acesso local permitido somente via loopback\" 403\n")
 	b.WriteString("}\n")
 }
 
@@ -156,9 +162,11 @@ func renderWindowsLocalRoutes(b *strings.Builder, cfg domain.Config, routes []Ro
 			fmt.Fprintf(b, "        reverse_proxy 127.0.0.1:%d\n", cfg.DevPort(route.Project))
 		} else {
 			fmt.Fprintf(b, "        reverse_proxy 127.0.0.1:%d {\n", cfg.WSLPort)
+			b.WriteString("            header_up -X-DevLAN-Port\n")
 			b.WriteString("            header_up -X-DevLAN-Project\n")
-			fmt.Fprintf(b, "            header_up X-DevLAN-Project %s\n", name)
 			b.WriteString("            header_up -X-DevLAN-Local\n")
+			b.WriteString("            header_up -X-DevLAN-HTTPS\n")
+			fmt.Fprintf(b, "            header_up X-DevLAN-Project %s\n", name)
 			b.WriteString("            header_up X-DevLAN-Local on\n")
 			b.WriteString("            header_up X-DevLAN-HTTPS on\n")
 			b.WriteString("        }\n")
@@ -195,6 +203,7 @@ func RenderWSLWithAccessLog(cfg domain.Config, accessLogPath string) (string, er
 
 	// Main listener in WSL handles all requests forwarded from Windows edge
 	fmt.Fprintf(&b, ":%d {\n", cfg.WSLPort)
+	b.WriteString("    bind 127.0.0.1\n")
 	b.WriteString("    encode gzip\n")
 	if accessLogPath != "" {
 		// Caddy's JSON log omits request bodies and headers by default; the

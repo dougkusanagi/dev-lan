@@ -273,12 +273,25 @@ func TestAppDoctorIncludesPortAndIPChecks(t *testing.T) {
 	service := New(t.TempDir())
 	service.WindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
 	service.WSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
+	service.Detector = detect.Detector{Inspector: detect.StaticInspector{
+		Directories: map[string]bool{"/home/dev/financeiro": true},
+		Files: map[string]bool{
+			"/home/dev/financeiro/artisan":          true,
+			"/home/dev/financeiro/public/index.php": true,
+		},
+	}}
+	if _, _, err := service.Link(context.Background(), "financeiro", "/home/dev/financeiro"); err != nil {
+		t.Fatal(err)
+	}
 	checks, err := service.Doctor(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	foundPortHTTP := false
 	foundIP := false
+	foundCA := false
+	foundLocalName := false
+	foundLANPort := false
 	for _, check := range checks {
 		if strings.HasPrefix(check.Name, "Porta HTTP") {
 			foundPortHTTP = true
@@ -286,12 +299,30 @@ func TestAppDoctorIncludesPortAndIPChecks(t *testing.T) {
 		if check.Name == "IP LAN" {
 			foundIP = true
 		}
+		if check.Name == "CA Local" {
+			foundCA = true
+		}
+		if check.Name == "Projeto financeiro (Nome Local)" {
+			foundLocalName = true
+		}
+		if check.Name == "Projeto financeiro (Porta LAN)" {
+			foundLANPort = true
+		}
 	}
 	if !foundPortHTTP {
 		t.Fatalf("Doctor deveria incluir checagem de porta HTTP: %#v", checks)
 	}
 	if !foundIP {
 		t.Fatalf("Doctor deveria incluir checagem de IP LAN: %#v", checks)
+	}
+	if !foundCA {
+		t.Fatalf("Doctor deveria incluir checagem de CA Local: %#v", checks)
+	}
+	if !foundLocalName {
+		t.Fatalf("Doctor deveria incluir checagem de Nome Local do projeto: %#v", checks)
+	}
+	if !foundLANPort {
+		t.Fatalf("Doctor deveria incluir checagem de Porta LAN do projeto: %#v", checks)
 	}
 }
 

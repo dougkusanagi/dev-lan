@@ -95,8 +95,19 @@ func TestResolvedProjectURLUsesTLSState(t *testing.T) {
 }
 
 func TestLocalDevURLUsesProjectLocalhostOrigin(t *testing.T) {
-	if got, want := LocalDevURL("cj-spec-sheet"), "https://cj-spec-sheet.localhost"; got != want {
+	if got, want := LocalDevURL("cj-spec-sheet"), "https://cj-spec-sheet.localhost/"; got != want {
 		t.Fatalf("LocalDevURL() = %q, want %q", got, want)
+	}
+}
+
+func TestNormalizeNameRejectsReservedNames(t *testing.T) {
+	for _, name := range []string{"devlan", "localhost", "api"} {
+		if _, err := NormalizeName(name); err == nil {
+			t.Fatalf("NormalizeName(%q) deveria rejeitar nome reservado", name)
+		}
+	}
+	if normalized, err := NormalizeName("catalogo-app"); err != nil || normalized != "catalogo-app" {
+		t.Fatalf("NormalizeName(catalogo-app) falhou: %v", err)
 	}
 }
 

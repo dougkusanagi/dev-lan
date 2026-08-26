@@ -345,3 +345,39 @@ func TestRenderExpiredProject(t *testing.T) {
 		t.Fatalf("resposta de expiração ausente no Caddyfile:\n%s", wslResult)
 	}
 }
+
+func TestRenderWindowsAndWSLHeaderSecurityAndLoopbackRestriction(t *testing.T) {
+	cfg := domain.NewConfig()
+	cfg.Projects = []domain.Project{
+		{Name: "myapp", Path: "/home/dev/myapp"},
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	winResult, err := RenderWindows(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"header_up -X-DevLAN-Port",
+		"header_up -X-DevLAN-Project",
+		"header_up -X-DevLAN-Local",
+		"header_up -X-DevLAN-HTTPS",
+		"header_up X-DevLAN-Port 8080",
+		"header_up X-DevLAN-Project myapp",
+		"header_up X-Forwarded-Port 8080",
+		"respond \"Acesso local permitido somente via loopback\" 403",
+	} {
+		if !strings.Contains(winResult, expected) {
+			t.Fatalf("Caddyfile Windows não contém segurança esperada %q:\n%s", expected, winResult)
+		}
+	}
+
+	wslResult, err := RenderWSL(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(wslResult, "bind 127.0.0.1") {
+		t.Fatalf("Caddyfile WSL deveria conter bind 127.0.0.1:\n%s", wslResult)
+	}
+}
