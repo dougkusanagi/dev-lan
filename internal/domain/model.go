@@ -113,7 +113,10 @@ type Park struct {
 }
 
 type Config struct {
-	Version            int                `json:"version"`
+	Version int `json:"version"`
+	// Revision is the monotonic persisted revision, distinct from Version
+	// (the schema version). It is used for optimistic concurrency control.
+	Revision           uint64             `json:"revision,omitempty"`
 	DefaultMode        Mode               `json:"default_mode"`
 	DefaultRouteMode   RouteMode          `json:"default_route_mode,omitempty"`
 	RouteBasePort      int                `json:"route_base_port,omitempty"`

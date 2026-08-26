@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dougkusanagi/dev-lan/internal/caddy"
@@ -34,7 +35,9 @@ type App struct {
 	Telemetry    telemetry.Store
 	WindowsCaddy platform.CaddyClient
 	WSLCaddy     platform.CaddyClient
+	Firewall     platform.FirewallManager
 	Now          func() time.Time
+	mutationMu   sync.Mutex
 }
 
 type mockRunner struct{}
@@ -64,12 +67,43 @@ func New(dataDir string) *App {
 		Telemetry:    telemetry.NewStore(dataDir),
 		WindowsCaddy: winCaddy,
 		WSLCaddy:     wslCaddy,
+		Firewall:     platform.SystemFirewall{},
 		Now:          time.Now,
 	}
 }
 
 type ApplyResult struct {
 	Warnings []string
+	Status   string `json:"status,omitempty"`
+	Revision uint64 `json:"revision,omitempty"`
+}
+
+type OperationMode string
+
+const (
+	BootstrapTolerant OperationMode = "bootstrap-tolerant"
+	OperationalStrict OperationMode = "operational-strict"
+)
+
+func (a *App) ensureFirewall(ctx context.Context, ports ...int) error {
+	if a.Firewall == nil {
+		return platform.SystemFirewall{}.Ensure(ctx, ports...)
+	}
+	return a.Firewall.Ensure(ctx, ports...)
+}
+
+func (a *App) now() time.Time {
+	if a.Now != nil {
+		return a.Now()
+	}
+	return time.Now()
+}
+
+func (a *App) removeFirewall(ctx context.Context) error {
+	if a.Firewall == nil {
+		return platform.SystemFirewall{}.Remove(ctx)
+	}
+	return a.Firewall.Remove(ctx)
 }
 
 func (a *App) CloseDevProxies() error {
@@ -95,13 +129,8 @@ func (a *App) InstallWithPort(ctx context.Context, configureFirewall bool, windo
 	if windowsPort != 0 {
 		cfg.WindowsPort = windowsPort
 	}
-	result, err := a.apply(ctx, cfg, false, false)
+	result, err := a.saveAndApplyMode(ctx, cfg, false, BootstrapTolerant)
 	if err != nil {
-		return result, err
-	}
-	if err := a.Store.Save(cfg); err != nil {
-		_ = a.Store.RollbackGenerated()
-		_ = a.Store.RollbackPHPFiles()
 		return result, err
 	}
 	if !platform.IsAdminResponsive(platform.WindowsCaddyAdminAddress) {
@@ -117,7 +146,7 @@ func (a *App) InstallWithPort(ctx context.Context, configureFirewall bool, windo
 		if cfg.TLSEnabled {
 			ports = append(ports, cfg.HTTPSPort)
 		}
-		if err := platform.EnsureFirewall(ctx, ports...); err != nil && runtime.GOOS == "windows" {
+		if err := a.ensureFirewall(ctx, ports...); err != nil && runtime.GOOS == "windows" {
 			result.Warnings = append(result.Warnings, "não foi possível criar a regra de firewall DevLAN; execute install como administrador")
 		}
 	}
@@ -138,6 +167,7 @@ func (a *App) InstallWithPort(ctx context.Context, configureFirewall bool, windo
 	if !phpFound {
 		result.Warnings = append(result.Warnings, "PHP-FPM não encontrado no WSL; instale uma versão suportada e execute devlan doctor")
 	}
+	result.Status = statusFor(result)
 	_ = a.appendLog("install concluído")
 	a.recordTelemetry("install", map[string]string{"result": "ok"})
 	return result, nil
@@ -146,7 +176,7 @@ func (a *App) InstallWithPort(ctx context.Context, configureFirewall bool, windo
 func (a *App) Uninstall(ctx context.Context) (ApplyResult, error) {
 	result := ApplyResult{}
 	_ = a.appendLog("uninstall iniciado")
-	if err := platform.RemoveFirewall(ctx); err != nil && runtime.GOOS == "windows" {
+	if err := a.removeFirewall(ctx); err != nil && runtime.GOOS == "windows" {
 		result.Warnings = append(result.Warnings, "não foi possível remover a regra de firewall DevLAN; execute uninstall como administrador")
 	}
 	if err := a.Store.RemoveManagedFiles(); err != nil {
@@ -769,7 +799,7 @@ func (a *App) SetTLS(ctx context.Context, enabled bool) (ApplyResult, error) {
 	if enabled {
 		ports = append(ports, cfg.HTTPSPort)
 	}
-	if err := platform.EnsureFirewall(ctx, ports...); err != nil && runtime.GOOS == "windows" {
+	if err := a.ensureFirewall(ctx, ports...); err != nil && runtime.GOOS == "windows" {
 		result.Warnings = append(result.Warnings, "não foi possível atualizar o firewall; execute o comando em PowerShell como Administrador")
 	}
 	if enabled {
@@ -830,7 +860,7 @@ func (a *App) SetProjectTLS(ctx context.Context, selector string, enabled bool) 
 		return result, cfg.Projects[projectIndex].Name, err
 	}
 	if enabled {
-		if err := platform.EnsureFirewall(ctx, cfg.WindowsPort, cfg.HTTPSPort); err != nil && runtime.GOOS == "windows" {
+		if err := a.ensureFirewall(ctx, cfg.WindowsPort, cfg.HTTPSPort); err != nil && runtime.GOOS == "windows" {
 			result.Warnings = append(result.Warnings, "não foi possível atualizar o firewall; execute o comando em PowerShell como Administrador")
 		}
 		if err := a.WindowsCaddy.Trust(ctx); err != nil {
@@ -857,12 +887,32 @@ func projectBySelector(projects []domain.Project, selector string) (domain.Proje
 }
 
 func (a *App) Reload(ctx context.Context) (ApplyResult, error) {
-	cfg, err := a.Store.Load()
-	if err != nil {
-		return ApplyResult{}, err
-	}
-	result, err := a.apply(ctx, cfg, true, true)
+	a.mutationMu.Lock()
+	defer a.mutationMu.Unlock()
+	var result ApplyResult
+	err := a.Store.WithLock(ctx, func() error {
+		cfg, err := a.Store.LoadLocked()
+		if err != nil {
+			return err
+		}
+		result, err = a.apply(ctx, cfg, true, false, OperationalStrict)
+		if err != nil {
+			return err
+		}
+		result, err = a.reloadApplied(ctx, cfg, result, OperationalStrict)
+		if err != nil {
+			result.Status = "rolled_back"
+			_ = a.Store.RollbackGenerated()
+			_ = a.Store.RollbackPHPFiles()
+			if previous, loadErr := a.Store.LoadLocked(); loadErr == nil {
+				_, _ = a.reloadApplied(ctx, previous, ApplyResult{}, BootstrapTolerant)
+			}
+			return err
+		}
+		return nil
+	})
 	if err == nil {
+		result.Status = statusFor(result)
 		_ = a.appendLog("reload aplicado")
 		a.recordTelemetry("reload", map[string]string{"result": "ok"})
 	}
@@ -870,12 +920,56 @@ func (a *App) Reload(ctx context.Context) (ApplyResult, error) {
 }
 
 func (a *App) saveAndApply(ctx context.Context, cfg domain.Config, reload bool) (ApplyResult, error) {
-	result, err := a.apply(ctx, cfg, false, reload)
+	return a.saveAndApplyMode(ctx, cfg, reload, OperationalStrict)
+}
+
+func (a *App) saveAndApplyMode(ctx context.Context, cfg domain.Config, reload bool, mode OperationMode) (ApplyResult, error) {
+	a.mutationMu.Lock()
+	defer a.mutationMu.Unlock()
+	var result ApplyResult
+	err := a.Store.WithLock(ctx, func() error {
+		current, err := a.Store.LoadLocked()
+		if err != nil {
+			return err
+		}
+		if cfg.Revision != 0 && cfg.Revision != current.Revision {
+			return fmt.Errorf("%w: esperado %d, atual %d", config.ErrRevisionConflict, cfg.Revision, current.Revision)
+		}
+		// Plan, validate and stage happen before the persistent commit. The
+		// generated files are backed up by Store and are therefore recoverable
+		// if any subsequent phase fails.
+		result, err = a.apply(ctx, cfg, true, false, mode)
+		if err != nil {
+			result.Status = "failed"
+			return err
+		}
+		if err := a.Store.SaveLocked(cfg); err != nil {
+			_ = a.Store.RollbackConfigLocked()
+			_ = a.Store.RollbackGenerated()
+			_ = a.Store.RollbackPHPFiles()
+			result.Status = "failed"
+			return err
+		}
+		result.Revision = current.Revision + 1
+		if reload {
+			result, err = a.reloadApplied(ctx, cfg, result, mode)
+			if err != nil {
+				// Compensate both files and live processes. A failed post-commit
+				// reload must not leave a newer state pointing at older services.
+				_ = a.Store.RollbackConfigLocked()
+				_ = a.Store.RollbackGenerated()
+				_ = a.Store.RollbackPHPFiles()
+				if previous, loadErr := a.Store.LoadLocked(); loadErr == nil {
+					_, _ = a.reloadApplied(ctx, previous, ApplyResult{}, BootstrapTolerant)
+				}
+				result.Status = "rolled_back"
+				return err
+			}
+		}
+		result.Status = statusFor(result)
+		return nil
+	})
 	if err != nil {
-		return result, err
-	}
-	if err := a.Store.Save(cfg); err != nil {
-		_ = a.Store.RollbackGenerated()
 		return result, err
 	}
 	return result, nil
@@ -885,7 +979,70 @@ func (a *App) SaveConfigAndApply(ctx context.Context, cfg domain.Config, reload 
 	return a.saveAndApply(ctx, cfg, reload)
 }
 
-func (a *App) apply(ctx context.Context, cfg domain.Config, validate, reload bool) (ApplyResult, error) {
+func statusFor(result ApplyResult) string {
+	if len(result.Warnings) > 0 {
+		return "degraded"
+	}
+	return "applied"
+}
+
+// reloadApplied is the commit-side runtime phase. It deliberately operates
+// only on the already staged/committed artifacts and performs a health check
+// after each Caddy operation.
+func (a *App) reloadApplied(ctx context.Context, cfg domain.Config, result ApplyResult, mode OperationMode) (ApplyResult, error) {
+	_, phpPools, err := phpconfig.PlansByFile(cfg)
+	if err != nil {
+		return result, err
+	}
+	if len(phpPools) > 0 {
+		if poolManager, ok := a.PHP.(platform.PHPPoolManager); ok {
+			if err := poolManager.EnsurePools(ctx, phpPools); err != nil {
+				result.Warnings = append(result.Warnings, "não foi possível iniciar todos os pools PHP: "+err.Error())
+			}
+		}
+	}
+	paths := a.Store.Paths()
+	if err := a.WindowsCaddy.Available(ctx); err == nil {
+		if err := a.WindowsCaddy.EnsureRunning(ctx, paths.WindowsCaddy); err != nil {
+			return result, fmt.Errorf("recarregar Caddy Windows: %w", err)
+		}
+		if err := a.WindowsCaddy.Available(ctx); err != nil {
+			return result, fmt.Errorf("healthcheck Caddy Windows: %w", err)
+		}
+	} else {
+		if mode == OperationalStrict {
+			return result, fmt.Errorf("Caddy Windows indisponível")
+		}
+		result.Warnings = append(result.Warnings, "Caddy Windows não disponível; reload ignorado")
+	}
+	if err := a.WSLCaddy.Available(ctx); err == nil {
+		if err := a.WSLCaddy.EnsureRunning(ctx, paths.WSLCaddy); err != nil {
+			return result, fmt.Errorf("iniciar/recarregar Caddy WSL: %w", err)
+		}
+		if err := a.WSLCaddy.Available(ctx); err != nil {
+			return result, fmt.Errorf("healthcheck Caddy WSL: %w", err)
+		}
+	} else {
+		if mode == OperationalStrict {
+			return result, fmt.Errorf("Caddy no WSL indisponível")
+		}
+		result.Warnings = append(result.Warnings, "Caddy no WSL não disponível; reload ignorado")
+	}
+	if a.DevProxy != nil && os.Getenv("DEVLAN_TEST_MOCK") != "1" {
+		for _, project := range cfg.Projects {
+			resolved, resolveErr := cfg.Resolve(project.Name)
+			if resolveErr != nil || resolved.Mode != domain.ModeDev {
+				continue
+			}
+			if proxyErr := a.DevProxy.Ensure(ctx, project, cfg.DevPort(project), cfg.DevCommand(project), cfg.ProjectIdleTimeout(project)); proxyErr != nil {
+				result.Warnings = append(result.Warnings, fmt.Sprintf("proxy dev %s não iniciado: %v", project.Name, proxyErr))
+			}
+		}
+	}
+	return result, nil
+}
+
+func (a *App) apply(ctx context.Context, cfg domain.Config, validate, reload bool, mode OperationMode) (ApplyResult, error) {
 	effective, err := a.EffectiveConfig(ctx, cfg)
 	if err != nil {
 		return ApplyResult{}, err
@@ -935,11 +1092,17 @@ func (a *App) apply(ctx context.Context, cfg domain.Config, validate, reload boo
 	wslReady := false
 	if validate || reload {
 		if err := a.WindowsCaddy.Available(ctx); err != nil {
+			if mode == OperationalStrict {
+				return result, fmt.Errorf("Caddy Windows indisponível: %w", err)
+			}
 			result.Warnings = append(result.Warnings, "Caddy Windows não disponível; validação/reload externo ignorado")
 		} else {
 			windowsReady = true
 		}
 		if err := a.WSLCaddy.Available(ctx); err != nil {
+			if mode == OperationalStrict {
+				return result, fmt.Errorf("Caddy no WSL indisponível: %w", err)
+			}
 			result.Warnings = append(result.Warnings, "Caddy no WSL não disponível; validação/reload externo ignorado")
 		} else {
 			wslReady = true
@@ -1261,7 +1424,7 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 		}
 		projects = []domain.Project{project}
 	}
-	now := time.Now()
+	now := a.now()
 	for _, project := range projects {
 		resolved, err := effective.Resolve(project.Name)
 		if err != nil {
@@ -1392,7 +1555,7 @@ func (a *App) appendLog(format string, values ...any) error {
 	if err := a.Store.Ensure(); err != nil {
 		return err
 	}
-	stamp := time.Now().Format(time.RFC3339)
+	stamp := a.now().Format(time.RFC3339)
 	line := fmt.Sprintf("%s %s\n", stamp, fmt.Sprintf(format, values...))
 	file, err := os.OpenFile(filepath.Join(a.Store.Paths().LogsDir, "devlan.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
@@ -1854,7 +2017,7 @@ func (a *App) ExposeProject(ctx context.Context, selector string, duration time.
 	}
 	var untilStr *string
 	if duration > 0 {
-		exp := time.Now().Add(duration).UTC().Format(time.RFC3339)
+		exp := a.now().Add(duration).UTC().Format(time.RFC3339)
 		untilStr = &exp
 	}
 	cfg.Projects[index].ExposedUntil = untilStr
@@ -1875,7 +2038,7 @@ func (a *App) UnexposeProject(ctx context.Context, selector string) (ApplyResult
 	if err != nil {
 		return ApplyResult{}, "", err
 	}
-	past := time.Now().Add(-1 * time.Minute).UTC().Format(time.RFC3339)
+	past := a.now().Add(-1 * time.Minute).UTC().Format(time.RFC3339)
 	cfg.Projects[index].ExposedUntil = &past
 	result, err := a.saveAndApply(ctx, cfg, true)
 	if err == nil {
@@ -2070,7 +2233,7 @@ func (a *App) ImportConfig(ctx context.Context, data []byte) (ApplyResult, error
 // managed files. Project contents, environment variables and credentials are
 // never traversed or included.
 func (a *App) DiagnosticBundle(ctx context.Context, targetPath string) (string, error) {
-	now := time.Now()
+	now := a.now()
 	if a.Now != nil {
 		now = a.Now()
 	}

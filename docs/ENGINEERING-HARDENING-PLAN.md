@@ -19,24 +19,23 @@ canônicas ficam em [ROADMAP.md](ROADMAP.md).
 
 ## 1. Consistência de estado e concorrência — crítico
 
-### Evidência atual
+### Evidência anterior (resolvida no Marco 1)
 
-- `saveAndApply` aplica/recarrega antes de persistir a configuração;
+- `saveAndApply` aplicava/recarregava antes de persistir a configuração;
 - se `Store.Save` falha, Caddyfiles voltam em disco, mas o processo já
   recarregado não é explicitamente recarregado com o snapshot;
 - falha do Caddy WSL após reload do Windows também não prova rollback do estado
   em memória do Windows;
-- `Store.Save` troca `config.toml` e `state.json` separadamente;
+- `Store.Save` trocava `config.toml` e `state.json` separadamente;
 - CLI, API/serviço e Wails fazem load-modify-save sem lock/revisão global;
 - o renderer usa `time.Now()`, prejudicando repetibilidade.
 
-### Melhoria
+### Implementação
 
-Criar coordenador de mutações com lock entre processos, mutex interno, revisão
-otimista, plan imutável, staging, validação, commit recuperável,
-reload/healthcheck e compensação. Persistência deve usar manifesto/journal ou
-diretório geracional com ponteiro atômico; renomear dois arquivos
-individualmente não cria transação.
+O coordenador de mutações usa lock entre processos, mutex interno, revisão
+otimista, plan/staging, validação, commit recuperável, reload/healthcheck e
+compensação. A persistência usa manifesto/journal e cópias do último par
+completo; renames individuais são recuperados no próximo bootstrap.
 
 Resultados distinguem `applied`, `degraded`, `rolled back` e `failed`.
 Rollback inclui processos, não apenas arquivos.

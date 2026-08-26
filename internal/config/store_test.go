@@ -1,14 +1,80 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dougkusanagi/dev-lan/internal/domain"
 )
+
+func TestStoreUsesOptimisticRevisionAndRecoversInterruptedPair(t *testing.T) {
+	store := NewStore(t.TempDir())
+	first := domain.NewConfig()
+	first.LANAddress = "192.168.1.10"
+	if err := store.Save(first); err != nil {
+		t.Fatal(err)
+	}
+	left, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	left.LANAddress = "192.168.1.11"
+	if err := store.Save(left); err != nil {
+		t.Fatal(err)
+	}
+	right.LANAddress = "192.168.1.12"
+	if err := store.Save(right); !errors.Is(err, ErrRevisionConflict) {
+		t.Fatalf("esperava conflito de revisão, obtido %v", err)
+	}
+
+	next, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	next.LANAddress = "192.168.1.20"
+	store.Fault = func(point string) error {
+		if point == "rename.state" {
+			return errors.New("falha simulada")
+		}
+		return nil
+	}
+	if err := store.Save(next); err == nil {
+		t.Fatal("falha de rename deveria interromper o commit")
+	}
+	store.Fault = nil
+	recovered, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.LANAddress != "192.168.1.11" {
+		t.Fatalf("par anterior não restaurado: %#v", recovered)
+	}
+}
+
+func TestStoreLockIsSharedAcrossProcesses(t *testing.T) {
+	store := NewStore(t.TempDir())
+	started := make(chan struct{})
+	release := make(chan struct{})
+	go func() {
+		_ = store.WithLock(context.Background(), func() error { close(started); <-release; return nil })
+	}()
+	<-started
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	if err := store.WithLock(ctx, func() error { return nil }); err == nil {
+		t.Fatal("segundo lock deveria aguardar e falhar por timeout")
+	}
+	close(release)
+}
 
 func TestStoreRoundTripAndTOML(t *testing.T) {
 	dir := t.TempDir()

@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "fixtures": [
+    {"name":"php","root":"php/public/index.php","checks":["/","/asset.css","/redirect","/cookie","/origin"]},
+    {"name":"static","root":"static","checks":["/","/assets/app.css"]},
+    {"name":"vite","root":"vite","checks":["/","/src/main.js","/origin","/ws"]},
+    {"name":"ssr","command":["node","ssr/server.mjs"],"checks":["/","/redirect","/cookie","/origin","/ws"]}
+  ]
+}

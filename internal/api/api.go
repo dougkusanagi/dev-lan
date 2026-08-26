@@ -210,6 +210,7 @@ func (s *Server) handleStatus(writer http.ResponseWriter, request *http.Request)
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"runtime":          runtime.GOOS + "/" + runtime.GOARCH,
 		"data_dir":         s.store.Paths().Dir,
+		"revision":         cfg.Revision,
 		"default_mode":     cfg.DefaultMode,
 		"default_route":    cfg.DefaultRouteMode,
 		"windows_port":     cfg.WindowsPort,
@@ -379,7 +380,7 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 			writeJSONError(writer, http.StatusInternalServerError, err.Error())
 			return
 		}
-		response["status"] = map[string]any{"default_mode": cfg.DefaultMode, "windows_port": cfg.WindowsPort, "https_port": cfg.HTTPSPort, "tls_enabled": cfg.TLSEnabled, "project_count": len(cfg.Projects), "park_count": len(cfg.Parks)}
+		response["status"] = map[string]any{"revision": cfg.Revision, "default_mode": cfg.DefaultMode, "windows_port": cfg.WindowsPort, "https_port": cfg.HTTPSPort, "tls_enabled": cfg.TLSEnabled, "project_count": len(cfg.Projects), "park_count": len(cfg.Parks)}
 	case "reload":
 		if len(input.Args) != 0 {
 			writeJSONError(writer, http.StatusBadRequest, "uso: reload")

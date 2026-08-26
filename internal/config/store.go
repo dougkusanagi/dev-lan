@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,7 +20,44 @@ import (
 // this store and are therefore untouched by uninstall or rollback.
 type Store struct {
 	Dir string
+	// FS is the host-I/O seam used by persistence and fault-injection tests.
+	FS FileSystem
+	// Fault is intentionally injectable so transaction recovery can be tested
+	// at every write/rename boundary without corrupting a real installation.
+	Fault FaultInjector
+	// Now is injected by tests and keeps audit/transaction timestamps
+	// deterministic.
+	Now func() time.Time
 }
+
+type FaultInjector func(point string) error
+
+// FileSystem is deliberately small: persistence does not need to know about
+// processes, shells or project files. The production implementation delegates
+// to os and tests may provide a faulting implementation.
+type FileSystem interface {
+	OpenFile(name string, flag int, perm os.FileMode) (*os.File, error)
+	ReadFile(name string) ([]byte, error)
+	Stat(name string) (os.FileInfo, error)
+	Remove(name string) error
+	MkdirAll(path string, perm os.FileMode) error
+	CreateTemp(dir, pattern string) (*os.File, error)
+	Rename(oldPath, newPath string) error
+}
+
+type OSFileSystem struct{}
+
+func (OSFileSystem) OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
+	return os.OpenFile(name, flag, perm)
+}
+func (OSFileSystem) ReadFile(name string) ([]byte, error)         { return os.ReadFile(name) }
+func (OSFileSystem) Stat(name string) (os.FileInfo, error)        { return os.Stat(name) }
+func (OSFileSystem) Remove(name string) error                     { return os.Remove(name) }
+func (OSFileSystem) MkdirAll(path string, perm os.FileMode) error { return os.MkdirAll(path, perm) }
+func (OSFileSystem) CreateTemp(dir, pattern string) (*os.File, error) {
+	return os.CreateTemp(dir, pattern)
+}
+func (OSFileSystem) Rename(oldPath, newPath string) error { return os.Rename(oldPath, newPath) }
 
 type Paths struct {
 	Dir             string
@@ -40,9 +78,21 @@ type Paths struct {
 	WSLPrevious     string
 	LogsDir         string
 	SecurityLog     string
+	Lock            string
+	Manifest        string
+	Journal         string
+	PreviousConfig  string
+	PreviousState   string
 }
 
-func NewStore(dir string) Store { return Store{Dir: dir} }
+func NewStore(dir string) Store { return Store{Dir: dir, FS: OSFileSystem{}, Now: time.Now} }
+
+func (s Store) filesystem() FileSystem {
+	if s.FS != nil {
+		return s.FS
+	}
+	return OSFileSystem{}
+}
 
 func (s Store) Paths() Paths {
 	generated := filepath.Join(s.Dir, "generated")
@@ -65,13 +115,19 @@ func (s Store) Paths() Paths {
 		WSLPrevious:     filepath.Join(generated, "Caddyfile.wsl.previous"),
 		LogsDir:         filepath.Join(s.Dir, "logs"),
 		SecurityLog:     filepath.Join(s.Dir, "logs", "security.log"),
+		Lock:            filepath.Join(s.Dir, ".lock"),
+		Manifest:        filepath.Join(s.Dir, "manifest.json"),
+		Journal:         filepath.Join(s.Dir, "journal.jsonl"),
+		PreviousConfig:  filepath.Join(s.Dir, "config.toml.previous"),
+		PreviousState:   filepath.Join(s.Dir, "state.json.previous"),
 	}
 }
 
 func (s Store) Ensure() error {
+	fs := s.filesystem()
 	paths := s.Paths()
 	for _, dir := range []string{paths.Dir, paths.GeneratedDir, paths.PHPGeneratedDir, paths.PHPInfoDir, paths.LogsDir} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := fs.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("criar diretório %s: %w", dir, err)
 		}
 	}
@@ -79,19 +135,37 @@ func (s Store) Ensure() error {
 }
 
 type stateFile struct {
-	Version     int                       `json:"version"`
-	Allowlist   []string                  `json:"allowlist,omitempty"`
-	AuthUsers   []domain.AuthUser         `json:"auth_users,omitempty"`
-	Projects    []domain.Project          `json:"projects"`
-	Parks       []domain.Park             `json:"parks"`
-	PHPVersions []domain.PHPVersionConfig `json:"php_versions,omitempty"`
+	Version       int                       `json:"version"`
+	SchemaVersion int                       `json:"schema_version,omitempty"`
+	Revision      uint64                    `json:"revision"`
+	Allowlist     []string                  `json:"allowlist,omitempty"`
+	AuthUsers     []domain.AuthUser         `json:"auth_users,omitempty"`
+	Projects      []domain.Project          `json:"projects"`
+	Parks         []domain.Park             `json:"parks"`
+	PHPVersions   []domain.PHPVersionConfig `json:"php_versions,omitempty"`
 }
 
 func (s Store) Load() (domain.Config, error) {
+	var cfg domain.Config
+	err := s.WithLock(context.Background(), func() error {
+		var loadErr error
+		cfg, loadErr = s.LoadLocked()
+		return loadErr
+	})
+	return cfg, err
+}
+
+// LoadLocked is the read side of the persistence transaction. The caller
+// must hold Store.WithLock; it is public so the application coordinator can
+// compare a revision and commit under one lock.
+func (s Store) LoadLocked() (domain.Config, error) {
+	if err := s.recoverTransaction(); err != nil {
+		return domain.Config{}, err
+	}
 	cfg := domain.NewConfig()
 	paths := s.Paths()
 
-	if data, err := os.ReadFile(paths.Config); err == nil {
+	if data, err := s.filesystem().ReadFile(paths.Config); err == nil {
 		if err := parseTOMLConfig(data, &cfg); err != nil {
 			return domain.Config{}, fmt.Errorf("ler %s: %w", paths.Config, err)
 		}
@@ -99,12 +173,19 @@ func (s Store) Load() (domain.Config, error) {
 		return domain.Config{}, fmt.Errorf("ler %s: %w", paths.Config, err)
 	}
 
-	if data, err := os.ReadFile(paths.State); err == nil {
+	if data, err := s.filesystem().ReadFile(paths.State); err == nil {
 		var state stateFile
 		if err := json.Unmarshal(data, &state); err != nil {
 			return domain.Config{}, fmt.Errorf("ler %s: %w", paths.State, err)
 		}
+		if state.SchemaVersion == 0 {
+			state.SchemaVersion = 1
+		}
+		if state.SchemaVersion > StateSchemaVersion {
+			return domain.Config{}, fmt.Errorf("schema do estado não suportado: %d", state.SchemaVersion)
+		}
 		cfg.Version = state.Version
+		cfg.Revision = state.Revision
 		cfg.Projects = state.Projects
 		cfg.Parks = state.Parks
 		cfg.PHPVersions = state.PHPVersions
@@ -125,42 +206,28 @@ func (s Store) Load() (domain.Config, error) {
 }
 
 func (s Store) Save(cfg domain.Config) error {
+	return s.WithLock(context.Background(), func() error { return s.SaveLocked(cfg) })
+}
+
+// SaveLocked persists config and state as one recoverable transaction. The
+// caller must hold Store.WithLock.
+func (s Store) SaveLocked(cfg domain.Config) error {
 	if err := cfg.Normalize(); err != nil {
 		return err
 	}
 	if err := s.Ensure(); err != nil {
 		return err
 	}
-	paths := s.Paths()
-	if err := atomicWrite(paths.Config, []byte(renderTOMLConfig(cfg)), 0o644); err != nil {
-		return fmt.Errorf("gravar %s: %w", paths.Config, err)
-	}
-	state := stateFile{
-		Version:     cfg.Version,
-		Allowlist:   cfg.Allowlist,
-		AuthUsers:   cfg.AuthUsers,
-		Projects:    cfg.Projects,
-		Parks:       cfg.Parks,
-		PHPVersions: cfg.PHPVersions,
-	}
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return fmt.Errorf("serializar estado: %w", err)
-	}
-	data = append(data, '\n')
-	if err := atomicWrite(paths.State, data, 0o644); err != nil {
-		return fmt.Errorf("gravar %s: %w", paths.State, err)
-	}
-	return nil
+	return s.saveTransaction(cfg)
 }
 
 func (s Store) AppendSecurityAudit(event string, details string) error {
 	if err := s.Ensure(); err != nil {
 		return err
 	}
-	stamp := time.Now().UTC().Format(time.RFC3339)
+	stamp := s.now().UTC().Format(time.RFC3339)
 	line := fmt.Sprintf("[%s] EVENT=%s %s\n", stamp, event, details)
-	file, err := os.OpenFile(s.Paths().SecurityLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	file, err := s.filesystem().OpenFile(s.Paths().SecurityLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return err
 	}
@@ -170,7 +237,7 @@ func (s Store) AppendSecurityAudit(event string, details string) error {
 }
 
 func (s Store) ReadSecurityAudit(maxLines int) (string, error) {
-	data, err := os.ReadFile(s.Paths().SecurityLog)
+	data, err := s.filesystem().ReadFile(s.Paths().SecurityLog)
 	if errors.Is(err, os.ErrNotExist) {
 		return "(nenhum log de segurança registrado)\n", nil
 	}
@@ -235,6 +302,9 @@ func parseTOMLConfig(data []byte, cfg *domain.Config) error {
 			parsed, err := strconv.Atoi(value)
 			if err != nil {
 				return fmt.Errorf("linha %d: version inválida", lineNumber+1)
+			}
+			if parsed > ConfigSchemaVersion {
+				return fmt.Errorf("linha %d: schema da configuração não suportado: %d", lineNumber+1, parsed)
 			}
 			cfg.Version = parsed
 		case "windows_port":
@@ -621,8 +691,12 @@ func copyManagedTree(source, target string) error {
 }
 
 func (s Store) RemoveManagedFiles() error {
+	return s.WithLock(context.Background(), s.RemoveManagedFilesLocked)
+}
+
+func (s Store) RemoveManagedFilesLocked() error {
 	paths := s.Paths()
-	files := []string{paths.Config, paths.State, paths.APIToken, paths.APIEndpoint, paths.Telemetry, paths.TelemetryQueue, paths.CARootExport}
+	files := []string{paths.Config, paths.State, paths.Manifest, paths.Journal, paths.PreviousConfig, paths.PreviousState, paths.APIToken, paths.APIEndpoint, paths.Telemetry, paths.TelemetryQueue, paths.CARootExport}
 	for _, file := range files {
 		if err := os.Remove(file); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remover %s: %w", file, err)
@@ -717,7 +791,7 @@ func StableJSON(cfg domain.Config) ([]byte, error) {
 	sort.Slice(parks, func(i, j int) bool { return parks[i].Path < parks[j].Path })
 	versions := append([]domain.PHPVersionConfig(nil), cfg.PHPVersions...)
 	sort.Slice(versions, func(i, j int) bool { return versions[i].Version < versions[j].Version })
-	state := stateFile{Version: cfg.Version, Projects: projects, Parks: parks, PHPVersions: versions}
+	state := stateFile{Version: cfg.Version, SchemaVersion: StateSchemaVersion, Revision: cfg.Revision, Projects: projects, Parks: parks, PHPVersions: versions}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return nil, err

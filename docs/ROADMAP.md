@@ -13,36 +13,36 @@ passam. **P0** bloqueia a nova arquitetura; **P1** conclui operação segura;
 
 ## Marco 0 — Decisão e rede de segurança (P0)
 
-- [ ] `M0-01` Registrar ADR: todo projeto tem `.localhost` local e porta LAN;
+- [x] `M0-01` Registrar ADR: todo projeto tem `.localhost` local e porta LAN;
   não existem modos selecionáveis.
-- [ ] `M0-02` Registrar ADR: control plane/estado permanecem no Windows e o WSL
+- [x] `M0-02` Registrar ADR: control plane/estado permanecem no Windows e o WSL
   é execution plane; agente Linux persistente depende de medição.
-- [ ] `M0-03` Registrar ADR: browser é a GUI canônica em porta administrativa e
+- [x] `M0-03` Registrar ADR: browser é a GUI canônica em porta administrativa e
   `devlan.localhost`; Wails é shell opcional, não outro backend.
-- [ ] `M0-04` Criar fixtures PHP, static, Vite e SSR com asset absoluto,
+- [x] `M0-04` Criar fixtures PHP, static, Vite e SSR com asset absoluto,
   redirect, cookie, origem e WebSocket.
-- [ ] `M0-05` Testar os dois Caddys reais em portas efêmeras; testes de strings
+- [x] `M0-05` Testar os dois Caddys reais em portas efêmeras; testes de strings
   continuam apenas unitários.
-- [ ] `M0-06` Adicionar CI para Go test/vet, race compatível, frontend
+- [x] `M0-06` Adicionar CI para Go test/vet, race compatível, frontend
   build/test e `caddy validate`.
-- [ ] `M0-07` Definir matriz Windows/WSL/Caddy/PHP/Node e smoke de release.
+- [x] `M0-07` Definir matriz Windows/WSL/Caddy/PHP/Node e smoke de release.
 
 **Gate:** fixtures e baseline reproduzíveis existem antes da refatoração.
 
 ## Marco 1 — Persistência e aplicação consistentes (P0)
 
-- [ ] `M1-01` Adicionar lock entre processos e serializar mutações no processo.
-- [ ] `M1-02` Adicionar revisão otimista para detectar update perdido.
-- [ ] `M1-03` Versionar config, estado e export bundle com migrações explícitas.
-- [ ] `M1-04` Tornar `config.toml` + `state.json` unidade recuperável com
+- [x] `M1-01` Adicionar lock entre processos e serializar mutações no processo.
+- [x] `M1-02` Adicionar revisão otimista para detectar update perdido.
+- [x] `M1-03` Versionar config, estado e export bundle com migrações explícitas.
+- [x] `M1-04` Tornar `config.toml` + `state.json` unidade recuperável com
   manifesto/journal e fault injection.
-- [ ] `M1-05` Implementar `plan -> validate -> stage -> commit -> reload ->
+- [x] `M1-05` Implementar `plan -> validate -> stage -> commit -> reload ->
   healthcheck -> finalize`.
-- [ ] `M1-06` Restaurar artefatos e recarregar Caddys/pools após falha
+- [x] `M1-06` Restaurar artefatos e recarregar Caddys/pools após falha
   pós-commit.
-- [ ] `M1-07` Separar bootstrap tolerante do modo operacional estrito.
-- [ ] `M1-08` Injetar relógio e adapters de filesystem/processo/firewall.
-- [ ] `M1-09` Separar domínio de transportes Wails/HTTP; toda mutação web chama
+- [x] `M1-07` Separar bootstrap tolerante do modo operacional estrito.
+- [x] `M1-08` Injetar relógio e adapters de filesystem/processo/firewall.
+- [x] `M1-09` Separar domínio de transportes Wails/HTTP; toda mutação web chama
   o mesmo `internal/app.App` e o mesmo coordenador.
 
 **Gate:** estado, artefatos e processos sempre convergem para uma revisão

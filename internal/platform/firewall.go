@@ -9,6 +9,21 @@ import (
 	"strings"
 )
 
+// FirewallManager is the application boundary for the host firewall. Keeping
+// it injectable lets the transaction coordinator and doctor be tested without
+// invoking netsh or requiring elevation.
+type FirewallManager interface {
+	Ensure(context.Context, ...int) error
+	Remove(context.Context) error
+}
+
+type SystemFirewall struct{}
+
+func (SystemFirewall) Ensure(ctx context.Context, ports ...int) error {
+	return EnsureFirewall(ctx, ports...)
+}
+func (SystemFirewall) Remove(ctx context.Context) error { return RemoveFirewall(ctx) }
+
 const FirewallRuleName = "DevLAN"
 
 // EnsureFirewall limits inbound DevLAN HTTP/HTTPS to Windows' Private profile

@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  go:
+    name: Go (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test ./...
+      - run: go vet ./...
+      - if: matrix.os == 'ubuntu-latest'
+        env:
+          CGO_ENABLED: 1
+        run: go test -race ./...
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm run check
+      - run: npm run test --if-present
+
+  caddy:
+    name: Caddy integration and fixture validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: caddyserver/setup-caddy@v2
+        with:
+          version: latest
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: caddy validate --config testdata/fixtures/caddy/Caddyfile --adapter caddyfile
+      - run: DEVLAN_RUN_CADDY_TESTS=1 go test ./internal/caddy -run TestRealCaddyPair -count=1
+
+  release-smoke:
+    name: Release smoke matrix
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            wsl: true
+          - os: ubuntu-latest
+            wsl: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/smoke-release.ps1
+      - if: runner.os != 'Windows'
+        run: go test ./... -run 'Test(NewStore|Store|RealCaddyPair)' -count=1

@@ -1,0 +1,8 @@
+{
+    admin off
+}
+
+http://127.0.0.1:19080 {
+    root * ./testdata/fixtures/static
+    file_server
+}
