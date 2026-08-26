@@ -684,12 +684,23 @@ func (s *Server) handleProjectConfig(writer http.ResponseWriter, request *http.R
 			return
 		}
 	}
-	if update.RoutePort > 0 {
-		port := update.RoutePort
-		if _, err := s.service.SetRoutePort(ctx, update.Name, &port); err != nil {
-			writeJSONError(writer, http.StatusConflict, err.Error())
+	if update.RoutePortAuto || update.RoutePort != nil {
+		var port *int
+		if !update.RoutePortAuto {
+			port = update.RoutePort
+		}
+		result, err := s.service.SetRoutePort(ctx, update.Name, port)
+		if err != nil {
+			writeApplyError(writer, http.StatusConflict, result, err)
 			return
 		}
+		writeJSON(writer, http.StatusOK, map[string]any{
+			"message":  "Configuração do projeto salva.",
+			"status":   result.Status,
+			"revision": result.Revision,
+			"warnings": result.Warnings,
+		})
+		return
 	}
 	if update.StaticDir != "" {
 		if _, err := s.service.SetProjectStaticDir(ctx, update.Name, update.StaticDir); err != nil {
@@ -710,6 +721,15 @@ func (s *Server) handleProjectConfig(writer http.ResponseWriter, request *http.R
 		}
 	}
 	writeJSON(writer, http.StatusOK, map[string]string{"message": "Configuração do projeto salva."})
+}
+
+func writeApplyError(writer http.ResponseWriter, status int, result app.ApplyResult, err error) {
+	writeJSON(writer, status, map[string]any{
+		"error":    err.Error(),
+		"status":   result.Status,
+		"revision": result.Revision,
+		"warnings": result.Warnings,
+	})
 }
 
 func (s *Server) handleProjectStart(writer http.ResponseWriter, request *http.Request) {

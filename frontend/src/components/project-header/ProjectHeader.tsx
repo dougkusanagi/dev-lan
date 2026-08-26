@@ -136,25 +136,27 @@ export function ProjectHeader({
           onCopy={onCopyLAN}
         />
       </div>
-      <div className="project-tabs" role="tablist" aria-label="Conteúdo do projeto">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === 'overview'}
-          className={tab === 'overview' ? 'active' : ''}
-          onClick={() => onTab('overview')}
-        >
-          Visão geral
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === 'logs'}
-          className={tab === 'logs' ? 'active' : ''}
-          onClick={() => onTab('logs')}
-        >
-          Logs
-        </button>
+      <div className="project-tabs">
+        <div className="project-tablist" role="tablist" aria-label="Conteúdo do projeto">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'overview'}
+            className={tab === 'overview' ? 'active' : ''}
+            onClick={() => onTab('overview')}
+          >
+            Visão geral
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'logs'}
+            className={tab === 'logs' ? 'active' : ''}
+            onClick={() => onTab('logs')}
+          >
+            Logs
+          </button>
+        </div>
         <div className="project-path">
           <code title={project.path}>{project.path}</code>
           <button

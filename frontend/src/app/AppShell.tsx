@@ -1,7 +1,10 @@
 import { X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api } from '../api';
+import type { DevLANClient } from '../api';
+import { APIError, api } from '../api';
 import { EmptyState } from '../components/feedback/EmptyState';
+import { ErrorState } from '../components/feedback/ErrorState';
+import { LoadingState } from '../components/feedback/LoadingState';
 import { Overview } from '../components/metrics/Overview';
 import { ProjectHeader } from '../components/project-header/ProjectHeader';
 import { ActivityRail } from '../components/rail/ActivityRail';
@@ -10,7 +13,12 @@ import { LogsPanel } from '../features/logs/LogsPanel';
 import type { DoctorCheck, PHPVersion, ProjectInfo, SystemStatus } from '../types';
 
 type View = 'sites' | 'doctor' | 'settings';
-export default function AppShell() {
+export interface AppShellProps {
+  client?: DevLANClient;
+  pollIntervalMs?: number;
+}
+
+export default function AppShell({ client = api, pollIntervalMs = 5000 }: AppShellProps = {}) {
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [system, setSystem] = useState<SystemStatus | null>(null);
   const [phpVersions, setPHPVersions] = useState<PHPVersion[]>([]);
@@ -29,29 +37,43 @@ export default function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [newProject, setNewProject] = useState({ name: '', path: '', park: false });
   const [doctor, setDoctor] = useState<DoctorCheck[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
   const refreshVersion = useRef(0);
+  const initialLoad = useRef(true);
   const notify = useCallback((m: string) => {
     setToast(m);
     window.setTimeout(() => setToast((current) => (current === m ? '' : current)), 3800);
   }, []);
   const refresh = useCallback(async () => {
     const version = ++refreshVersion.current;
+    if (initialLoad.current) setLoading(true);
     try {
       const [p, s, versions] = await Promise.all([
-        api.getProjects(),
-        api.getStatus(),
-        api.getPHPVersions(),
+        client.getProjects(),
+        client.getStatus(),
+        client.getPHPVersions(),
       ]);
       if (version !== refreshVersion.current) return;
       setProjects(p);
       setSystem(s);
       setPHPVersions(versions);
+      setLoadError('');
       setSelected((current) => (p.some((x) => x.name === current) ? current : p[0]?.name || ''));
     } catch (e) {
-      if (version === refreshVersion.current) notify(`Erro ao carregar dados: ${String(e)}`);
+      if (version === refreshVersion.current) {
+        const message = e instanceof APIError && e.status === 0 ? 'API indisponível.' : String(e);
+        setLoadError(message);
+        notify(`Erro ao carregar dados: ${message}`);
+      }
+    } finally {
+      if (version === refreshVersion.current) {
+        setLoading(false);
+        initialLoad.current = false;
+      }
     }
-  }, [notify]);
+  }, [client, notify]);
   useEffect(() => {
     let running = false;
     const tick = () => {
@@ -62,9 +84,10 @@ export default function AppShell() {
       });
     };
     tick();
-    const id = window.setInterval(tick, 5000);
+    if (pollIntervalMs <= 0) return undefined;
+    const id = window.setInterval(tick, pollIntervalMs);
     return () => clearInterval(id);
-  }, [refresh]);
+  }, [pollIntervalMs, refresh]);
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark);
     localStorage.setItem('devlan_theme', dark ? 'dark' : 'light');
@@ -101,14 +124,14 @@ export default function AppShell() {
     if (!project || busy) return;
     setBusy(action);
     try {
-      if (action === 'start') await api.startDev(project.name);
-      else if (action === 'stop') await api.stopDev(project.name);
-      else if (action === 'restart') await api.restartDev(project.name);
-      else if (action === 'build') await api.buildProject(project.name);
-      else if (action === 'deps') await api.installDeps(project.name);
+      if (action === 'start') await client.startDev(project.name);
+      else if (action === 'stop') await client.stopDev(project.name);
+      else if (action === 'restart') await client.restartDev(project.name);
+      else if (action === 'build') await client.buildProject(project.name);
+      else if (action === 'deps') await client.installDeps(project.name);
       else {
         setView('doctor');
-        setDoctor(await api.runDoctor(project.name));
+        setDoctor(await client.runDoctor(project.name));
       }
       notify(action === 'doctor' ? 'Diagnóstico concluído.' : 'Operação concluída.');
       await refresh();
@@ -122,7 +145,7 @@ export default function AppShell() {
     if (!project || busy || !version || version === project.phpVersion) return;
     setBusy('php');
     try {
-      await api.saveProjectConfig({ name: project.name, phpVersion: version });
+      await client.saveProjectConfig({ name: project.name, phpVersion: version });
       await refresh();
       notify(`PHP ${version} selecionado.`);
     } catch (e) {
@@ -135,11 +158,77 @@ export default function AppShell() {
     if (busy) return;
     setBusy(`tls:${target.name}`);
     try {
-      await api.saveProjectConfig({ name: target.name, tlsEnabled: !target.tlsEnabled });
+      await client.saveProjectConfig({ name: target.name, tlsEnabled: !target.tlsEnabled });
       await refresh();
       notify(`TLS ${target.tlsEnabled ? 'desativado' : 'ativado'} em ${target.name}.`);
     } catch (e) {
       notify(`Não foi possível alterar o TLS: ${String(e)}`);
+    } finally {
+      setBusy(undefined);
+    }
+  };
+  const changeRoutePort = async (port: number | null) => {
+    if (!project || busy) return;
+    const description =
+      port === null ? 'restaurar a alocação automática' : `usar a porta LAN ${port}`;
+    if (
+      !window.confirm(
+        `Deseja ${description} para ${project.name}? A infraestrutura será recarregada.`,
+      )
+    )
+      return;
+    setBusy('route-port');
+    try {
+      await client.saveProjectConfig({
+        name: project.name,
+        ...(port === null ? { routePortAuto: true } : { routePort: port }),
+      });
+      await refresh();
+      notify(port === null ? 'Porta LAN automática restaurada.' : `Porta LAN ${port} aplicada.`);
+    } catch (e) {
+      const message = String(e);
+      const details =
+        e instanceof APIError && e.details && typeof e.details === 'object'
+          ? (e.details as Record<string, unknown>)
+          : undefined;
+      const rolledBack =
+        /rolled_back|rollback|restaurad/i.test(message) || details?.status === 'rolled_back';
+      notify(
+        rolledBack
+          ? 'Falha ao recarregar; a configuração anterior foi restaurada.'
+          : `Não foi possível alterar a porta LAN: ${message}`,
+      );
+    } finally {
+      setBusy(undefined);
+    }
+  };
+  const retry = () => {
+    initialLoad.current = true;
+    setLoading(true);
+    setLoadError('');
+    void refresh();
+  };
+  const trustCA = async () => {
+    if (busy) return;
+    setBusy('ca');
+    try {
+      await client.trustCA();
+      notify('CA local confiada neste computador.');
+    } catch (e) {
+      notify(`Não foi possível confiar na CA: ${String(e)}`);
+    } finally {
+      setBusy(undefined);
+    }
+  };
+  const repairFirewall = async () => {
+    if (busy) return;
+    setBusy('firewall');
+    try {
+      await client.applyDoctorFix('firewall', '');
+      await refresh();
+      notify('Firewall reconciliado.');
+    } catch (e) {
+      notify(`Não foi possível reconciliar o firewall: ${String(e)}`);
     } finally {
       setBusy(undefined);
     }
@@ -154,8 +243,8 @@ export default function AppShell() {
       return;
     setBusy(`remove:${target.name}`);
     try {
-      if (target.kind === 'linked') await api.unlinkProject(target.name);
-      else await api.hideProject(target.name);
+      if (target.kind === 'linked') await client.unlinkProject(target.name);
+      else await client.hideProject(target.name);
       await refresh();
       notify(`Projeto ${target.name} ${action === 'ocultar' ? 'ocultado' : 'desvinculado'}.`);
     } catch (e) {
@@ -168,8 +257,8 @@ export default function AppShell() {
     if (!newProject.path.trim() || (!newProject.park && !newProject.name.trim()))
       return notify('Informe o caminho e, para vínculo, o nome do projeto.');
     try {
-      if (newProject.park) await api.parkDir(newProject.path.trim());
-      else await api.linkProject(newProject.name.trim(), newProject.path.trim());
+      if (newProject.park) await client.parkDir(newProject.path.trim());
+      else await client.linkProject(newProject.name.trim(), newProject.path.trim());
       setAddOpen(false);
       setNewProject({ name: '', path: '', park: false });
       await refresh();
@@ -183,7 +272,7 @@ export default function AppShell() {
     setSidebarOpen(false);
     if (next === 'doctor')
       try {
-        setDoctor(await api.runDoctor(project?.name || ''));
+        setDoctor(await client.runDoctor(project?.name || ''));
       } catch (e) {
         notify(`Erro no diagnóstico: ${String(e)}`);
       }
@@ -221,24 +310,28 @@ export default function AppShell() {
         searchRef={searchRef}
       />
       <div className="workspace">
-        {view === 'sites' && project && (
+        {view === 'sites' && loading && projects.length === 0 && <LoadingState />}
+        {view === 'sites' && !loading && loadError && projects.length === 0 && (
+          <ErrorState message={loadError} onRetry={retry} />
+        )}
+        {view === 'sites' && !loading && !loadError && project && (
           <>
             <ProjectHeader
               project={project}
               tab={tab}
               onTab={setTab}
               onOpenLocal={() =>
-                void api.openURL(project.localDevUrl).catch((e) => notify(String(e)))
+                void client.openURL(project.localDevUrl).catch((e) => notify(String(e)))
               }
               onCopyLocal={() =>
-                void api
+                void client
                   .copyURL(project.localDevUrl)
                   .then(() => notify('URL local copiada.'))
                   .catch((e) => notify(String(e)))
               }
-              onOpenLAN={() => void api.openURL(project.lanUrl).catch((e) => notify(String(e)))}
+              onOpenLAN={() => void client.openURL(project.lanUrl).catch((e) => notify(String(e)))}
               onCopyLAN={() =>
-                void api
+                void client
                   .copyURL(project.lanUrl)
                   .then(() =>
                     notify(
@@ -248,7 +341,7 @@ export default function AppShell() {
                   .catch((e) => notify(String(e)))
               }
               onCopyPath={() =>
-                void api
+                void client
                   .copyURL(project.path)
                   .then(() => notify('Caminho copiado.'))
                   .catch((e) => notify(String(e)))
@@ -262,7 +355,7 @@ export default function AppShell() {
                   void toggleTLS(project);
               }}
               onReload={() =>
-                void api
+                void client
                   .reload()
                   .then(() => notify('Infraestrutura recarregada.'))
                   .catch((e) => notify(String(e)))
@@ -272,20 +365,26 @@ export default function AppShell() {
               {tab === 'overview' ? (
                 <Overview
                   project={project}
+                  client={client}
                   system={system}
                   phpVersions={phpVersions}
                   busy={busy}
                   onPHPVersion={changePHPVersion}
+                  onRoutePort={changeRoutePort}
+                  onTrustCA={trustCA}
+                  onRepairFirewall={repairFirewall}
                   onRemove={() => void removeProject(project)}
                   onAction={operate}
                 />
               ) : (
-                <LogsPanel project={project.name} />
+                <LogsPanel project={project.name} client={client} />
               )}
             </div>
           </>
         )}
-        {view === 'sites' && !project && <EmptyState onAdd={() => setAddOpen(true)} />}{' '}
+        {view === 'sites' && !loading && !loadError && !project && (
+          <EmptyState onAdd={() => setAddOpen(true)} />
+        )}{' '}
         {view === 'doctor' && (
           <Auxiliary title="Diagnóstico">
             {doctor.length ? (
@@ -312,7 +411,7 @@ export default function AppShell() {
             <button
               type="button"
               onClick={() =>
-                void api
+                void client
                   .exportConfigJSON()
                   .then((data) => navigator.clipboard.writeText(data))
                   .then(() => notify('Configuração sanitizada copiada.'))

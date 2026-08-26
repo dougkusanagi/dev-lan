@@ -1,27 +1,28 @@
 package api
 
 type ProjectView struct {
-	Name            string `json:"name"`
-	Path            string `json:"path"`
-	Kind            string `json:"kind"` // "linked" or "parked"
-	Mode            string `json:"mode"`
-	EffectiveMode   string `json:"effectiveMode"`
-	Framework       string `json:"framework"`
-	URL             string `json:"url"`
-	LANURL          string `json:"lanUrl"`
-	LocalDevURL     string `json:"localDevUrl"`
-	LocalDevState   string `json:"localDevState"`   // "active", "starting", "stopped", "available"
-	LANPreviewState string `json:"lanPreviewState"` // "ready" or "paused"
-	TLSEnabled      bool   `json:"tlsEnabled"`
-	Port            int    `json:"port,omitempty"`
-	Status          string `json:"status"` // "ready", "starting", "stopped", "degraded", "error"
-	StatusDetail    string `json:"statusDetail,omitempty"`
-	PHPVersion      string `json:"phpVersion,omitempty"`
-	PackageManager  string `json:"packageManager,omitempty"`
-	StaticDir       string `json:"staticDir,omitempty"`
-	DevRunning      bool   `json:"devRunning"`
-	DevPid          int    `json:"devPid,omitempty"`
-	DevPort         int    `json:"devPort,omitempty"`
+	Name              string `json:"name"`
+	Path              string `json:"path"`
+	Kind              string `json:"kind"` // "linked" or "parked"
+	Mode              string `json:"mode"`
+	EffectiveMode     string `json:"effectiveMode"`
+	Framework         string `json:"framework"`
+	URL               string `json:"url"`
+	LANURL            string `json:"lanUrl"`
+	LocalDevURL       string `json:"localDevUrl"`
+	LocalDevState     string `json:"localDevState"`   // "active", "starting", "stopped", "available"
+	LANPreviewState   string `json:"lanPreviewState"` // "ready" or "paused"
+	TLSEnabled        bool   `json:"tlsEnabled"`
+	Port              int    `json:"port,omitempty"`
+	RoutePortOverride int    `json:"routePortOverride,omitempty"`
+	Status            string `json:"status"` // "ready", "starting", "stopped", "degraded", "error"
+	StatusDetail      string `json:"statusDetail,omitempty"`
+	PHPVersion        string `json:"phpVersion,omitempty"`
+	PackageManager    string `json:"packageManager,omitempty"`
+	StaticDir         string `json:"staticDir,omitempty"`
+	DevRunning        bool   `json:"devRunning"`
+	DevPid            int    `json:"devPid,omitempty"`
+	DevPort           int    `json:"devPort,omitempty"`
 }
 
 type SystemStatusView struct {
@@ -68,13 +69,14 @@ type GlobalConfigView struct {
 }
 
 type ProjectConfigUpdate struct {
-	Name       string `json:"name"`
-	Mode       string `json:"mode,omitempty"`
-	PHPVersion string `json:"phpVersion,omitempty"`
-	PHPPreset  string `json:"phpPreset,omitempty"`
-	TLSEnabled *bool  `json:"tlsEnabled,omitempty"`
-	RoutePort  int    `json:"routePort,omitempty"`
-	StaticDir  string `json:"staticDir,omitempty"`
-	DevCommand string `json:"devCommand,omitempty"`
-	DevPort    int    `json:"devPort,omitempty"`
+	Name          string `json:"name"`
+	Mode          string `json:"mode,omitempty"`
+	PHPVersion    string `json:"phpVersion,omitempty"`
+	PHPPreset     string `json:"phpPreset,omitempty"`
+	TLSEnabled    *bool  `json:"tlsEnabled,omitempty"`
+	RoutePort     *int   `json:"routePort,omitempty"`
+	RoutePortAuto bool   `json:"routePortAuto,omitempty"`
+	StaticDir     string `json:"staticDir,omitempty"`
+	DevCommand    string `json:"devCommand,omitempty"`
+	DevPort       int    `json:"devPort,omitempty"`
 }

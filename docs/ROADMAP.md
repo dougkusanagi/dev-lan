@@ -151,19 +151,21 @@ Core funciona integralmente sem o componente desktop.
 
 ## Marco 6 — Frontend browser-first e contratos (P1)
 
-- [ ] `M6-01` Adicionar Vitest, React Testing Library e test/coverage.
-- [ ] `M6-02` Testar loading/empty/error/degraded e adapters HTTP/Wails/mock.
-- [ ] `M6-03` Gerar ou validar tipos Go/TypeScript para impedir drift.
-- [ ] `M6-04` Adicionar E2E nas duas origens da GUI: projetos, URLs, override de
+- [x] `M6-01` Adicionar Vitest, React Testing Library e test/coverage.
+- [x] `M6-02` Testar loading/empty/error/degraded e adapters HTTP/Wails/mock.
+- [x] `M6-03` Gerar ou validar tipos Go/TypeScript para impedir drift.
+- [x] `M6-04` Adicionar E2E nas duas origens da GUI: projetos, URLs, override de
   porta, confirmação e rollback operacional.
-- [ ] `M6-05` Testar history fallback, version mismatch, sessão independente,
+- [x] `M6-05` Testar history fallback, version mismatch, sessão independente,
   API indisponível, Host/Origin inválido e CSRF.
-- [ ] `M6-06` Verificar acessibilidade, teclado e capturas determinísticas.
-- [ ] `M6-07` Integrar porta/firewall/CA sem shell no frontend.
-- [ ] `M6-08` Decidir manter/remover a janela Wails somente após paridade web,
+- [x] `M6-06` Verificar acessibilidade, teclado e capturas determinísticas.
+- [x] `M6-07` Integrar porta/firewall/CA sem shell no frontend.
+- [x] `M6-08` Decidir manter/remover a janela Wails somente após paridade web,
   preservando tray/notificações se tiverem valor.
 
-**Gate:** build/test falha quando contrato, segurança ou fluxo crítico regride.
+**Gate:** `contracts:check`, typecheck, lint, testes unitários/a11y, E2E e
+testes Go cobrem contrato, segurança e fluxo crítico; qualquer regressão falha
+o respectivo comando de validação.
 
 ## Marco 7 — Integração WSL madura (P1/P2)
 

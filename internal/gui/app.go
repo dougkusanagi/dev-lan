@@ -167,9 +167,12 @@ func (a *App) SaveProjectConfig(update ProjectConfigUpdate) error {
 			return err
 		}
 	}
-	if update.RoutePort > 0 {
-		port := update.RoutePort
-		if _, err := a.service.SetRoutePort(ctx, update.Name, &port); err != nil {
+	if update.RoutePortAuto || update.RoutePort != nil {
+		var port *int
+		if !update.RoutePortAuto {
+			port = update.RoutePort
+		}
+		if _, err := a.service.SetRoutePort(ctx, update.Name, port); err != nil {
 			return err
 		}
 	}

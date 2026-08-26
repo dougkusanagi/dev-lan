@@ -113,6 +113,9 @@ func BuildProjectViews(ctx context.Context, service *app.App, filter string) ([]
 			StaticDir:       staticDir,
 			DevRunning:      false,
 		}
+		if project.RoutePort != nil {
+			view.RoutePortOverride = *project.RoutePort
+		}
 		devCapable := resolved.Mode == domain.ModeDev || resolved.Mode == domain.ModeAuto || (resolved.Mode == domain.ModePHP && effective.PHPProjectPreset(project) == domain.PHPPresetLaravel)
 		if devCapable {
 			view.LocalDevState = "stopped"

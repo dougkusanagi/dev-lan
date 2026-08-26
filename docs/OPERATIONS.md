@@ -161,6 +161,40 @@ de confirmar que os projetos estão fora dela.
 
 ## Matriz de validação
 
+### GUI web-first e contratos
+
+A GUI browser-first é a superfície canônica. O mesmo `DevLANClient` pode usar
+HTTP, Wails ou o mock determinístico; a janela Wails continua opcional e apenas
+preserva integração de tray/notificações e abertura da GUI.
+
+Na pasta `frontend`, execute:
+
+```powershell
+npm ci
+npm run validate
+npm run build
+npm run test:coverage
+```
+
+O contrato canônico está em `internal/api/contract.json`. Para regenerar os
+tipos TypeScript após uma alteração deliberada:
+
+```powershell
+npm run contracts:generate
+npm run contracts:check
+```
+
+O E2E usa as duas origens administrativas explicitamente configuradas:
+
+```powershell
+$env:DEVLAN_E2E_LOCAL_ORIGIN = 'https://devlan.localhost'
+$env:DEVLAN_E2E_DIRECT_ORIGIN = 'http://127.0.0.1:3210'
+npm run test:e2e
+```
+
+Sem essas variáveis, os testes E2E são pulados; os testes Go continuam cobrindo
+history fallback, allowlist de Host/Origin, CSRF e separação da API.
+
 O conjunto Go pode ser executado em todas as plataformas:
 
 ```powershell

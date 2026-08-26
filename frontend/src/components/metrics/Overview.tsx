@@ -9,7 +9,9 @@ import {
   Terminal,
   Trash2,
 } from 'lucide-react';
+import type { FormEvent } from 'react';
 import { useEffect, useMemo, useState } from 'react';
+import type { DevLANClient } from '../../api';
 import { api } from '../../api';
 import type {
   MetricsRange,
@@ -45,16 +47,24 @@ export function Overview({
   busy,
   phpVersions,
   onPHPVersion,
+  onRoutePort = () => undefined,
+  onTrustCA = () => undefined,
+  onRepairFirewall = () => undefined,
   onRemove,
   onAction,
+  client = api,
 }: {
   project: ProjectInfo;
   system: SystemStatus | null;
   busy?: string;
   phpVersions: PHPVersion[];
   onPHPVersion: (version: string) => void;
+  onRoutePort?: (port: number | null) => void;
+  onTrustCA?: () => void;
+  onRepairFirewall?: () => void;
   onRemove: () => void;
   onAction: (action: 'start' | 'stop' | 'restart' | 'build' | 'deps' | 'doctor') => void;
+  client?: DevLANClient;
 }) {
   const [range, setRange] = useState<MetricsRange>('1h');
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
@@ -68,7 +78,7 @@ export function Overview({
     void Promise.resolve()
       .then(() => {
         if (current) setMetricsLoading(true);
-        return api.getMetrics(project.name, range);
+        return client.getMetrics(project.name, range);
       })
       .then((value) => {
         if (current) setMetrics(value);
@@ -82,7 +92,7 @@ export function Overview({
     return () => {
       current = false;
     };
-  }, [project.name, range, metricsRefresh]);
+  }, [client, project.name, range, metricsRefresh]);
   const removeLabel = project.kind === 'linked' ? 'Desvincular projeto' : 'Ocultar projeto';
   return (
     <div className="overview-content">
@@ -124,6 +134,7 @@ export function Overview({
               </span>
             </div>
           )}
+          <RoutePortControl project={project} busy={!!busy} onChange={onRoutePort} />
           <span
             className={`process-pill ${canRunDev ? (project.devRunning ? 'active' : 'stopped') : project.status}`}
             role="status"
@@ -205,6 +216,18 @@ export function Overview({
             }
           />
         </div>
+        <div className="infrastructure-actions">
+          {project.tlsEnabled && (
+            <button type="button" disabled={!!busy} onClick={onTrustCA}>
+              Confiar na CA local
+            </button>
+          )}
+          {system && !system.firewallOk && (
+            <button type="button" disabled={!!busy} onClick={onRepairFirewall}>
+              Corrigir firewall privado
+            </button>
+          )}
+        </div>
       </section>
       {project.lanPreviewState === 'paused' && (
         <p className="endpoint-notice">
@@ -220,6 +243,73 @@ export function Overview({
         onRefresh={() => setMetricsRefresh((value) => value + 1)}
       />
     </div>
+  );
+}
+
+function RoutePortControl({
+  project,
+  busy,
+  onChange,
+}: {
+  project: ProjectInfo;
+  busy: boolean;
+  onChange: (port: number | null) => void;
+}) {
+  const [draft, setDraft] = useState(project.port ? String(project.port) : '');
+  const [invalid, setInvalid] = useState(false);
+  const hasOverride = project.routePortOverride !== undefined;
+
+  useEffect(() => {
+    setDraft(project.port ? String(project.port) : '');
+    setInvalid(false);
+  }, [project.port]);
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const port = Number(draft);
+    if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+      setInvalid(true);
+      return;
+    }
+    setInvalid(false);
+    onChange(port);
+  };
+
+  return (
+    <form className="route-port-control" aria-label="Configuração da porta LAN" onSubmit={submit}>
+      <label htmlFor="route-port">Porta LAN</label>
+      <input
+        id="route-port"
+        type="number"
+        min={1024}
+        max={65535}
+        inputMode="numeric"
+        value={draft}
+        onChange={(event) => {
+          setDraft(event.target.value);
+          setInvalid(false);
+        }}
+        aria-invalid={invalid}
+        aria-describedby={invalid ? 'route-port-help' : 'route-port-state'}
+        disabled={busy}
+      />
+      <span id="route-port-state" className="route-port-state">
+        {hasOverride ? 'override' : 'automática'}
+      </span>
+      <button type="submit" disabled={busy || !draft}>
+        Aplicar
+      </button>
+      {hasOverride && (
+        <button type="button" disabled={busy} onClick={() => onChange(null)}>
+          Automática
+        </button>
+      )}
+      {invalid && (
+        <small id="route-port-help" role="alert">
+          Use uma porta entre 1024 e 65535.
+        </small>
+      )}
+    </form>
   );
 }
 
