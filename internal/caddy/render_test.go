@@ -87,6 +87,56 @@ func TestRenderWindowsWithInternalTLS(t *testing.T) {
 	}
 }
 
+func TestRenderWindowsSeparatesLocalHMRFromLANPreview(t *testing.T) {
+	cfg := domain.NewConfig()
+	cfg.LANAddress = "192.168.10.77"
+	cfg.TLSEnabled = true
+	preset := domain.PHPPresetLaravel
+	devPort := 9107
+	cfg.Projects = []domain.Project{
+		{Name: "spec-sheet", Path: "/home/dev/spec-sheet", PHPPreset: &preset, DevPort: &devPort},
+	}
+
+	result, err := RenderWindows(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"https://spec-sheet.localhost {",
+		"remote_ip 127.0.0.1 ::1",
+		"@devlan_local_vite_spec-sheet path /@* /resources/* /node_modules/* /__laravel_vite_plugin__/* /src/*",
+		"reverse_proxy 127.0.0.1:19107",
+		"header_up X-DevLAN-Project spec-sheet",
+		"header_up X-DevLAN-Local on",
+	} {
+		if !strings.Contains(result, expected) {
+			t.Fatalf("proxy Vite do Laravel não contém %q:\n%s", expected, result)
+		}
+	}
+	if strings.Contains(result, "@devlan_vite_spec-sheet") {
+		t.Fatalf("Vite não deveria ser publicado no prefixo LAN:\n%s", result)
+	}
+}
+
+func TestRenderWindowsGroupsLocalTLSHostsWhenLANTLSIsDisabled(t *testing.T) {
+	cfg := domain.NewConfig()
+	cfg.TLSEnabled = false
+	cfg.Projects = []domain.Project{
+		{Name: "alpha", Path: "/home/dev/alpha"},
+		{Name: "beta", Path: "/home/dev/beta"},
+	}
+	result, err := RenderWindows(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, "https://alpha.localhost https://beta.localhost {") {
+		t.Fatalf("hosts locais não foram agrupados no listener seguro:\n%s", result)
+	}
+	if strings.Count(result, "tls internal") != 1 {
+		t.Fatalf("deveria existir um único bloco TLS local:\n%s", result)
+	}
+}
+
 func TestRenderWindowsRedirectsOnlyProjectsWithTLSPreference(t *testing.T) {
 	cfg := domain.NewConfig()
 	cfg.TLSEnabled = true
@@ -177,6 +227,24 @@ func TestRenderWSLStaticAndDevModes(t *testing.T) {
 	}
 	if !strings.Contains(result, `header_up Upgrade {http.request.header.Upgrade}`) {
 		t.Fatalf("suporte a websocket/HMR ausente:\n%s", result)
+	}
+}
+
+func TestRenderWSLAddsIsolatedLocalHostRoute(t *testing.T) {
+	cfg := domain.NewConfig()
+	preset := domain.PHPPresetLaravel
+	cfg.Projects = []domain.Project{{Name: "spec-sheet", Path: "/home/dev/spec-sheet", PHPPreset: &preset}}
+	result, err := RenderWSL(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"@devlan_local_spec-sheet header_regexp Host ^spec-sheet\\.localhost(?::\\d+)?$",
+		"root * \"/home/dev/spec-sheet/public\"",
+	} {
+		if !strings.Contains(result, expected) {
+			t.Fatalf("rota local WSL não contém %q:\n%s", expected, result)
+		}
 	}
 }
 

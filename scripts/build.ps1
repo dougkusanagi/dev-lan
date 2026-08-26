@@ -19,13 +19,19 @@ if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
 New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
 
 Push-Location $sourceRoot
+$resourcePath = Join-Path $sourceRoot 'cmd\devlan\devlan_resource_windows_amd64.syso'
 try {
+    & go run ./cmd/devlan-resource -output $resourcePath
+    if ($LASTEXITCODE -ne 0) {
+        throw "Falha ao gerar o ícone Windows do DevLAN (código $LASTEXITCODE)."
+    }
+
     $buildArgs = @(
         'build'
         '-tags'
         'desktop,production'
         '-ldflags'
-        '-w -s -H windowsgui'
+        '-w -s'
         '-trimpath'
         '-o'
         $resolvedOutput
@@ -37,6 +43,9 @@ try {
     }
 }
 finally {
+    if (Test-Path -LiteralPath $resourcePath) {
+        Remove-Item -LiteralPath $resourcePath -Force
+    }
     Pop-Location
 }
 

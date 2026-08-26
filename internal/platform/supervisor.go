@@ -51,6 +51,17 @@ func NewWSLDevManager(wsl WSLRunner) WSLDevManager {
 	return WSLDevManager{WSL: wsl}
 }
 
+var viteConfigNames = []string{
+	"vite.config.js",
+	"vite.config.mjs",
+	"vite.config.cjs",
+	"vite.config.ts",
+	"vite.config.mts",
+	"vite.config.cts",
+}
+
+const devStartupTimeout = 30 * time.Second
+
 func (m WSLDevManager) usesWSL(projectPath string) bool {
 	return runtime.GOOS == "windows" && strings.HasPrefix(projectPath, "/")
 }
@@ -67,6 +78,97 @@ func (m WSLDevManager) devPIDPath(project domain.Project) string {
 		return pathpkg.Join("/tmp", fmt.Sprintf("devlan-%s.pid", project.Name))
 	}
 	return filepath.Join(os.TempDir(), fmt.Sprintf("devlan-%s.pid", project.Name))
+}
+
+func (m WSLDevManager) usesVite(ctx context.Context, project domain.Project) bool {
+	if project.DevFramework != nil && strings.EqualFold(strings.TrimSpace(*project.DevFramework), "vite") {
+		return true
+	}
+	if m.usesWSL(project.Path) {
+		args := append([]string{"/bin/sh", "-c", `for file in "$@"; do [ -f "$file" ] && { printf vite; exit 0; }; done`, "devlan"}, viteConfigPaths(project.Path)...)
+		output, err := m.WSL.Run(ctx, args...)
+		return err == nil && strings.TrimSpace(output) == "vite"
+	}
+	for _, name := range viteConfigNames {
+		if info, err := os.Stat(filepath.Join(filepath.FromSlash(project.Path), name)); err == nil && !info.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+func viteConfigPaths(projectPath string) []string {
+	paths := make([]string, 0, len(viteConfigNames))
+	for _, name := range viteConfigNames {
+		paths = append(paths, pathpkg.Join(projectPath, name))
+	}
+	return paths
+}
+
+func viteCommand(command string, port int) string {
+	command = strings.TrimSpace(command)
+	if vitePortSpecified(command) {
+		return command
+	}
+
+	args := []string{}
+	if !viteHostSpecified(command) {
+		args = append(args, "--host", "0.0.0.0")
+	}
+	args = append(args, "--port", strconv.Itoa(port))
+
+	fields := strings.Fields(command)
+	if len(fields) >= 3 && (fields[0] == "npm" || fields[0] == "pnpm" || fields[0] == "bun") && fields[1] == "run" {
+		if strings.Contains(command, " -- ") {
+			return command + " " + strings.Join(args, " ")
+		}
+		return command + " -- " + strings.Join(args, " ")
+	}
+	return command + " " + strings.Join(args, " ")
+}
+
+func vitePortSpecified(command string) bool {
+	for _, field := range strings.Fields(command) {
+		if field == "--port" || field == "-p" || strings.HasPrefix(field, "--port=") || (strings.HasPrefix(field, "-p") && len(field) > 2) {
+			return true
+		}
+	}
+	return false
+}
+
+func viteHostSpecified(command string) bool {
+	for _, field := range strings.Fields(command) {
+		if field == "--host" || field == "-h" || strings.HasPrefix(field, "--host=") {
+			return true
+		}
+	}
+	return false
+}
+
+func (m WSLDevManager) configureViteHotFile(ctx context.Context, project domain.Project) error {
+	hotFile := pathpkg.Join(project.Path, "public", "hot")
+	if m.usesWSL(project.Path) {
+		_, err := m.WSL.Run(ctx, "/bin/sh", "-c", `printf 'https://%s.localhost\n' "$1" > "$2"`, "devlan", project.Name, hotFile)
+		return err
+	}
+	return os.WriteFile(filepath.Join(filepath.FromSlash(project.Path), "public", "hot"), []byte("https://"+project.Name+".localhost\n"), 0o644)
+}
+
+func devUnitName(projectName string) string {
+	var builder strings.Builder
+	for _, char := range strings.ToLower(projectName) {
+		switch {
+		case char >= 'a' && char <= 'z', char >= '0' && char <= '9', char == '-', char == '_':
+			builder.WriteRune(char)
+		default:
+			builder.WriteRune('-')
+		}
+	}
+	name := strings.Trim(builder.String(), "-_")
+	if name == "" {
+		name = "project"
+	}
+	return "devlan-dev-" + name
 }
 
 func isPortListening(port int) bool {
@@ -118,7 +220,13 @@ func (m WSLDevManager) Status(ctx context.Context, project domain.Project, port 
 }
 
 func (m WSLDevManager) StartDev(ctx context.Context, project domain.Project, port int, command string) error {
+	isVite := m.usesVite(ctx, project)
 	if isPortListening(port) {
+		if isVite {
+			if err := m.configureViteHotFile(ctx, project); err != nil {
+				return fmt.Errorf("configurar URL pública do Vite: %w", err)
+			}
+		}
 		return nil
 	}
 
@@ -128,12 +236,44 @@ func (m WSLDevManager) StartDev(ctx context.Context, project domain.Project, por
 	if command == "" {
 		command = "npm run dev"
 	}
+	if isVite {
+		command = viteCommand(command, port)
+	}
 
 	if m.usesWSL(project.Path) {
-		// Launch background process inside WSL using nohup and recording PID
-		script := fmt.Sprintf("cd %s && PORT=%d PORT_DEV=%d nohup /bin/sh -c %s > %s 2>&1 </dev/null & echo $! > %s",
-			shellQuote(project.Path), port, port, shellQuote(command), shellQuote(logFile), shellQuote(pidFile))
-		_, err := m.WSL.Run(ctx, "/bin/sh", "-c", script)
+		// WSL can terminate ordinary background jobs when the wsl.exe session
+		// exits. Prefer a user systemd unit when available, with nohup as the
+		// fallback for distributions without systemd.
+		unit := devUnitName(project.Name)
+		script := `
+PROJECT="$1"
+COMMAND="$2"
+LOG="$3"
+PIDFILE="$4"
+UNIT="$5"
+PORT="$6"
+
+if command -v systemd-run >/dev/null 2>&1 && systemctl --user is-system-running >/dev/null 2>&1; then
+    systemctl --user stop "$UNIT" >/dev/null 2>&1 || true
+    rm -f "$PIDFILE"
+    if systemd-run --user --unit="$UNIT" --collect --working-directory="$PROJECT" \
+        --setenv="PORT=$PORT" --setenv="PORT_DEV=$PORT" \
+        /bin/sh -c 'exec /bin/sh -c "$1" >"$2" 2>&1' devlan "$COMMAND" "$LOG" >/dev/null 2>&1; then
+        for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+            PID=$(systemctl --user show --property=MainPID --value "$UNIT" 2>/dev/null || true)
+            case "$PID" in
+                ''|0) sleep 0.1 ;;
+                *) printf '%s\n' "$PID" > "$PIDFILE"; exit 0 ;;
+            esac
+        done
+        systemctl --user stop "$UNIT" >/dev/null 2>&1 || true
+    fi
+fi
+
+cd -- "$PROJECT" && PORT="$PORT" PORT_DEV="$PORT" nohup /bin/sh -c "$COMMAND" >"$LOG" 2>&1 </dev/null &
+printf '%s\n' "$!" > "$PIDFILE"
+`
+		_, err := m.WSL.Run(ctx, "/bin/sh", "-c", script, "devlan", project.Path, command, logFile, pidFile, unit, strconv.Itoa(port))
 		if err != nil {
 			return fmt.Errorf("iniciar servidor dev no WSL: %w", err)
 		}
@@ -161,9 +301,14 @@ func (m WSLDevManager) StartDev(ctx context.Context, project domain.Project, por
 
 	// Do not report success until the server is actually accepting connections.
 	// A background shell can exit successfully even when npm/bun fails.
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(devStartupTimeout)
 	for time.Now().Before(deadline) {
 		if isPortListening(port) {
+			if isVite {
+				if err := m.configureViteHotFile(ctx, project); err != nil {
+					return fmt.Errorf("configurar URL pública do Vite: %w", err)
+				}
+			}
 			return nil
 		}
 		time.Sleep(300 * time.Millisecond)
@@ -177,13 +322,14 @@ func (m WSLDevManager) StartDev(ctx context.Context, project domain.Project, por
 	if len(message) > 2000 {
 		message = message[len(message)-2000:]
 	}
-	return fmt.Errorf("servidor dev não abriu a porta %d após 10s; logs: %s", port, message)
+	return fmt.Errorf("servidor dev não abriu a porta %d após %s; logs: %s", port, devStartupTimeout, message)
 }
 
 func (m WSLDevManager) StopDev(ctx context.Context, project domain.Project, port int) error {
 	if m.usesWSL(project.Path) {
 		// Kill by PID or port
 		script := fmt.Sprintf(`
+			systemctl --user stop %s >/dev/null 2>&1 || true
 			if [ -f "/tmp/devlan-%s.pid" ]; then
 				PID=$(cat "/tmp/devlan-%s.pid")
 				if [ -n "$PID" ]; then
@@ -192,7 +338,8 @@ func (m WSLDevManager) StopDev(ctx context.Context, project domain.Project, port
 				rm -f "/tmp/devlan-%s.pid"
 			fi
 			fuser -k %d/tcp 2>/dev/null || true
-		`, project.Name, project.Name, project.Name, port)
+			rm -f %s
+		`, shellQuote(devUnitName(project.Name)), project.Name, project.Name, project.Name, port, shellQuote(pathpkg.Join(project.Path, "public", "hot")))
 		_, _ = m.WSL.Run(ctx, "/bin/sh", "-c", script)
 	} else {
 		pidFile := m.devPIDPath(project)
@@ -205,6 +352,7 @@ func (m WSLDevManager) StopDev(ctx context.Context, project domain.Project, port
 			}
 			_ = os.Remove(pidFile)
 		}
+		_ = os.Remove(filepath.Join(filepath.FromSlash(project.Path), "public", "hot"))
 	}
 	return nil
 }

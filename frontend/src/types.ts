@@ -1,14 +1,30 @@
 export type ProjectStatus = 'stopped' | 'starting' | 'ready' | 'degraded' | 'error';
+export type ProjectKind = 'linked' | 'parked';
+export type ProjectMode = 'auto' | 'php' | 'dev' | 'static';
+export type ProjectFramework =
+  | 'laravel'
+  | 'symfony'
+  | 'generic'
+  | 'vite'
+  | 'astro'
+  | 'nextjs'
+  | 'nuxt'
+  | 'sveltekit'
+  | 'static'
+  | 'unknown';
 
 export interface ProjectInfo {
   name: string;
   path: string;
-  kind: string; // 'linked' | 'parked'
-  mode: string; // 'auto' | 'php' | 'dev' | 'static'
-  effectiveMode: string;
-  framework: string; // 'laravel' | 'symfony' | 'generic' | 'vite' | 'astro' | 'nextjs' | 'nuxt' | 'sveltekit' | 'static' | 'unknown'
+  kind: ProjectKind;
+  mode: ProjectMode;
+  effectiveMode: ProjectMode;
+  framework: ProjectFramework;
   url: string;
   lanUrl: string;
+  localDevUrl: string;
+  localDevState: 'active' | 'starting' | 'stopped' | 'available';
+  lanPreviewState: 'ready' | 'paused';
   tlsEnabled: boolean;
   routingMode: 'path' | 'port' | 'host';
   port?: number;
@@ -77,7 +93,14 @@ export interface MetricsSnapshot {
   p95Ms: number | null;
   latencyBuckets: { upperBoundMs: number | null; count: number }[];
   traffic: { at: string; requestsPerMinute: number }[];
-  routes: { method: string; normalizedPath: string; p50Ms: number | null; p95Ms: number | null; requests: number; errors: number }[];
+  routes: {
+    method: string;
+    normalizedPath: string;
+    p50Ms: number | null;
+    p95Ms: number | null;
+    requests: number;
+    errors: number;
+  }[];
 }
 
 export interface ProjectConfigUpdate {

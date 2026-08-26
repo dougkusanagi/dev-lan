@@ -1,11 +1,17 @@
-# Plano de reimplementação da interface Wails
+# Plano de reimplementação da interface web
+
+> A execução deste plano é acompanhada principalmente pelas tarefas `M5-*` e
+> `M6-*` em [ROADMAP.md](ROADMAP.md). Este documento detalha o desenho; o
+> roadmap é a tasklist canônica.
 
 ## Objetivo
 
-Recriar o frontend do zero, preservando o núcleo Go, a CLI e o estado atual
-como fontes autoritativas. A interface deve adotar a linguagem visual das duas
-imagens de referência: uma ferramenta desktop escura, compacta e centrada no
-projeto selecionado.
+Recriar o frontend como SPA browser-first, preservando o núcleo Go, a CLI e o
+estado atual como fontes autoritativas. A mesma aplicação será acessível por
+`https://devlan.localhost/` e pela porta administrativa local. Wails/tray pode
+permanecer como shell opcional, mas não como backend paralelo. A interface deve
+adotar a linguagem visual das referências: uma ferramenta escura, compacta e
+centrada no projeto selecionado.
 
 As imagens mostram a mesma página em posições diferentes de rolagem:
 
@@ -14,8 +20,9 @@ As imagens mostram a mesma página em posições diferentes de rolagem:
 
 A referência orienta composição, densidade e hierarquia. Recursos que aparecem
 nas imagens, mas não existem no DevLAN, não entram automaticamente no produto.
-Toda mutação continua passando por um método Wails que chama
-`internal/app.App`, com as mesmas validações e rollback da CLI.
+Toda mutação passa pela API HTTP versionada, que chama `internal/app.App` com
+as mesmas validações e rollback da CLI. O frontend nunca recebe o token de API
+persistido em disco.
 
 ## Princípios da adaptação
 
@@ -28,15 +35,18 @@ Toda mutação continua passando por um método Wails que chama
 - usar painéis e drawers para tarefas recorrentes; reservar modal para
   confirmação, credencial ou operação destrutiva;
 - não executar comandos da CLI por shell a partir do frontend.
+- tratar browser, Wails e mocks como transports de um único `DevLANClient`;
+- manter API same-origin, proteção CSRF e política estrita de Host/Origin.
 
 ## Escopo inicial
 
 ### Incluído
 
 - novo shell com rail lateral, sidebar de sites e área principal;
+- entrega da SPA e API nas URLs `devlan.localhost` e `127.0.0.1:ui_port`;
 - busca, agrupamento, seleção e status dos projetos;
-- visão geral do projeto com URL, runtime, saúde e ações rápidas;
-- abrir/copiar URL, iniciar/parar/reiniciar, build, dependências, logs, reload,
+- visão geral do projeto com URLs local e LAN, runtime, saúde e ações rápidas;
+- abrir/copiar cada URL, iniciar/parar/reiniciar, build, dependências, logs, reload,
   TLS e diagnóstico;
 - configurações globais e overrides por projeto;
 - operações restantes de PHP, segurança, exportação/importação, telemetria e
@@ -74,7 +84,7 @@ ficarão em painéis próprios. Novas abas só entram quando tiverem conteúdo r
 └──────┴─────────────────────┴──────────────────────────────────────────────┘
 ```
 
-- janela desktop alvo próxima de `1080 × 1000`, como nas referências;
+- viewport de referência próxima de `1080 × 1000`, também validada no browser;
 - rail e sidebar ocupam toda a altura e não rolam junto com o conteúdo;
 - cabeçalho do projeto, barra de endereço e abas permanecem fixos;
 - somente o corpo da aba rola, com uma scrollbar fina no extremo direito;
@@ -114,13 +124,15 @@ O topo da referência será adaptado em três faixas:
 
 1. **Contexto:** nome do projeto selecionado e botão para abrir outro contexto.
    Branch Git só aparece futuramente se o backend passar a fornecê-la.
-2. **Endereço:** cadeado/TLS, URL editável ou copiável, badge de framework e
-   ações de abrir, copiar, reload, logs e menu adicional.
+2. **Endereços:** `https://projeto.localhost/` como origem local principal e
+   `http(s)://IP:porta/` como origem LAN, ambas copiáveis, com badges claros,
+   estado de TLS/firewall e ações de abrir, copiar, reload e logs. Não há
+   seletor de modo de rota, hostname customizado ou subpath.
 3. **Abas:** `Visão geral` e `Logs`, com sublinhado vermelho no item ativo;
    caminho local alinhado à direita quando houver espaço.
 
-A URL é o elemento visual dominante. Ações destrutivas ficam no menu adicional
-e exigem confirmação.
+A URL local é o elemento visual dominante; a URL LAN permanece visível como
+segunda origem. Ações destrutivas ficam no menu adicional e exigem confirmação.
 
 ## Visão geral
 
@@ -248,7 +260,7 @@ Componentes principais: `ActivityRail`, `ProjectSidebar`, `ProjectGroup`,
 Separar o estado em:
 
 1. **Dados do núcleo:** projetos, configuração, infraestrutura, métricas e
-   resultados vindos do Wails.
+   resultados vindos do `DevLANClient`.
 2. **Navegação:** projeto selecionado, aba, busca, grupos expandidos, intervalo
    e painel lateral aberto.
 3. **Operações:** ação em andamento, progresso, confirmação, erro e toast.
@@ -299,7 +311,7 @@ Caddy. A implementação de menor custo é:
 1. adicionar access log JSON sanitizado às rotas geradas;
 2. agregar janelas por projeto no núcleo, sem banco de dados;
 3. normalizar parâmetros de rota, por exemplo `/orders/:id`;
-4. expor `GetMetrics(project, range)` pelo Wails;
+4. expor `GET /api/v1/projects/{project}/metrics?range=...`;
 5. limitar retenção e tamanho dos arquivos gerenciados.
 
 Não armazenar IP, query string, corpo, headers, cookies ou credenciais. Se essa
@@ -307,25 +319,28 @@ coleta não couber no primeiro corte, a visão geral entrega runtime e serviços
 e a seção de métricas mostra um único estado vazio explicando que a coleta
 local não está habilitada.
 
-## Paridade Wails com a CLI
+## Paridade da API web com a CLI
 
-Ampliar o contrato tipado de `services/devlan-api.ts` e
-`internal/gui/app.go` antes de construir cada formulário.
+Ampliar o contrato HTTP tipado de `services/devlan-api.ts` e os handlers Go
+antes de construir cada formulário. O adapter Wails temporário delega ao mesmo
+contrato e não ganha métodos exclusivos.
 
 | Domínio | Operações que a UI deve alcançar |
 | --- | --- |
 | PHP | listar, instalar, remover, selecionar versão, extensões, pools, preset, informações e ambiente do Composer |
-| Segurança | rota, exposição temporária, allowlist, autenticação HTTP, CA, DNS, postura e auditoria |
+| Segurança | porta/firewall LAN, exposição temporária, allowlist, autenticação HTTP, CA local, postura e auditoria |
 | Configuração | exportar e importar JSON sanitizado, confirmando aplicação/reload |
 | Telemetria | status, consentir/habilitar, desabilitar e enviar manualmente |
 | Atualização | consultar `stable`/`preview`, mostrar manifesto/hash e preparar download verificado |
 
-- métodos Wails chamam o núcleo diretamente e usam timeout equivalente à CLI;
+- handlers HTTP chamam o núcleo e usam timeout/cancelamento equivalente à CLI;
 - operações privilegiadas sinalizam elevação antes de começar;
 - importação mostra resumo e confirmação antes de substituir o estado;
 - atualização deixa claro que o artefato é somente preparado, não instalado;
 - segredos nunca retornam ao frontend depois de enviados;
-- métodos novos recebem testes Go e mocks explícitos para o modo navegador.
+- endpoints novos recebem testes Go, contract tests e mocks de browser;
+- GET é somente leitura; mutações exigem sessão e token anti-CSRF;
+- Host/Origin desconhecidos e versões incompatíveis são rejeitados.
 
 ## Etapas de execução
 
@@ -333,7 +348,9 @@ Ampliar o contrato tipado de `services/devlan-api.ts` e
 
 - registrar tokens, dimensões e estados deste documento;
 - criar os novos diretórios e uma shell vazia, removendo a composição antiga;
-- manter temporariamente o adaptador Wails existente atrás da nova interface;
+- criar `DevLANClient`, adapter HTTP e fake; manter Wails temporariamente atrás
+  dessa interface;
+- servir a shell em ambas as origens administrativas com assets versionados;
 - criar fixtures para PHP, JavaScript, estático, parado, degradado e sem
   métricas;
 - preparar capturas determinísticas em `1080 × 1000`.
@@ -345,7 +362,7 @@ sem depender do backend real.
 
 - implementar rail, grupos, busca, seleção e menu de contexto;
 - implementar as três faixas fixas do cabeçalho;
-- conectar URL, TLS, abrir, copiar, reload e seleção persistente;
+- conectar as duas URLs, TLS, firewall, abrir, copiar, reload e seleção persistente;
 - implementar `Visão geral` e `Logs`.
 
 **Aceite:** navegar e atualizar dados não perde seleção, aba ou rolagem; a
@@ -379,19 +396,19 @@ números são derivados de amostras reais e o estado sem coleta é honesto.
 - mostrar herança global/projeto e o valor efetivo nos formulários;
 - confirmar remoção, exposição, rotação da CA, importação e download.
 
-**Aceite:** a única tarefa do roadmap pode ser marcada como concluída; cada
-operação listada tem paridade real com a CLI.
+**Aceite:** as tarefas de paridade correspondentes no roadmap podem ser
+marcadas como concluídas; cada operação listada tem paridade real com a CLI.
 
 ### 6. Qualidade e acabamento
 
 - atalhos de busca, troca de projeto, refresh e fechamento de painéis;
 - foco visível, contraste, leitor de tela e redução de movimento;
-- testes de componentes e testes Go dos métodos Wails;
+- testes de componentes, handlers HTTP, segurança e contract tests Go/TS;
 - validar 1100px, 1366px e 1920px, além da sidebar recolhida;
 - comparar capturas do modo mock com as duas referências.
 
 **Aceite:** build TypeScript e testes Go passam; a interface continua útil
-quando Wails, Caddy, WSL ou a coleta de métricas estão indisponíveis.
+quando o shell Wails, Caddy, WSL ou a coleta de métricas estão indisponíveis.
 
 ## Ordem de entrega
 

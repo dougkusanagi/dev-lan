@@ -1,4 +1,5 @@
 .tools/
+frontend/node_modules/
 bin/
 dist/
 
@@ -9,3 +10,4 @@ dist/
 *.exe
 *.test
 *.out
+cmd/devlan/devlan_resource_windows_amd64.syso
