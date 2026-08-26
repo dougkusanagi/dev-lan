@@ -32,9 +32,7 @@ type ProjectView struct {
 	LocalDevState   string `json:"localDevState"`   // "active", "starting", "stopped", "available"
 	LANPreviewState string `json:"lanPreviewState"` // "ready" or "paused"
 	TLSEnabled      bool   `json:"tlsEnabled"`
-	RoutingMode     string `json:"routingMode"`
 	Port            int    `json:"port,omitempty"`
-	Host            string `json:"host,omitempty"`
 	Status          string `json:"status"` // "ready", "starting", "stopped", "degraded", "error"
 	StatusDetail    string `json:"statusDetail,omitempty"`
 	PHPVersion      string `json:"phpVersion,omitempty"`
@@ -82,7 +80,6 @@ type GlobalConfigView struct {
 	TLSEnabled        bool     `json:"tlsEnabled"`
 	PHPDefaultVersion string   `json:"phpDefaultVersion"`
 	Allowlist         []string `json:"allowlist"`
-	DefaultRouteMode  string   `json:"defaultRouteMode"`
 }
 
 type ProjectConfigUpdate struct {
@@ -91,9 +88,7 @@ type ProjectConfigUpdate struct {
 	PHPVersion string `json:"phpVersion,omitempty"`
 	PHPPreset  string `json:"phpPreset,omitempty"`
 	TLSEnabled *bool  `json:"tlsEnabled,omitempty"`
-	RouteMode  string `json:"routeMode,omitempty"`
 	RoutePort  int    `json:"routePort,omitempty"`
-	RouteHost  string `json:"routeHost,omitempty"`
 	StaticDir  string `json:"staticDir,omitempty"`
 	DevCommand string `json:"devCommand,omitempty"`
 	DevPort    int    `json:"devPort,omitempty"`
@@ -235,9 +230,7 @@ func (a *App) GetProjects(filter string) ([]ProjectView, error) {
 			LocalDevState:   "available",
 			LANPreviewState: "ready",
 			TLSEnabled:      tlsActive,
-			RoutingMode:     string(resolved.RouteMode),
 			Port:            resolved.RoutePort,
-			Host:            resolved.RouteHost,
 			Status:          "ready",
 			PHPVersion:      phpVer,
 			PackageManager:  pm,
@@ -386,7 +379,6 @@ func (a *App) GetGlobalConfig() (GlobalConfigView, error) {
 		TLSEnabled:        cfg.TLSEnabled,
 		PHPDefaultVersion: cfg.PHPDefaultVersion,
 		Allowlist:         cfg.Allowlist,
-		DefaultRouteMode:  string(cfg.DefaultRouteMode),
 	}, nil
 }
 
@@ -451,13 +443,6 @@ func (a *App) SaveGlobalConfig(view GlobalConfigView) error {
 	if view.PHPDefaultVersion != "" {
 		cfg.PHPDefaultVersion = view.PHPDefaultVersion
 	}
-	if view.DefaultRouteMode != "" {
-		rm, err := domain.ParseRouteMode(view.DefaultRouteMode)
-		if err != nil {
-			return err
-		}
-		cfg.DefaultRouteMode = rm
-	}
 	cfg.Allowlist = view.Allowlist
 
 	_, err = a.service.SaveConfigAndApply(ctx, cfg, true)
@@ -492,24 +477,10 @@ func (a *App) SaveProjectConfig(update ProjectConfigUpdate) error {
 			return err
 		}
 	}
-	if update.RouteMode != "" || update.RoutePort > 0 || update.RouteHost != "" {
-		var modePtr *domain.RouteMode
-		if update.RouteMode != "" {
-			rm, err := domain.ParseRouteMode(update.RouteMode)
-			if err != nil {
-				return err
-			}
-			modePtr = &rm
-		}
+	if update.RoutePort > 0 {
 		var portPtr *int
-		if update.RoutePort > 0 {
-			portPtr = &update.RoutePort
-		}
-		var hostPtr *string
-		if update.RouteHost != "" {
-			hostPtr = &update.RouteHost
-		}
-		if _, err := a.service.SetRouteMode(ctx, update.Name, modePtr, portPtr, hostPtr); err != nil {
+		portPtr = &update.RoutePort
+		if _, err := a.service.SetRoutePort(ctx, update.Name, portPtr); err != nil {
 			return err
 		}
 	}

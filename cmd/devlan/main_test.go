@@ -15,13 +15,13 @@ func TestWriteProjectTable(t *testing.T) {
 	var output bytes.Buffer
 	rows := []projectRow{{
 		Name: "cj-crm", Mode: "php", Runtime: "8.5", Type: "laravel", Source: "global", SSL: "on",
-		URL: "https://192.168.10.77/cj-crm", Path: "/home/silver/Sites/cj-crm",
+		URL: "https://192.168.10.77:8080/", Path: "/home/silver/Sites/cj-crm",
 	}}
 	if err := writeProjectTable(&output, rows); err != nil {
 		t.Fatal(err)
 	}
 	result := output.String()
-	for _, expected := range []string{"PROJETO", "MODO", "RUNTIME", "TIPO", "ORIGEM", "SSL", "URL", "CAMINHO", "8.5", "laravel", "on", "cj-crm", "https://192.168.10.77/cj-crm", "/home/silver/Sites/cj-crm"} {
+	for _, expected := range []string{"PROJETO", "MODO", "RUNTIME", "TIPO", "ORIGEM", "SSL", "URL", "CAMINHO", "8.5", "laravel", "on", "cj-crm", "https://192.168.10.77:8080/", "/home/silver/Sites/cj-crm"} {
 		if !strings.Contains(result, expected) {
 			t.Fatalf("saída não contém %q:\n%s", expected, result)
 		}
@@ -31,13 +31,13 @@ func TestWriteProjectTable(t *testing.T) {
 func TestProjectRowJSON(t *testing.T) {
 	row := projectRow{
 		Name: "cj-crm", Mode: "php", Runtime: "8.5", Type: "laravel", Source: "global", SSL: "on",
-		URL: "https://192.168.10.77/cj-crm", Path: "/home/silver/Sites/cj-crm",
+		URL: "https://192.168.10.77:8080/", Path: "/home/silver/Sites/cj-crm",
 	}
 	data, err := json.Marshal(row)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{`"name":"cj-crm"`, `"mode":"php"`, `"runtime":"8.5"`, `"type":"laravel"`, `"source":"global"`, `"ssl":"on"`, `"url":"https://192.168.10.77/cj-crm"`, `"path":"/home/silver/Sites/cj-crm"`} {
+	for _, expected := range []string{`"name":"cj-crm"`, `"mode":"php"`, `"runtime":"8.5"`, `"type":"laravel"`, `"source":"global"`, `"ssl":"on"`, `"url":"https://192.168.10.77:8080/"`, `"path":"/home/silver/Sites/cj-crm"`} {
 		if !strings.Contains(string(data), expected) {
 			t.Fatalf("JSON não contém %q:\n%s", expected, string(data))
 		}
@@ -73,7 +73,7 @@ func TestPhase4CLIRuns(t *testing.T) {
 	if err := run([]string{"--data-dir", dir, "route"}); err != nil {
 		t.Fatalf("route list failed: %v", err)
 	}
-	if err := run([]string{"--data-dir", dir, "route", "api", "port", "--port", strconv.Itoa(freePort)}); err != nil {
+	if err := run([]string{"--data-dir", dir, "route", "api", "--port", strconv.Itoa(freePort)}); err != nil {
 		t.Fatalf("route set port failed: %v", err)
 	}
 
@@ -115,11 +115,6 @@ func TestPhase4CLIRuns(t *testing.T) {
 	// Test ca commands
 	if err := run([]string{"--data-dir", dir, "ca", "info"}); err != nil {
 		t.Fatalf("ca info failed: %v", err)
-	}
-
-	// Test dns commands
-	if err := run([]string{"--data-dir", dir, "dns", "entries"}); err != nil {
-		t.Fatalf("dns entries failed: %v", err)
 	}
 
 	// Test security commands

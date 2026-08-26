@@ -9,8 +9,8 @@ seletor de modo de roteamento: a porta LAN é uma propriedade operacional e a
 origem `.localhost` é a superfície local canônica.
 
 O sufixo `.localhost` é reservado para loopback e não depende de `hosts` ou
-DNS. A porta LAN é persistida quando alocada; overrides explícitos continuam
-sendo possíveis até a remoção dos modos legados no Marco 2.
+DNS. A porta LAN é calculada a partir da base configurada; overrides explícitos
+continuam sendo possíveis para inspeção e operação.
 
 Essa decisão evita que a escolha de uma origem quebre HMR, cookies, redirects
 ou apps que assumem `/`, e torna a matriz de compatibilidade verificável.

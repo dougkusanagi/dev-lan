@@ -50,20 +50,20 @@ completa anterior ou nova.
 
 ## Marco 2 — Remoção completa dos modos (P0)
 
-- [ ] `M2-01` Alterar o default efetivo da LAN para porta antes de apagar os
+- [x] `M2-01` Alterar o default efetivo da LAN para porta antes de apagar os
   branches antigos, mantendo testes verdes no commit.
-- [ ] `M2-02` Remover `RouteMode`, `DefaultRouteMode`, `RouteHost`,
+- [x] `M2-02` Remover `RouteMode`, `DefaultRouteMode`, `RouteHost`,
   `DomainSuffix` e herança de modo em project/park/config.
-- [ ] `M2-03` Remover renderers `path`, `handle_path`, matchers por `Referer` e
+- [x] `M2-03` Remover renderers `path`, `handle_path`, matchers por `Referer` e
   hostnames LAN arbitrários.
-- [ ] `M2-04` Remover comandos de default/migração/troca de modo e manter apenas
+- [x] `M2-04` Remover comandos de default/migração/troca de modo e manter apenas
   inspeção/override de porta.
-- [ ] `M2-05` Remover opções equivalentes da API, Wails, frontend e mocks.
-- [ ] `M2-06` Remover `dns entries`/`dns sync` e dependências documentais caso
+- [x] `M2-05` Remover opções equivalentes da API, Wails, frontend e mocks.
+- [x] `M2-06` Remover `dns entries`/`dns sync` e dependências documentais caso
   não possuam outra função.
-- [ ] `M2-07` Remover testes antigos e adicionar teste arquitetural que impeça
+- [x] `M2-07` Remover testes antigos e adicionar teste arquitetural que impeça
   reintrodução dos símbolos/campos retirados.
-- [ ] `M2-08` Recriar fixtures/configs locais; não implementar migração de estado
+- [x] `M2-08` Recriar fixtures/configs locais; não implementar migração de estado
   nunca distribuído.
 
 **Gate:** busca no repositório não encontra API/configuração funcional de

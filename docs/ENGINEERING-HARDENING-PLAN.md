@@ -75,17 +75,18 @@ um nome genérico e comparar todas as propriedades. Integrar ao coordenador.
 
 ### Evidência atual
 
-- renderers têm suporte parcial a `port`, `host`, `path` e `.localhost`, mas muitos
-  testes verificam apenas substrings do Caddyfile;
+- renderers geram `.localhost` local e listeners LAN dedicados por porta, mas
+  muitos testes verificam apenas substrings do Caddyfile;
 - o salto Windows -> WSL usa `X-DevLAN-Project`/`X-DevLAN-Port`; remoção,
   reconstrução e alcance do listener precisam de teste ponta a ponta;
 - a validação do nome local não cobre integralmente labels, comprimentos,
   nomes reservados e duplicidade;
-- `path` ainda usa `Referer` e é o default.
+- a estabilidade das portas ainda depende do índice até o Marco 3, e a
+  reconciliação de listeners/firewall ainda precisa ser endurecida.
 
 ### Melhoria
 
-Definir matriz de headers por salto/modo, usar tipo de hostname validado e
+Definir matriz de headers por salto/origem, usar tipo de hostname validado e
 testar Caddy real contra spoofing de headers. Remover completamente os modos,
 manter `.localhost` sempre local e porta como única origem LAN, conforme o
 [plano de roteamento](ORIGIN-BASED-ROUTING-PLAN.md).
@@ -105,8 +106,8 @@ manter `.localhost` sempre local e porta como única origem LAN, conforme o
 - `Aggregate` copia tudo para `string`, mantém amostras e ordena listas;
 - o scanner mantém limite padrão e seu erro não é retornado;
 - só o arquivo ativo é lido, apesar das rotações e janela de sete dias;
-- atribuição exige URI iniciando em `/projeto`; em `port`/`host` a aplicação
-  ocupa `/`, portanto a métrica pode não ser atribuída;
+- atribuição ainda depende de identidade confiável do projeto, pois a aplicação
+  ocupa a raiz `/` em ambas as origens;
 - normalização cobre números/hex longos, mas não limita cardinalidade geral.
 
 ### Melhoria
@@ -120,7 +121,7 @@ antes da gravação.
 
 - logs grandes/rotacionados com memória e tempo medidos;
 - linha parcial, corrompida, truncada e maior que 64 KiB;
-- mesmas URIs em projetos `port`/`host` não se misturam;
+- mesmas URIs em projetos distintos não se misturam;
 - golden test exclui IP, query, header, cookie e segredo de disco/DTO.
 
 ## 5. Fronteira Windows/WSL, API web e supervisor — alto

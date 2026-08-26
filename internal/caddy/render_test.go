@@ -30,28 +30,14 @@ func TestRenderWSLIsDeterministicAndSorted(t *testing.T) {
 	if !strings.Contains(first, `root * "/home/dev/alpha/public"`) {
 		t.Fatal("document root Laravel ausente")
 	}
-	if !strings.Contains(first, "handle_path /alpha/*") {
-		t.Fatal("remoção de prefixo nativa ausente")
-	}
-	if !strings.Contains(first, "vars devlan_request_uri {http.request.uri}") {
-		t.Fatal("captura da URI antes do FastCGI ausente")
-	}
-	if !strings.Contains(first, "env REQUEST_URI /alpha{vars.devlan_request_uri}") {
-		t.Fatal("URI interna do FastCGI ausente")
-	}
-	if !strings.Contains(first, "env SCRIPT_NAME /alpha/index.php") {
-		t.Fatal("subdiretório FastCGI ausente")
+	if !strings.Contains(first, "@devlan_port_alpha header X-DevLAN-Port 8080") {
+		t.Fatal("rota LAN por porta ausente")
 	}
 	if !strings.Contains(first, "env HTTPS {http.request.header.X-DevLAN-HTTPS}") {
 		t.Fatal("protocolo HTTPS original não é propagado ao FastCGI")
 	}
-	if !strings.Contains(first, "header_down Location ^/alpha/(.*)$ /$1") ||
-		!strings.Contains(first, "header_down Location ^/(.*)$ /alpha/$1") {
-		t.Fatal("normalização de redirects relativos ausente")
-	}
-	if !strings.Contains(first, "header_regexp Referer ^https?://[^/]+/alpha(?:/|$)") ||
-		!strings.Contains(first, "handle @devlan_compat_0") {
-		t.Fatal("compatibilidade com URLs absolutas do frontend ausente")
+	if strings.Contains(first, "handle_path") || strings.Contains(first, "Referer") {
+		t.Fatal("a rota não deve depender de subpath ou Referer")
 	}
 	if !strings.Contains(first, "admin 127.0.0.1:2020") {
 		t.Fatal("porta administrativa dedicada do WSL ausente")
@@ -72,14 +58,15 @@ func TestRenderWindowsWithInternalTLS(t *testing.T) {
 	cfg := domain.NewConfig()
 	cfg.LANAddress = "192.168.10.77"
 	cfg.TLSEnabled = true
+	secure := true
+	cfg.Projects = []domain.Project{{Name: "secure", Path: "/home/dev/secure", Secure: &secure}}
 	result, err := RenderWindows(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, expected := range []string{
-		"default_sni 192.168.10.77", "http://:80", "https://192.168.10.77:443", "tls internal",
-		"redir https://{http.request.host}{http.request.uri} 307",
-		"header_up X-DevLAN-HTTPS on", "header_up -X-DevLAN-HTTPS",
+		"default_sni 192.168.10.77", "https://:8080", "tls internal",
+		"header_up X-DevLAN-Port 8080", "header_up X-DevLAN-HTTPS on",
 	} {
 		if !strings.Contains(result, expected) {
 			t.Fatalf("configuração TLS não contém %q:\n%s", expected, result)
@@ -149,14 +136,14 @@ func TestRenderWindowsRedirectsOnlyProjectsWithTLSPreference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result, "@devlan_secure_0 path /secure /secure/*") {
-		t.Fatalf("redirect do projeto seguro ausente:\n%s", result)
+	if !strings.Contains(result, "https://:8081 {") {
+		t.Fatalf("listener seguro dedicado ausente:\n%s", result)
 	}
-	if !strings.Contains(result, "@devlan_secure_referer_0 header_regexp Referer ^https://[^/]+/secure(?:/|$)") {
-		t.Fatalf("assets absolutos do projeto seguro não estão protegidos:\n%s", result)
+	if !strings.Contains(result, ":8081 {") {
+		t.Fatalf("listener HTTP dedicado ausente:\n%s", result)
 	}
-	if strings.Contains(result, "path /plain /plain/*") {
-		t.Fatalf("projeto sem preferência TLS não deveria receber redirect:\n%s", result)
+	if strings.Contains(result, "Referer") || strings.Contains(result, "path /secure") {
+		t.Fatalf("TLS não deve criar compatibilidade por subpath:\n%s", result)
 	}
 }
 
@@ -172,20 +159,13 @@ func TestRenderWindowsClearsSecureBrowserStateBeforeDowngradingAProject(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{
-		"@devlan_unsecure_0 path /plain /plain/*",
-		`header Clear-Site-Data "\"cache\", \"cookies\""`,
-		"redir http://{http.request.host}{http.request.uri} 302",
-	} {
+	for _, expected := range []string{":8080 {"} {
 		if !strings.Contains(result, expected) {
-			t.Fatalf("transição para HTTP não contém %q:\n%s", expected, result)
+			t.Fatalf("listener HTTP não contém %q:\n%s", expected, result)
 		}
 	}
-	if strings.Contains(result, "redir @devlan_secure_") {
-		t.Fatalf("projeto sem TLS não deveria redirecionar HTTP para HTTPS:\n%s", result)
-	}
-	if strings.Contains(result, "handle {\n        header Clear-Site-Data") {
-		t.Fatalf("limpeza não deve atingir recursos HTTPS fora do projeto:\n%s", result)
+	if strings.Contains(result, "Referer") || strings.Contains(result, "handle_path") || strings.Contains(result, "Clear-Site-Data") {
+		t.Fatalf("projeto HTTP não deve criar branches de subpath/TLS legado:\n%s", result)
 	}
 }
 
@@ -205,8 +185,8 @@ func TestRenderWSLStaticAndDevModes(t *testing.T) {
 	}
 
 	// Check static route
-	if !strings.Contains(result, `handle_path /frontend/*`) {
-		t.Fatalf("rota estática ausente:\n%s", result)
+	if !strings.Contains(result, `@devlan_port_frontend header X-DevLAN-Port 8080`) {
+		t.Fatalf("rota estática por porta ausente:\n%s", result)
 	}
 	if !strings.Contains(result, `root * "/home/dev/frontend/dist"`) {
 		t.Fatalf("document root estático ausente:\n%s", result)
@@ -216,14 +196,11 @@ func TestRenderWSLStaticAndDevModes(t *testing.T) {
 	}
 
 	// Check dev route
-	if !strings.Contains(result, `handle_path /vite-app/*`) {
-		t.Fatalf("rota dev ausente:\n%s", result)
+	if !strings.Contains(result, `@devlan_port_vite-app header X-DevLAN-Port 8081`) {
+		t.Fatalf("rota dev por porta ausente:\n%s", result)
 	}
 	if !strings.Contains(result, `reverse_proxy 127.0.0.1:9300`) {
 		t.Fatalf("proxy reverso dev ausente:\n%s", result)
-	}
-	if !strings.Contains(result, `header_up X-DevLAN-Prefix /vite-app`) {
-		t.Fatalf("header de prefixo ausente:\n%s", result)
 	}
 	if !strings.Contains(result, `header_up Upgrade {http.request.header.Upgrade}`) {
 		t.Fatalf("suporte a websocket/HMR ausente:\n%s", result)
@@ -292,18 +269,15 @@ func TestRenderWSLUsesGenericDocumentRoot(t *testing.T) {
 	}
 }
 
-func TestRenderPhase4RouteModes(t *testing.T) {
+func TestRenderProjectsAlwaysUseDedicatedLANPorts(t *testing.T) {
 	cfg := domain.NewConfig()
-	portMode := domain.RouteModePort
-	hostMode := domain.RouteModeHost
 	devMode := domain.ModeDev
 	port := 8089
 	devPort := 9350
-	host := "meu-app.lan"
 
 	cfg.Projects = []domain.Project{
-		{Name: "port-proj", Path: "/home/dev/port-proj", RouteMode: &portMode, RoutePort: &port, Mode: &devMode, DevPort: &devPort},
-		{Name: "host-proj", Path: "/home/dev/host-proj", RouteMode: &hostMode, RouteHost: &host},
+		{Name: "port-proj", Path: "/home/dev/port-proj", RoutePort: &port, Mode: &devMode, DevPort: &devPort},
+		{Name: "automatic-proj", Path: "/home/dev/automatic-proj"},
 	}
 	if err := cfg.Normalize(); err != nil {
 		t.Fatal(err)
@@ -313,21 +287,22 @@ func TestRenderPhase4RouteModes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(winResult, ":8089 {") || !strings.Contains(winResult, "header_up X-DevLAN-Port 8089") {
-		t.Fatalf("listener Windows para modo port ausente:\n%s", winResult)
+	if !strings.Contains(winResult, ":8089 {") || !strings.Contains(winResult, "header_up X-DevLAN-Port 8089") || !strings.Contains(winResult, ":8080 {") {
+		t.Fatalf("listeners Windows por porta ausentes:\n%s", winResult)
 	}
 
 	wslResult, err := RenderWSL(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Check port mode handler in WSL
 	if !strings.Contains(wslResult, "@devlan_port_port-proj header X-DevLAN-Port 8089") || !strings.Contains(wslResult, "reverse_proxy 127.0.0.1:9350") {
-		t.Fatalf("handler WSL para modo port ausente:\n%s", wslResult)
+		t.Fatalf("handler WSL por porta ausente:\n%s", wslResult)
 	}
-	// Check host mode in WSL
-	if !strings.Contains(wslResult, "@devlan_host_host-proj header_regexp Host ^meu-app\\.lan") {
-		t.Fatalf("matcher host mode em WSL ausente:\n%s", wslResult)
+	if !strings.Contains(wslResult, "@devlan_port_automatic-proj header X-DevLAN-Port 8080") {
+		t.Fatalf("handler WSL automático ausente:\n%s", wslResult)
+	}
+	if strings.Contains(wslResult, "Referer") || strings.Contains(wslResult, "handle_path") || strings.Contains(wslResult, "devlan_host_") {
+		t.Fatalf("configuração WSL contém branch de roteamento removido:\n%s", wslResult)
 	}
 }
 

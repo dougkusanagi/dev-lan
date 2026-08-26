@@ -2,10 +2,11 @@
 
 DevLAN é uma ferramenta para publicar projetos que rodam no WSL para outros dispositivos da rede local, usando o Windows como ponto de entrada.
 
-O primeiro caso de uso é simples:
+Cada projeto possui duas origens fixas:
 
 ```text
-http://192.168.1.50/meu-projeto
+https://meu-projeto.localhost/
+http://192.168.1.50:8080/
 ```
 
 O núcleo PHP suporta Laravel, Symfony e aplicações genéricas, inclusive com
@@ -56,10 +57,12 @@ devlan open financeiro
 Resultado:
 
 ```text
-https://192.168.1.50/financeiro
+local  https://financeiro.localhost/
+LAN    http://192.168.1.50:8080/
 ```
 
-Sem `devlan secure financeiro`, a URL permanece `http://192.168.1.50/financeiro`.
+O comando `devlan route financeiro --port PORT` configura um override da porta
+LAN; `devlan route financeiro --port auto` restaura a alocação automática.
 
 ## Documentos
 
@@ -73,7 +76,7 @@ Sem `devlan secure financeiro`, a URL permanece `http://192.168.1.50/financeiro`
 
 ## Fora do escopo da primeira instalação
 
-- DNS interno e distribuição automática da CA para outros dispositivos.
+- Distribuição automática da CA para outros dispositivos.
 - Containers e bancos de dados.
 - Instalação automática de dependências dos projetos.
 
@@ -86,10 +89,10 @@ O núcleo está implementado como uma CLI Go em `cmd/devlan`. Ele cobre:
 - detecção sem executar scripts, com presets Laravel, Symfony e PHP genérico;
 - múltiplas versões PHP, extensões por versão, Composer versionado e pools
   `ondemand` compartilhados ou isolados;
-- Caddyfiles Windows/WSL determinísticos, com rota por subpath e contexto
-  FastCGI compatível com redirects e rotas Laravel;
-- HTTPS opcional por CA interna, selecionando o projeto com `devlan secure
-  NAME|PATH`, e retorno a HTTP com `devlan unsecure NAME|PATH`;
+- Caddyfiles Windows/WSL determinísticos, com uma porta LAN dedicada por projeto
+  e contexto FastCGI na raiz;
+- HTTPS opcional por CA interna na porta dedicada do projeto, selecionado com
+  `devlan secure NAME|PATH`, e retorno a HTTP com `devlan unsecure NAME|PATH`;
 - aplicação por arquivo temporário, validação quando o Caddy está disponível e rollback da última configuração funcional;
 - `install`, `uninstall`, `status`, `reload`, `doctor`, `logs`, `open` e os comandos de registro;
 - `php install|list|remove|use|extensions|pool|preset|info` e `composer`;

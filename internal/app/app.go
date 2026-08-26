@@ -1431,12 +1431,7 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 			return nil, err
 		}
 
-		routeDetail := string(resolved.RouteMode)
-		if resolved.RouteMode == domain.RouteModePort {
-			routeDetail = fmt.Sprintf("port :%d", resolved.RoutePort)
-		} else if resolved.RouteMode == domain.RouteModeHost {
-			routeDetail = fmt.Sprintf("host %s", resolved.RouteHost)
-		}
+		routeDetail := fmt.Sprintf("porta LAN :%d", resolved.RoutePort)
 
 		if effective.IsExposureExpired(project, now) {
 			checks = append(checks, Check{"Projeto " + project.Name + " (Exposição)", "WARN", "exposição temporária expirada"})
@@ -1884,7 +1879,7 @@ func (a *App) SetProjectPackageManager(ctx context.Context, selector, pm string)
 	return result, err
 }
 
-func (a *App) SetRouteMode(ctx context.Context, selector string, mode *domain.RouteMode, port *int, host *string) (ApplyResult, error) {
+func (a *App) SetRoutePort(ctx context.Context, selector string, port *int) (ApplyResult, error) {
 	cfg, err := a.Store.Load()
 	if err != nil {
 		return ApplyResult{}, err
@@ -1893,29 +1888,13 @@ func (a *App) SetRouteMode(ctx context.Context, selector string, mode *domain.Ro
 	if err != nil {
 		return ApplyResult{}, err
 	}
-	if err := cfg.SetProjectRouteMode(name, mode, port, host); err != nil {
+	if err := cfg.SetProjectRoutePort(name, port); err != nil {
 		return ApplyResult{}, err
 	}
 	result, err := a.saveAndApply(ctx, cfg, true)
 	if err == nil {
-		_ = a.appendLog("modo de rota %s: mode=%v port=%v host=%v", name, mode, port, host)
-		_ = a.Store.AppendSecurityAudit("ROUTE_MODE_CHANGE", fmt.Sprintf("project=%s mode=%v port=%v host=%v", name, mode, port, host))
-	}
-	return result, err
-}
-
-func (a *App) SetDefaultRouteMode(ctx context.Context, mode domain.RouteMode) (ApplyResult, error) {
-	cfg, err := a.Store.Load()
-	if err != nil {
-		return ApplyResult{}, err
-	}
-	if err := cfg.SetDefaultRouteMode(mode); err != nil {
-		return ApplyResult{}, err
-	}
-	result, err := a.saveAndApply(ctx, cfg, true)
-	if err == nil {
-		_ = a.appendLog("modo de rota padrão global %s", mode)
-		_ = a.Store.AppendSecurityAudit("DEFAULT_ROUTE_MODE_CHANGE", fmt.Sprintf("mode=%s", mode))
+		_ = a.appendLog("porta LAN %s: port=%v", name, port)
+		_ = a.Store.AppendSecurityAudit("ROUTE_PORT_CHANGE", fmt.Sprintf("project=%s port=%v", name, port))
 	}
 	return result, err
 }
@@ -2003,7 +1982,7 @@ func (a *App) ClearAllowlist(ctx context.Context, selector string) (ApplyResult,
 	return a.SetAllowlist(ctx, selector, []string{})
 }
 
-func (a *App) ExposeProject(ctx context.Context, selector string, duration time.Duration, mode *domain.RouteMode) (ApplyResult, string, error) {
+func (a *App) ExposeProject(ctx context.Context, selector string, duration time.Duration) (ApplyResult, string, error) {
 	cfg, err := a.Store.Load()
 	if err != nil {
 		return ApplyResult{}, "", err
@@ -2011,9 +1990,6 @@ func (a *App) ExposeProject(ctx context.Context, selector string, duration time.
 	cfg, name, index, err := a.materializeProject(ctx, cfg, selector)
 	if err != nil {
 		return ApplyResult{}, "", err
-	}
-	if mode != nil {
-		cfg.Projects[index].RouteMode = mode
 	}
 	var untilStr *string
 	if duration > 0 {
@@ -2023,8 +1999,8 @@ func (a *App) ExposeProject(ctx context.Context, selector string, duration time.
 	cfg.Projects[index].ExposedUntil = untilStr
 	result, err := a.saveAndApply(ctx, cfg, true)
 	if err == nil {
-		_ = a.appendLog("expose %s duration=%v mode=%v", name, duration, mode)
-		_ = a.Store.AppendSecurityAudit("EXPOSE_PROJECT", fmt.Sprintf("project=%s duration=%v until=%v mode=%v", name, duration, untilStr, mode))
+		_ = a.appendLog("expose %s duration=%v", name, duration)
+		_ = a.Store.AppendSecurityAudit("EXPOSE_PROJECT", fmt.Sprintf("project=%s duration=%v until=%v", name, duration, untilStr))
 	}
 	return result, name, err
 }
@@ -2140,59 +2116,6 @@ func (a *App) RotateCA(ctx context.Context) (ApplyResult, error) {
 	reloadResult, err := a.Reload(ctx)
 	result.Warnings = append(result.Warnings, reloadResult.Warnings...)
 	return result, err
-}
-
-func (a *App) HostsEntries(ctx context.Context) (string, error) {
-	cfg, err := a.Store.Load()
-	if err != nil {
-		return "", err
-	}
-	effective, err := a.EffectiveConfig(ctx, cfg)
-	if err != nil {
-		return "", err
-	}
-	host := cfg.LANAddress
-	if host == "" || host == "auto" {
-		host, _ = platform.LANAddress()
-		if host == "" {
-			host = "127.0.0.1"
-		}
-	}
-	hostnames := make([]string, 0)
-	for _, project := range effective.Projects {
-		hostnames = append(hostnames, effective.EffectiveRouteHost(project))
-	}
-	return platform.GenerateHostsBlock(host, hostnames), nil
-}
-
-func (a *App) SyncHosts(ctx context.Context) (ApplyResult, error) {
-	block, err := a.HostsEntries(ctx)
-	if err != nil {
-		return ApplyResult{}, err
-	}
-	hostsPath := platform.HostsPath()
-	data, err := os.ReadFile(hostsPath)
-	if err != nil {
-		return ApplyResult{}, fmt.Errorf("ler arquivo hosts (%s): %w; execute como Administrador", hostsPath, err)
-	}
-	content := string(data)
-	startMarker := "# DevLAN internal DNS mapping - START"
-	endMarker := "# DevLAN internal DNS mapping - END"
-	if strings.Contains(content, startMarker) && strings.Contains(content, endMarker) {
-		startIndex := strings.Index(content, startMarker)
-		endIndex := strings.Index(content, endMarker) + len(endMarker)
-		content = content[:startIndex] + block + content[endIndex:]
-	} else {
-		if !strings.HasSuffix(content, "\n") {
-			content += "\n"
-		}
-		content += "\n" + block
-	}
-	if err := os.WriteFile(hostsPath, []byte(content), 0o644); err != nil {
-		return ApplyResult{}, fmt.Errorf("gravar arquivo hosts (%s): %w; execute como Administrador", hostsPath, err)
-	}
-	_ = a.Store.AppendSecurityAudit("DNS_SYNC", fmt.Sprintf("path=%s", hostsPath))
-	return ApplyResult{}, nil
 }
 
 func (a *App) SecurityAuditLogs(ctx context.Context, lines int) (string, error) {

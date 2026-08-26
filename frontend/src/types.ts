@@ -26,9 +26,7 @@ export interface ProjectInfo {
   localDevState: 'active' | 'starting' | 'stopped' | 'available';
   lanPreviewState: 'ready' | 'paused';
   tlsEnabled: boolean;
-  routingMode: 'path' | 'port' | 'host';
   port?: number;
-  host?: string;
   status: ProjectStatus;
   statusDetail?: string;
   phpVersion?: string;
@@ -69,7 +67,6 @@ export interface GlobalConfig {
   tlsEnabled: boolean;
   phpDefaultVersion: string;
   allowlist: string[];
-  defaultRouteMode: string;
 }
 
 export interface PHPVersion {
@@ -109,9 +106,7 @@ export interface ProjectConfigUpdate {
   phpVersion?: string;
   phpPreset?: string;
   tlsEnabled?: boolean;
-  routeMode?: string;
   routePort?: number;
-  routeHost?: string;
   staticDir?: string;
   devCommand?: string;
   devPort?: number;

@@ -108,43 +108,41 @@ proxy para o processo backend. Ele:
 - encerrar processos após um idle timeout medido pela atividade do gateway;
 - nunca instalar dependências apenas porque ocorreu uma requisição HTTP.
 
-## Fluxo de uma requisição PHP no MVP
+## Fluxo de uma requisição PHP
 
 ```text
-GET http://IP/financeiro/clientes
-  1. Caddy/Windows recebe /financeiro/clientes
-  2. encaminha ao Caddy/WSL com os headers externos
-  3. Caddy/WSL seleciona financeiro e remove /financeiro
+GET http://IP:8080/clientes
+  1. Caddy/Windows recebe a porta 8080
+  2. encaminha ao Caddy/WSL com os headers internos controlados
+  3. Caddy/WSL seleciona o projeto pela porta
   4. php_fastcgi executa public/index.php
   5. Laravel responde ao cliente da LAN
 ```
 
-Quando `tls_enabled = true`, a primeira etapa ocorre em
-`https://IP/financeiro/clientes`; uma requisição HTTP recebe redirect 308. TLS
-é global porque a negociação do certificado acontece antes de o Caddy conhecer
-o subpath do projeto. Ainda assim, `secure`/`unsecure` recebem o nome ou caminho
-do projeto e controlam os redirects e a URL anunciada para cada rota.
+No acesso local, o Caddy usa sempre `https://financeiro.localhost/clientes`.
+Na LAN, cada projeto possui uma porta dedicada e serve a aplicação na raiz:
+`http(s)://IP:8080/clientes`. Quando o TLS global e a preferência segura do
+projeto estão ativos, a origem LAN usa HTTPS; não há seleção de modo, subpath
+externo ou hostname LAN por projeto.
 
 O Caddy armazena a CA e a chave privada no perfil do usuário Windows. Somente o
 certificado raiz público pode ser copiado para clientes LAN. A chave privada e
 o diretório de armazenamento do Caddy não devem ser compartilhados.
 
-## Compatibilidade com Laravel em subpath
+## Compatibilidade com Laravel na raiz
 
-Servir Laravel em `/nome` exige cuidado porque redirects, assets, cookies e URLs absolutas podem assumir `/`.
+Servir Laravel na raiz preserva a semântica esperada por redirects, assets,
+cookies e URLs absolutas.
 
-No MVP, o adaptador Laravel deve:
+O adaptador Laravel deve:
 
 - exigir `public/index.php` como document root;
 - preservar headers `X-Forwarded-Host` e `X-Forwarded-Proto` do proxy;
-- reescrever o header `Location` de redirects relativos para preservar o
-  subpath externo;
-- orientar `APP_URL=http://IP/nome`;
+- orientar `APP_URL` para a origem escolhida (`https://nome.localhost/` ou
+  `http(s)://IP:porta/`);
 - verificar cache de configuração do Laravel;
 - testar uma rota, redirect e asset no `doctor`;
 - documentar quando `URL::forceRootUrl()` ou ajuste de proxy confiável for necessário.
-
-Não se deve prometer compatibilidade universal com subpath. O roadmap inclui porta dedicada e hostname interno como alternativas por projeto.
 
 ## Estado e arquivos gerados
 

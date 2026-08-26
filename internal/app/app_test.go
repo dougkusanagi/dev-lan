@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/dougkusanagi/dev-lan/internal/detect"
-	"github.com/dougkusanagi/dev-lan/internal/domain"
 	"github.com/dougkusanagi/dev-lan/internal/platform"
 )
 
@@ -394,11 +393,10 @@ func TestPhase4AppMethods(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Test Route Mode
-	portMode := domain.RouteModePort
+	// Test LAN port override
 	port := 8088
-	if _, err := service.SetRouteMode(ctx, "app", &portMode, &port, nil); err != nil {
-		t.Fatalf("SetRouteMode: %v", err)
+	if _, err := service.SetRoutePort(ctx, "app", &port); err != nil {
+		t.Fatalf("SetRoutePort: %v", err)
 	}
 
 	// Test Allowlist
@@ -413,7 +411,7 @@ func TestPhase4AppMethods(t *testing.T) {
 	}
 
 	// Test Expose and Unexpose
-	if _, _, err := service.ExposeProject(ctx, "app", 10*time.Minute, nil); err != nil {
+	if _, _, err := service.ExposeProject(ctx, "app", 10*time.Minute); err != nil {
 		t.Fatalf("ExposeProject: %v", err)
 	}
 	if _, _, err := service.UnexposeProject(ctx, "app"); err != nil {
@@ -437,21 +435,12 @@ func TestPhase4AppMethods(t *testing.T) {
 		t.Fatalf("caInfo missing exists key: %#v", caInfo)
 	}
 
-	// Test Hosts Entries
-	hosts, err := service.HostsEntries(ctx)
-	if err != nil {
-		t.Fatalf("HostsEntries: %v", err)
-	}
-	if !strings.Contains(hosts, "DevLAN internal DNS") {
-		t.Fatalf("Hosts block missing marker: %s", hosts)
-	}
-
 	// Test Security Audit
 	logs, err := service.SecurityAuditLogs(ctx, 10)
 	if err != nil {
 		t.Fatalf("SecurityAuditLogs: %v", err)
 	}
-	if !strings.Contains(logs, "ROUTE_MODE_CHANGE") {
+	if !strings.Contains(logs, "ROUTE_PORT_CHANGE") {
 		t.Fatalf("Audit log missing event: %s", logs)
 	}
 }

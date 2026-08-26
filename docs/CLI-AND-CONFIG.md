@@ -11,8 +11,8 @@ devlan links
 ```
 
 `links` exibe as colunas `PROJETO`, `MODO`, `ORIGEM`, `SSL`, `URL` e
-`CAMINHO`. Como todos os projetos compartilham a mesma borda IP/porta, `SSL`
-reflete uma política global e aparece como `on` ou `off` em todas as linhas.
+`CAMINHO`. Todos os projetos compartilham a borda Windows, mas cada um recebe
+uma porta LAN dedicada; `SSL` reflete a preferência efetiva de cada origem.
 
 O bootstrap instala uma CLI Linux fina para executar no WSL:
 
@@ -157,8 +157,6 @@ Exemplos futuros:
 
 ```powershell
 devlan php use financeiro 8.3
-devlan config financeiro route.mode path
-devlan config financeiro route.path financeiro
 devlan config painel js.idle-timeout 15m
 devlan config painel static.dir dist
 ```
@@ -172,7 +170,6 @@ devlan config painel --resolved
 ```text
 mode                 dev       project
 js.idle-timeout      15m       global
-route.mode           path      default
 ```
 
 ## Comandos do MVP
@@ -210,9 +207,9 @@ devlan links
 devlan unsecure NAME|PATH
 ```
 
-`secure` habilita a porta 443 no Caddy do Windows, emite um certificado para o
-IP LAN usando a CA interna do Caddy e mantém a porta HTTP apenas para redirect.
-O comando tenta atualizar a regra de firewall e confiar na CA no Windows. Se o
+`secure` habilita HTTPS na porta LAN dedicada do projeto e emite um certificado
+com a CA interna do Caddy. O comando tenta atualizar a regra de firewall e
+confiar na CA no Windows. Se o
 PowerShell atual não for administrativo, ele mantém a configuração aplicada e
 avisa quais etapas exigem executar `devlan secure` novamente como Administrador.
 
@@ -222,9 +219,10 @@ confiável o arquivo `%APPDATA%\Caddy\pki\authorities\local\root.crt` gerado na
 máquina do DevLAN. Distribua esse arquivo apenas por um canal confiável e nunca
 distribua a chave privada ao lado dele.
 
-`unsecure` remove o listener HTTPS e o redirect, preservando projetos, parks e
-dados. A configuração gerenciada registra `tls_enabled` e `https_port`; a porta
-HTTPS padrão é 443.
+`unsecure` volta a origem LAN do projeto para HTTP, preservando projetos, parks
+e dados. A configuração global ainda registra `tls_enabled` e `https_port`
+para a infraestrutura da borda; a rota do projeto continua usando sua porta
+LAN dedicada.
 
 Para instalar Go, WSL/Ubuntu, Caddy, PHP-FPM, extensões Laravel e Composer em
 uma máquina limpa, use `scripts/install.ps1` conforme [o guia de instalação](INSTALL.md).
@@ -249,29 +247,22 @@ os arquivos gerados e só então tenta o reload. Se o reload falhar, restaura o
 par anterior. Quando Caddy ou PHP-FPM não estão instalados, a configuração
 continua sendo gerada e `doctor` informa a dependência ausente.
 
-## Rotas e Segurança (Fase 4)
+## Rotas e Segurança
 
-### Modos de Rota (`path`, `port`, `host`)
+### Duas origens fixas
 
-O DevLAN oferece três estratégias de roteamento para acomodar diferentes arquiteturas:
-
-- **`path` (padrão)**: subcaminho na interface LAN (`http://IP/projeto/`). Ideal para APIs, microserviços e compatibilidade direta sem alterar DNS.
-- **`port`**: porta dedicada na borda Windows (`http://IP:8080/`) encaminhada diretamente para a raiz `/` do projeto no WSL. Solução definitiva para SSR (Next.js, Nuxt, Remix), Vite com HMR e fluxos OAuth que esperam `/` como base URL.
-- **`host`**: domínio customizado (`http://projeto.lan/`) roteado pelo cabeçalho `Host` na raiz `/`.
+Todo projeto é publicado simultaneamente na origem local `.localhost` e em uma
+porta dedicada da LAN. Ambas chegam ao projeto na raiz `/`; não há seletor de
+modo, hostname customizado ou subpath.
 
 ```powershell
-# Exibir status de rotas e recomendações
+# Exibir portas e URLs
 devlan route
 devlan route [NAME]
 
-# Definir modo global padrão
-devlan route default port
-
-# Configurar rota de um projeto específico
-devlan route painel port --port 8085
-devlan route api host --host api.lan
-devlan route site path
-devlan route site inherit
+# Configurar ou restaurar a porta LAN de um projeto
+devlan route painel --port 8085
+devlan route painel --port auto
 ```
 
 ### Exposição Temporária e Expiração
@@ -279,7 +270,7 @@ devlan route site inherit
 Projetos podem ser expostos na LAN com tempo de vida limitado:
 
 ```powershell
-devlan expose painel --duration 1h --mode port
+devlan expose painel --duration 1h
 devlan unexpose painel
 ```
 
@@ -327,18 +318,6 @@ devlan ca rotate
 ```
 
 *Dispositivos na LAN também podem baixar o certificado raiz diretamente via navegador acessando:* `http://<LAN_IP>/__devlan/ca.crt`
-
-### DNS Interno e Arquivo Hosts
-
-Para projetos no modo `host`:
-
-```powershell
-# Visualizar mapeamentos para o arquivo hosts
-devlan dns entries
-
-# Sincronizar automaticamente no arquivo hosts do Windows (Administrador)
-devlan dns sync
-```
 
 ### Auditoria e Postura de Segurança
 

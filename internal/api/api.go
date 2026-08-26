@@ -212,7 +212,6 @@ func (s *Server) handleStatus(writer http.ResponseWriter, request *http.Request)
 		"data_dir":         s.store.Paths().Dir,
 		"revision":         cfg.Revision,
 		"default_mode":     cfg.DefaultMode,
-		"default_route":    cfg.DefaultRouteMode,
 		"windows_port":     cfg.WindowsPort,
 		"https_port":       cfg.HTTPSPort,
 		"tls_enabled":      cfg.TLSEnabled,

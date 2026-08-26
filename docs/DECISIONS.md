@@ -92,11 +92,10 @@ O Caddy do Windows deve ter configuração quase estática. O do WSL pode ser re
 
 ## TLS por projeto na borda, com CA interna
 
-No modo de rota por IP e subpath, TLS é propriedade da borda Windows, não de
-um projeto. `devlan secure NAME|PATH` ativa HTTPS para aquele projeto e
-`devlan unsecure NAME|PATH` restaura HTTP. O listener e a CA continuam globais
-no Caddy da borda, mas redirects e URLs anunciadas são por projeto; isso não
-representa certificados independentes por path.
+TLS é propriedade da borda Windows. `secure` continua sendo uma preferência do
+projeto, enquanto a negociação e a CA permanecem no Caddy da borda. A origem
+local é sempre HTTPS em `.localhost`; a origem LAN usa HTTP ou HTTPS na porta
+dedicada conforme a configuração global e a preferência do projeto.
 
 Uma autoridade pública não é pressuposta para IPs privados. A CA interna
 permite criptografia na LAN, porém cada dispositivo cliente precisa confiar no
@@ -105,13 +104,14 @@ evolução posterior de segurança.
 
 ## Roteamento
 
-O MVP usa `http://IP/nome` por ser a opção que não depende de DNS. O produto completo terá:
+Todo projeto expõe duas origens fixas simultaneamente:
 
-- `path`: simples, mas depende de suporte a base path;
-- `port`: robusto para HMR e apps que assumem `/`;
-- `host`: melhor experiência, requer DNS ou hosts distribuído.
+- local: `https://nome.localhost/`;
+- LAN: `http(s)://IP:porta/`.
 
-A ferramenta deve recomendar o modo com base no tipo de projeto, sem alterar automaticamente uma escolha explícita.
+Não existe modo selecionável, hostname customizado, subpath externo, edição de
+`hosts` ou DNS. A porta LAN é automática a partir de `route_base_port`, com
+override explícito por projeto e `--port auto` para restaurar o cálculo.
 
 ## Transporte de controle na Fase 6
 

@@ -175,7 +175,9 @@ func (s Store) LoadLocked() (domain.Config, error) {
 
 	if data, err := s.filesystem().ReadFile(paths.State); err == nil {
 		var state stateFile
-		if err := json.Unmarshal(data, &state); err != nil {
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&state); err != nil {
 			return domain.Config{}, fmt.Errorf("ler %s: %w", paths.State, err)
 		}
 		if state.SchemaVersion == 0 {
@@ -259,9 +261,7 @@ func renderTOMLConfig(cfg domain.Config) string {
 	b.WriteString("# DevLAN configuration. Managed by the CLI.\n")
 	fmt.Fprintf(&b, "version = %d\n", cfg.Version)
 	fmt.Fprintf(&b, "default_mode = %s\n", strconv.Quote(string(cfg.DefaultMode)))
-	fmt.Fprintf(&b, "default_route_mode = %s\n", strconv.Quote(string(cfg.DefaultRouteMode)))
 	fmt.Fprintf(&b, "route_base_port = %d\n", cfg.RouteBasePort)
-	fmt.Fprintf(&b, "domain_suffix = %s\n", strconv.Quote(cfg.DomainSuffix))
 	fmt.Fprintf(&b, "lan_address = %s\n", strconv.Quote(cfg.LANAddress))
 	fmt.Fprintf(&b, "windows_port = %d\n", cfg.WindowsPort)
 	fmt.Fprintf(&b, "https_port = %d\n", cfg.HTTPSPort)
@@ -341,28 +341,12 @@ func parseTOMLConfig(data []byte, cfg *domain.Config) error {
 				return fmt.Errorf("linha %d: %w", lineNumber+1, err)
 			}
 			cfg.DefaultMode = mode
-		case "default_route_mode":
-			parsed, err := parseTOMLString(value)
-			if err != nil {
-				return fmt.Errorf("linha %d: default_route_mode inválido: %w", lineNumber+1, err)
-			}
-			routeMode, err := domain.ParseRouteMode(parsed)
-			if err != nil {
-				return fmt.Errorf("linha %d: %w", lineNumber+1, err)
-			}
-			cfg.DefaultRouteMode = routeMode
 		case "route_base_port":
 			parsed, err := strconv.Atoi(value)
 			if err != nil {
 				return fmt.Errorf("linha %d: route_base_port inválida", lineNumber+1)
 			}
 			cfg.RouteBasePort = parsed
-		case "domain_suffix":
-			parsed, err := parseTOMLString(value)
-			if err != nil {
-				return fmt.Errorf("linha %d: domain_suffix inválido: %w", lineNumber+1, err)
-			}
-			cfg.DomainSuffix = parsed
 		case "allowlist":
 			list, err := parseTOMLStringList(value)
 			if err != nil {

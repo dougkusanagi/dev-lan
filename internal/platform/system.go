@@ -142,32 +142,6 @@ func NetworkProfile(ctx context.Context) (isPublic bool, detail string, err erro
 	return false, "Private", nil
 }
 
-func HostsPath() string {
-	if runtime.GOOS == "windows" {
-		systemRoot := os.Getenv("SystemRoot")
-		if systemRoot == "" {
-			systemRoot = "C:\\Windows"
-		}
-		return filepath.Join(systemRoot, "System32", "drivers", "etc", "hosts")
-	}
-	return "/etc/hosts"
-}
-
-func GenerateHostsBlock(ip string, hostnames []string) string {
-	if len(hostnames) == 0 {
-		return ""
-	}
-	sorted := append([]string(nil), hostnames...)
-	sort.Strings(sorted)
-	var b strings.Builder
-	b.WriteString("# DevLAN internal DNS mapping - START\n")
-	for _, host := range sorted {
-		fmt.Fprintf(&b, "%s %s\n", ip, host)
-	}
-	b.WriteString("# DevLAN internal DNS mapping - END\n")
-	return b.String()
-}
-
 func FindCARootCertPath() string {
 	if appData := os.Getenv("APPDATA"); appData != "" {
 		p := filepath.Join(appData, "Caddy", "pki", "authorities", "local", "root.crt")

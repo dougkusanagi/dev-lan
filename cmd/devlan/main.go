@@ -18,7 +18,6 @@ import (
 	localapi "github.com/dougkusanagi/dev-lan/internal/api"
 	"github.com/dougkusanagi/dev-lan/internal/app"
 	"github.com/dougkusanagi/dev-lan/internal/config"
-	"github.com/dougkusanagi/dev-lan/internal/detect"
 	"github.com/dougkusanagi/dev-lan/internal/domain"
 	"github.com/dougkusanagi/dev-lan/internal/gui"
 	"github.com/dougkusanagi/dev-lan/internal/platform"
@@ -424,9 +423,6 @@ func run(args []string) error {
 
 	case "ca":
 		return runCA(ctx, service, args)
-
-	case "dns":
-		return runDNS(ctx, service, args)
 
 	case "gui":
 		return gui.Launch(service)
@@ -1477,9 +1473,9 @@ Operação:
   update check|download       consulta/prepara artefato com SHA-256
 
 Rotas e Segurança:
-  route [default|NAME] [MODE] [--port N] [--host DOMAIN]
-                             gerencia modo de rota (path, port, host)
-  expose NAME [--duration D] [--mode MODE]
+  route [NAME] [--port auto|N]
+                             inspeciona ou sobrescreve a porta LAN
+  expose NAME [--duration D]
                              expõe projeto temporariamente
   unexpose NAME              revoga exposição de projeto
   allowlist [default|NAME] [set|add|remove|clear CIDR...]
@@ -1487,7 +1483,6 @@ Rotas e Segurança:
   auth enable|disable [default|NAME] [USER PASS]
                              configura autenticação HTTP básica
   ca info|export|rotate      gerencia CA interna e certificados
-  dns entries|sync           gerencia mapeamentos do arquivo hosts
   security posture|audit     auditoria e postura de segurança
 
 PHP:
@@ -1549,13 +1544,12 @@ func printCommandUsage(command string) {
 		"logs":       "uso: devlan logs [COMPONENT]",
 		"open":       "uso: devlan open [NAME]",
 		"mode":       "uso: devlan mode default MODE | devlan mode NAME MODE|inherit",
-		"route":      "uso: devlan route [default|NAME] [path|port|host|inherit] [--port PORT] [--host HOST]",
-		"expose":     "uso: devlan expose NAME [--duration 30m|1h|2h] [--mode path|port|host]",
+		"route":      "uso: devlan route [NAME] [--port auto|PORT]",
+		"expose":     "uso: devlan expose NAME [--duration 30m|1h|2h]",
 		"unexpose":   "uso: devlan unexpose NAME",
 		"allowlist":  "uso: devlan allowlist [default|NAME] [set|add|remove|clear CIDR...]",
 		"auth":       "uso: devlan auth enable default|NAME USERNAME PASSWORD | devlan auth disable default|NAME",
 		"ca":         "uso: devlan ca info | devlan ca export [PATH] | devlan ca rotate",
-		"dns":        "uso: devlan dns entries | devlan dns sync",
 		"security":   "uso: devlan security posture | devlan security audit [--lines N]",
 		"config":     "uso: devlan config export [PATH] | devlan config import PATH",
 		"diagnostic": "uso: devlan diagnostic [PATH]",
@@ -1696,33 +1690,18 @@ func runRoute(ctx context.Context, service *app.App, args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Modo de rota padrão global: %s (base port: %d, domain suffix: .%s)\n\n", cfg.DefaultRouteMode, cfg.RouteBasePort, cfg.DomainSuffix)
+		fmt.Printf("Portas LAN: automáticas a partir de %d\n\n", cfg.RouteBasePort)
 		writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(writer, "PROJETO\tROTA\tPORTA\tHOST\tFONTE")
+		fmt.Fprintln(writer, "PROJETO\tPORTA LAN\tURL LOCAL\tURL LAN\tOVERRIDE")
 		for _, p := range eff.Projects {
-			source := "herdado"
-			if p.RouteMode != nil {
-				source = "projeto"
+			port := eff.EffectiveRoutePort(p)
+			override := "auto"
+			if p.RoutePort != nil {
+				override = "customizada"
 			}
-			fmt.Fprintf(writer, "%s\t%s\t%d\t%s\t%s\n", p.Name, eff.EffectiveRouteMode(p), eff.EffectiveRoutePort(p), eff.EffectiveRouteHost(p), source)
+			fmt.Fprintf(writer, "%s\t%d\t%s\t%s\t%s\n", p.Name, port, domain.LocalDevURL(p.Name), routeURL(cfg, p, port), override)
 		}
 		return writer.Flush()
-	}
-	if args[0] == "default" {
-		if len(args) != 2 {
-			return fmt.Errorf("uso: devlan route default path|port|host")
-		}
-		m, err := domain.ParseRouteMode(args[1])
-		if err != nil {
-			return err
-		}
-		res, err := service.SetDefaultRouteMode(ctx, m)
-		printWarnings(res.Warnings)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("Modo de rota padrão global alterado para %s.\n", m)
-		return nil
 	}
 	name := args[0]
 	if len(args) == 1 {
@@ -1738,56 +1717,52 @@ func runRoute(ctx context.Context, service *app.App, args []string) error {
 		if !found {
 			return fmt.Errorf("projeto não encontrado: %s", name)
 		}
-		detected, detErr := service.Detector.DetectProject(ctx, p.Path)
-		if detErr == nil {
-			rec := detect.RecommendRouteMode(detected)
-			fmt.Printf("Recomendação para %s: modo '%s' (%s)\n", name, rec.RecommendedMode, rec.Reason)
+		override := "automática"
+		if p.RoutePort != nil {
+			override = "customizada"
 		}
-		fmt.Printf("Configuração atual: modo=%s, porta=%d, host=%s\n", eff.EffectiveRouteMode(p), eff.EffectiveRoutePort(p), eff.EffectiveRouteHost(p))
+		fmt.Printf("Projeto %s: porta LAN %d (%s)\n", name, eff.EffectiveRoutePort(p), override)
+		fmt.Printf("Local: %s\nLAN: %s\n", domain.LocalDevURL(p.Name), routeURL(cfg, p, eff.EffectiveRoutePort(p)))
 		return nil
 	}
-	var mode *domain.RouteMode
-	var port *int
-	var host *string
-	for i := 1; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--port" && i+1 < len(args) {
-			i++
-			p, err := strconv.Atoi(args[i])
-			if err != nil || p < 1 || p > 65535 {
-				return fmt.Errorf("porta inválida: %s", args[i])
-			}
-			port = &p
-		} else if arg == "--host" && i+1 < len(args) {
-			i++
-			h := args[i]
-			host = &h
-		} else if arg == "inherit" {
-			mode = nil
-		} else {
-			m, err := domain.ParseRouteMode(arg)
-			if err != nil {
-				return err
-			}
-			mode = &m
-		}
+	if len(args) != 3 || args[1] != "--port" {
+		return fmt.Errorf("uso: devlan route NAME --port auto|PORT")
 	}
-	res, err := service.SetRouteMode(ctx, name, mode, port, host)
+	var port *int
+	if args[2] != "auto" {
+		parsed, err := strconv.Atoi(args[2])
+		if err != nil || parsed < 1024 || parsed > 65535 {
+			return fmt.Errorf("porta inválida: %s", args[2])
+		}
+		port = &parsed
+	}
+	res, err := service.SetRoutePort(ctx, name, port)
 	printWarnings(res.Warnings)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Rota do projeto %s atualizada.\n", name)
+	fmt.Printf("Porta LAN do projeto %s atualizada.\n", name)
 	return nil
+}
+
+func routeURL(cfg domain.Config, project domain.Project, port int) string {
+	host := cfg.LANAddress
+	if host == "" || host == "auto" {
+		host, _ = platform.LANAddress()
+		if host == "" {
+			host = "localhost"
+		}
+	}
+	resolved := domain.ResolvedProject{Project: project, RoutePort: port}
+	return resolved.URL(host, cfg.WindowsPort, cfg.HTTPSPort, cfg.SecureProject(project))
 }
 
 func runExpose(ctx context.Context, service *app.App, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("uso: devlan expose NAME [--duration 30m|1h|2h] [--mode path|port|host]")
+		return fmt.Errorf("uso: devlan expose NAME [--duration 30m|1h|2h]")
 	}
 	name := args[0]
 	var duration time.Duration
-	var mode *domain.RouteMode
 	for i := 1; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--duration" && i+1 < len(args) {
@@ -1797,18 +1772,11 @@ func runExpose(ctx context.Context, service *app.App, args []string) error {
 				return fmt.Errorf("duração inválida: %s", args[i])
 			}
 			duration = d
-		} else if arg == "--mode" && i+1 < len(args) {
-			i++
-			m, err := domain.ParseRouteMode(args[i])
-			if err != nil {
-				return err
-			}
-			mode = &m
 		} else {
 			return fmt.Errorf("opção desconhecida %s", arg)
 		}
 	}
-	res, projName, err := service.ExposeProject(ctx, name, duration, mode)
+	res, projName, err := service.ExposeProject(ctx, name, duration)
 	printWarnings(res.Warnings)
 	if err != nil {
 		return err
@@ -1992,32 +1960,6 @@ func runCA(ctx context.Context, service *app.App, args []string) error {
 	default:
 		return fmt.Errorf("subcomando de ca desconhecido: %s (use info, export, rotate)", args[0])
 	}
-}
-
-func runDNS(ctx context.Context, service *app.App, args []string) error {
-	if len(args) == 0 || args[0] == "entries" || args[0] == "show" {
-		entries, err := service.HostsEntries(ctx)
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(entries) == "" {
-			fmt.Println("Nenhum projeto registrado no modo 'host'.")
-			return nil
-		}
-		fmt.Println(entries)
-		fmt.Println("# Adicione as linhas acima ao arquivo hosts das máquinas clientes ou execute `devlan dns sync` como Administrador.")
-		return nil
-	}
-	if args[0] == "sync" {
-		res, err := service.SyncHosts(ctx)
-		printWarnings(res.Warnings)
-		if err != nil {
-			return err
-		}
-		fmt.Println("Arquivo hosts do sistema sincronizado com sucesso.")
-		return nil
-	}
-	return fmt.Errorf("subcomando dns desconhecido: %s (use entries, show, sync)", args[0])
 }
 
 func runSecurity(ctx context.Context, service *app.App, args []string) error {
