@@ -41,7 +41,7 @@ declare global {
     runtime?: {
       ClipboardSetText?: (text: string) => Promise<boolean>;
       BrowserOpenURL?: (url: string) => void;
-      EventsOn?: (event: string, callback: (...args: any[]) => void) => void;
+      EventsOn?: (event: string, callback: (...args: unknown[]) => void) => void;
     };
   }
 }
