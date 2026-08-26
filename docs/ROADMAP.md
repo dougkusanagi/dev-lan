@@ -71,20 +71,20 @@ completa anterior ou nova.
 
 ## Marco 3 — Portas estáveis e firewall (P0)
 
-- [ ] `M3-01` Adicionar `route_port_count` e alocações persistidas por caminho.
-- [ ] `M3-02` Implementar alocador puro com reservas de borda, WSL, runtime,
+- [x] `M3-01` Adicionar `route_port_count` e alocações persistidas por caminho.
+- [x] `M3-02` Implementar alocador puro com reservas de borda, WSL, runtime,
   override e listeners externos.
-- [ ] `M3-03` Cobrir estabilidade, concorrência, conflito, exaustão, parks e
+- [x] `M3-03` Cobrir estabilidade, concorrência, conflito, exaustão, parks e
   órfãos com unit/property/fuzz tests.
-- [ ] `M3-04` Implementar `route allocations`, prune dry-run e override
+- [x] `M3-04` Implementar `route allocations`, prune dry-run e override
   `--port auto|PORT`.
-- [ ] `M3-05` Introduzir `FirewallSpec` e adapter injetável que consulta/reconcilia
+- [x] `M3-05` Introduzir `FirewallSpec` e adapter injetável que consulta/reconcilia
   toda a regra.
-- [ ] `M3-06` Identificar a regra gerenciada e preservar regras de terceiros.
-- [ ] `M3-07` Abrir pool só em `Private`/`LocalSubnet`, com listeners somente em
+- [x] `M3-06` Identificar a regra gerenciada e preservar regras de terceiros.
+- [x] `M3-07` Abrir pool só em `Private`/`LocalSubnet`, com listeners somente em
   portas atribuídas.
-- [ ] `M3-08` Integrar firewall ao coordenador, install, TLS, repair, doctor/UI.
-- [ ] `M3-09` Reservar `ui_port` fora do pool de projetos/runtimes e validar
+- [x] `M3-08` Integrar firewall ao coordenador, install, TLS, repair, doctor/UI.
+- [x] `M3-09` Reservar `ui_port` fora do pool de projetos/runtimes e validar
   conflito antes de iniciar o servidor administrativo.
 
 **Gate:** portas são estáveis e um cliente real da LAN alcança o projeto após

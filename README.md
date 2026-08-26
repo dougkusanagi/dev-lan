@@ -63,6 +63,8 @@ LAN    http://192.168.1.50:8080/
 
 O comando `devlan route financeiro --port PORT` configura um override da porta
 LAN; `devlan route financeiro --port auto` restaura a alocação automática.
+As alocações automáticas são persistidas pelo caminho do projeto e podem ser
+inspecionadas ou limpas explicitamente com `devlan route allocations`.
 
 ## Documentos
 
@@ -95,8 +97,11 @@ O núcleo está implementado como uma CLI Go em `cmd/devlan`. Ele cobre:
   `devlan secure NAME|PATH`, e retorno a HTTP com `devlan unsecure NAME|PATH`;
 - aplicação por arquivo temporário, validação quando o Caddy está disponível e rollback da última configuração funcional;
 - `install`, `uninstall`, `status`, `reload`, `doctor`, `logs`, `open` e os comandos de registro;
+- alocação estável por caminho (`route_port_count`), com `route allocations`
+  e prune dry-run;
 - `php install|list|remove|use|extensions|pool|preset|info` e `composer`;
-- regra de firewall DevLAN limitada ao perfil privado e à sub-rede local.
+- regra de firewall DevLAN reconciliada por especificação, limitada ao perfil
+  privado e à sub-rede local.
 - serviço Windows opcional, inicialização no login e API local autenticada por token;
 - exportação/importação sem credenciais, diagnóstico ZIP sanitizado e telemetria opt-in;
 - preparação de updates `stable`/`preview` com validação SHA-256.

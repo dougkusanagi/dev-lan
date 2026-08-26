@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"github.com/dougkusanagi/dev-lan/internal/domain"
 	phpconfig "github.com/dougkusanagi/dev-lan/internal/php"
 	"github.com/dougkusanagi/dev-lan/internal/platform"
+	routealloc "github.com/dougkusanagi/dev-lan/internal/route"
 	"github.com/dougkusanagi/dev-lan/internal/telemetry"
 )
 
@@ -35,9 +37,15 @@ type App struct {
 	Telemetry    telemetry.Store
 	WindowsCaddy platform.CaddyClient
 	WSLCaddy     platform.CaddyClient
-	Firewall     platform.FirewallManager
-	Now          func() time.Time
-	mutationMu   sync.Mutex
+	// Firewall accepts both the range-aware FirewallReconciler and the legacy
+	// FirewallManager so tests and older integrations can inject either adapter.
+	Firewall any
+	// ExternalListeners is injectable because a port scan is a host concern,
+	// while the allocation policy itself remains pure. Production uses the
+	// platform adapter; tests can provide a deterministic snapshot.
+	ExternalListeners func(context.Context) ([]int, error)
+	Now               func() time.Time
+	mutationMu        sync.Mutex
 }
 
 type mockRunner struct{}
@@ -58,17 +66,18 @@ func New(dataDir string) *App {
 		wslCaddy = platform.CaddyClient{Runner: mockRunner{}, WSL: true}
 	}
 	return &App{
-		Store:        config.NewStore(dataDir),
-		Detector:     detect.Detector{Inspector: detect.SmartInspector{WSL: wsl}},
-		WSL:          wsl,
-		PHP:          platform.NewWSLPHPManager(wsl),
-		Dev:          dev,
-		DevProxy:     platform.NewDevProxy(dev),
-		Telemetry:    telemetry.NewStore(dataDir),
-		WindowsCaddy: winCaddy,
-		WSLCaddy:     wslCaddy,
-		Firewall:     platform.SystemFirewall{},
-		Now:          time.Now,
+		Store:             config.NewStore(dataDir),
+		Detector:          detect.Detector{Inspector: detect.SmartInspector{WSL: wsl}},
+		WSL:               wsl,
+		PHP:               platform.NewWSLPHPManager(wsl),
+		Dev:               dev,
+		DevProxy:          platform.NewDevProxy(dev),
+		Telemetry:         telemetry.NewStore(dataDir),
+		WindowsCaddy:      winCaddy,
+		WSLCaddy:          wslCaddy,
+		Firewall:          platform.SystemFirewall{},
+		ExternalListeners: platform.ListeningTCPPorts,
+		Now:               time.Now,
 	}
 }
 
@@ -89,7 +98,150 @@ func (a *App) ensureFirewall(ctx context.Context, ports ...int) error {
 	if a.Firewall == nil {
 		return platform.SystemFirewall{}.Ensure(ctx, ports...)
 	}
-	return a.Firewall.Ensure(ctx, ports...)
+	manager, ok := a.Firewall.(platform.FirewallManager)
+	if !ok {
+		return fmt.Errorf("adapter de firewall legado não configurado")
+	}
+	return manager.Ensure(ctx, ports...)
+}
+
+func (a *App) ensureFirewallSpec(ctx context.Context, cfg domain.Config) error {
+	spec := platform.FirewallSpecForConfig(cfg)
+	if reconciler, ok := a.Firewall.(platform.FirewallReconciler); ok {
+		return reconciler.Reconcile(ctx, spec)
+	}
+	// Keep compatibility with a legacy injected manager while all production
+	// paths use the complete range-aware specification.
+	ports := append([]int(nil), spec.Ports...)
+	for _, portRange := range spec.Ranges {
+		for port := portRange.From; port <= portRange.To; port++ {
+			ports = append(ports, port)
+		}
+	}
+	return a.ensureFirewall(ctx, ports...)
+}
+
+func (a *App) inspectFirewall(ctx context.Context) (platform.FirewallRuleState, error) {
+	if reconciler, ok := a.Firewall.(platform.FirewallReconciler); ok {
+		return reconciler.Inspect(ctx)
+	}
+	if a.Firewall == nil {
+		return (platform.SystemFirewall{}).Inspect(ctx)
+	}
+	return platform.FirewallRuleState{}, fmt.Errorf("adapter de firewall não oferece inspeção exata")
+}
+
+// FirewallHealthy checks the exact desired policy, including every port
+// property, rather than treating the mere presence of a similarly named rule
+// as success.
+func (a *App) FirewallHealthy(ctx context.Context, cfg domain.Config) (bool, error) {
+	rule, err := a.inspectFirewall(ctx)
+	if err != nil {
+		return false, err
+	}
+	return rule.Matches(platform.FirewallSpecForConfig(cfg)), nil
+}
+
+func (a *App) ReconcileFirewall(ctx context.Context) error {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return err
+	}
+	return a.ensureFirewallSpec(ctx, cfg)
+}
+
+func firewallSpecDescription(spec platform.FirewallSpec) string {
+	parts := make([]string, 0, len(spec.Ports)+len(spec.Ranges))
+	for _, port := range spec.Ports {
+		parts = append(parts, strconv.Itoa(port))
+	}
+	for _, portRange := range spec.Ranges {
+		parts = append(parts, fmt.Sprintf("%d-%d", portRange.From, portRange.To))
+	}
+	return strings.Join(parts, ",")
+}
+
+// routeAllocationConfig resolves parks and computes a complete, atomic route
+// allocation plan. It is called while the Store lock is held by every
+// operation that can change or apply routing.
+func (a *App) routeAllocationConfig(ctx context.Context, cfg domain.Config) (domain.Config, error) {
+	effective, err := a.EffectiveConfig(ctx, cfg)
+	if err != nil {
+		return domain.Config{}, err
+	}
+	reserved := []int{cfg.WindowsPort, cfg.HTTPSPort, cfg.WSLPort, cfg.UIPort}
+	reservedSet := make(map[int]struct{}, len(reserved))
+	for _, port := range reserved {
+		reservedSet[port] = struct{}{}
+	}
+	for _, project := range effective.Projects {
+		// Dev gateways and their backend are runtime listeners as well. Reserving
+		// both avoids a route being assigned over a JS runtime port.
+		devPort := effective.DevPort(project)
+		reserved = append(reserved, devPort)
+		reservedSet[devPort] = struct{}{}
+		backend := devPort + 10000
+		if devPort > 55000 {
+			backend = devPort - 1000
+		}
+		if backend > 0 && backend <= 65535 {
+			reserved = append(reserved, backend)
+			reservedSet[backend] = struct{}{}
+		}
+	}
+
+	listeners := []int(nil)
+	if a.ExternalListeners != nil {
+		listeners, err = a.ExternalListeners(ctx)
+		if err != nil {
+			return domain.Config{}, fmt.Errorf("verificar listeners externos: %w", err)
+		}
+		filtered := make([]int, 0, len(listeners))
+		for _, port := range listeners {
+			// Caddy and runtime listeners are expected to be present during a
+			// reload. They are already represented in the reservations above.
+			if _, managed := reservedSet[port]; managed {
+				continue
+			}
+			if activeRoutePortOwner(effective, port) {
+				continue
+			}
+			filtered = append(filtered, port)
+		}
+		listeners = filtered
+	}
+	projects := make([]routealloc.Project, 0, len(effective.Projects))
+	for _, project := range effective.Projects {
+		projects = append(projects, routealloc.Project{Name: project.Name, Path: project.Path, Override: project.RoutePort})
+	}
+	plan, err := routealloc.Allocate(routealloc.Input{
+		BasePort:          cfg.RouteBasePort,
+		PortCount:         cfg.RoutePortCount,
+		ReservedPorts:     reserved,
+		ExternalListeners: listeners,
+		Allocations:       cfg.RoutePortAllocations,
+		Projects:          projects,
+	})
+	if err != nil {
+		return domain.Config{}, err
+	}
+	cfg.RoutePortAllocations = plan.Allocations
+	if err := cfg.Normalize(); err != nil {
+		return domain.Config{}, err
+	}
+	return cfg, nil
+}
+
+func activeRoutePortOwner(cfg domain.Config, port int) bool {
+	for _, project := range cfg.Projects {
+		if project.RoutePort != nil && *project.RoutePort == port {
+			return true
+		}
+		if project.RoutePort == nil && cfg.RoutePortAllocations[project.Path] == port {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *App) now() time.Time {
@@ -103,7 +255,13 @@ func (a *App) removeFirewall(ctx context.Context) error {
 	if a.Firewall == nil {
 		return platform.SystemFirewall{}.Remove(ctx)
 	}
-	return a.Firewall.Remove(ctx)
+	if reconciler, ok := a.Firewall.(platform.FirewallReconciler); ok {
+		return reconciler.Remove(ctx)
+	}
+	if manager, ok := a.Firewall.(platform.FirewallManager); ok {
+		return manager.Remove(ctx)
+	}
+	return fmt.Errorf("adapter de firewall não configurado")
 }
 
 func (a *App) CloseDevProxies() error {
@@ -142,11 +300,7 @@ func (a *App) InstallWithPort(ctx context.Context, configureFirewall bool, windo
 		}
 	}
 	if configureFirewall {
-		ports := []int{cfg.WindowsPort}
-		if cfg.TLSEnabled {
-			ports = append(ports, cfg.HTTPSPort)
-		}
-		if err := a.ensureFirewall(ctx, ports...); err != nil && runtime.GOOS == "windows" {
+		if err := a.ensureFirewallSpec(ctx, cfg); err != nil && runtime.GOOS == "windows" {
 			result.Warnings = append(result.Warnings, "não foi possível criar a regra de firewall DevLAN; execute install como administrador")
 		}
 	}
@@ -795,11 +949,7 @@ func (a *App) SetTLS(ctx context.Context, enabled bool) (ApplyResult, error) {
 	if err != nil {
 		return result, err
 	}
-	ports := []int{cfg.WindowsPort}
-	if enabled {
-		ports = append(ports, cfg.HTTPSPort)
-	}
-	if err := a.ensureFirewall(ctx, ports...); err != nil && runtime.GOOS == "windows" {
+	if err := a.ensureFirewallSpec(ctx, cfg); err != nil && runtime.GOOS == "windows" {
 		result.Warnings = append(result.Warnings, "não foi possível atualizar o firewall; execute o comando em PowerShell como Administrador")
 	}
 	if enabled {
@@ -860,7 +1010,7 @@ func (a *App) SetProjectTLS(ctx context.Context, selector string, enabled bool) 
 		return result, cfg.Projects[projectIndex].Name, err
 	}
 	if enabled {
-		if err := a.ensureFirewall(ctx, cfg.WindowsPort, cfg.HTTPSPort); err != nil && runtime.GOOS == "windows" {
+		if err := a.ensureFirewallSpec(ctx, cfg); err != nil && runtime.GOOS == "windows" {
 			result.Warnings = append(result.Warnings, "não foi possível atualizar o firewall; execute o comando em PowerShell como Administrador")
 		}
 		if err := a.WindowsCaddy.Trust(ctx); err != nil {
@@ -895,13 +1045,29 @@ func (a *App) Reload(ctx context.Context) (ApplyResult, error) {
 		if err != nil {
 			return err
 		}
-		result, err = a.apply(ctx, cfg, true, false, OperationalStrict)
+		prepared, prepareErr := a.routeAllocationConfig(ctx, cfg)
+		if prepareErr != nil {
+			return prepareErr
+		}
+		allocationsChanged := !routealloc.EqualAllocations(cfg.RoutePortAllocations, prepared.RoutePortAllocations)
+		result, err = a.apply(ctx, prepared, true, false, OperationalStrict)
 		if err != nil {
 			return err
 		}
-		result, err = a.reloadApplied(ctx, cfg, result, OperationalStrict)
+		if allocationsChanged {
+			if err := a.Store.SaveLocked(prepared); err != nil {
+				_ = a.Store.RollbackGenerated()
+				_ = a.Store.RollbackPHPFiles()
+				return err
+			}
+			result.Revision = cfg.Revision + 1
+		}
+		result, err = a.reloadApplied(ctx, prepared, result, OperationalStrict)
 		if err != nil {
 			result.Status = "rolled_back"
+			if allocationsChanged {
+				_ = a.Store.RollbackConfigLocked()
+			}
 			_ = a.Store.RollbackGenerated()
 			_ = a.Store.RollbackPHPFiles()
 			if previous, loadErr := a.Store.LoadLocked(); loadErr == nil {
@@ -934,6 +1100,10 @@ func (a *App) saveAndApplyMode(ctx context.Context, cfg domain.Config, reload bo
 		}
 		if cfg.Revision != 0 && cfg.Revision != current.Revision {
 			return fmt.Errorf("%w: esperado %d, atual %d", config.ErrRevisionConflict, cfg.Revision, current.Revision)
+		}
+		cfg, err = a.routeAllocationConfig(ctx, cfg)
+		if err != nil {
+			return err
 		}
 		// Plan, validate and stage happen before the persistent commit. The
 		// generated files are backed up by Store and are therefore recoverable
@@ -990,6 +1160,9 @@ func statusFor(result ApplyResult) string {
 // only on the already staged/committed artifacts and performs a health check
 // after each Caddy operation.
 func (a *App) reloadApplied(ctx context.Context, cfg domain.Config, result ApplyResult, mode OperationMode) (ApplyResult, error) {
+	if err := a.ensureFirewallSpec(ctx, cfg); err != nil && runtime.GOOS == "windows" {
+		result.Warnings = append(result.Warnings, "não foi possível reconciliar o firewall DevLAN: "+err.Error())
+	}
 	_, phpPools, err := phpconfig.PlansByFile(cfg)
 	if err != nil {
 		return result, err
@@ -1404,12 +1577,17 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 		checks = append(checks, Check{"Allowlist Global", "OK", "aberto para sub-rede privada"})
 	}
 
-	if firewall, err := platform.FirewallRule(ctx, "DevLAN"); err != nil {
-		checks = append(checks, Check{"Firewall", "WARN", "regra DevLAN não confirmada"})
-	} else if firewall {
-		checks = append(checks, Check{"Firewall", "OK", "regra DevLAN encontrada"})
+	firewallSpec := platform.FirewallSpecForConfig(cfg)
+	if rule, inspectErr := a.inspectFirewall(ctx); inspectErr != nil {
+		if errors.Is(inspectErr, platform.ErrFirewallNotFound) {
+			checks = append(checks, Check{"Firewall", "WARN", "regra DevLAN ausente; execute `devlan install` ou `devlan reload` como Administrador"})
+		} else {
+			checks = append(checks, Check{"Firewall", "WARN", "regra DevLAN não confirmada: " + inspectErr.Error()})
+		}
+	} else if !rule.Matches(firewallSpec) {
+		checks = append(checks, Check{"Firewall", "FAIL", "regra DevLAN divergente (direção, ação, protocolo, portas, perfil ou origem); execute `devlan reload` como Administrador"})
 	} else {
-		checks = append(checks, Check{"Firewall", "WARN", "regra DevLAN ausente"})
+		checks = append(checks, Check{"Firewall", "OK", "regra DevLAN reconciliada: TCP " + firewallSpecDescription(firewallSpec)})
 	}
 
 	effective, err := a.EffectiveConfig(ctx, cfg)
@@ -1897,6 +2075,84 @@ func (a *App) SetRoutePort(ctx context.Context, selector string, port *int) (App
 		_ = a.Store.AppendSecurityAudit("ROUTE_PORT_CHANGE", fmt.Sprintf("project=%s port=%v", name, port))
 	}
 	return result, err
+}
+
+type RouteAllocation struct {
+	Path   string `json:"path"`
+	Port   int    `json:"port"`
+	Orphan bool   `json:"orphan"`
+}
+
+// RouteAllocations returns the persisted automatic assignments without
+// triggering discovery or changing state. An orphan is merely reported; it
+// remains reserved until the explicit prune command is used.
+func (a *App) RouteAllocations(ctx context.Context) ([]RouteAllocation, error) {
+	_ = ctx
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return nil, err
+	}
+	linked := make([]string, 0, len(cfg.Projects))
+	for _, project := range cfg.Projects {
+		linked = append(linked, project.Path)
+	}
+	parks := make([]string, 0, len(cfg.Parks))
+	for _, park := range cfg.Parks {
+		parks = append(parks, park.Path)
+	}
+	orphanPaths, err := routealloc.OrphanPaths(cfg.RoutePortAllocations, linked, parks)
+	if err != nil {
+		return nil, err
+	}
+	orphans := make(map[string]struct{}, len(orphanPaths))
+	for _, path := range orphanPaths {
+		orphans[path] = struct{}{}
+	}
+	paths := make([]string, 0, len(cfg.RoutePortAllocations))
+	for path := range cfg.RoutePortAllocations {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	result := make([]RouteAllocation, 0, len(paths))
+	for _, path := range paths {
+		_, orphan := orphans[path]
+		result = append(result, RouteAllocation{Path: path, Port: cfg.RoutePortAllocations[path], Orphan: orphan})
+	}
+	return result, nil
+}
+
+// PruneRouteAllocations removes only allocations that are no longer linked
+// and no longer belong to an active park. dryRun never writes state or
+// generated files and is safe to use from doctor/UI previews.
+func (a *App) PruneRouteAllocations(ctx context.Context, dryRun bool) ([]string, ApplyResult, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return nil, ApplyResult{}, err
+	}
+	linked := make([]string, 0, len(cfg.Projects))
+	for _, project := range cfg.Projects {
+		linked = append(linked, project.Path)
+	}
+	parks := make([]string, 0, len(cfg.Parks))
+	for _, park := range cfg.Parks {
+		parks = append(parks, park.Path)
+	}
+	orphanPaths, err := routealloc.OrphanPaths(cfg.RoutePortAllocations, linked, parks)
+	if err != nil {
+		return nil, ApplyResult{}, err
+	}
+	if dryRun || len(orphanPaths) == 0 {
+		return orphanPaths, ApplyResult{Status: "preview"}, nil
+	}
+	for _, path := range orphanPaths {
+		delete(cfg.RoutePortAllocations, path)
+	}
+	result, err := a.saveAndApply(ctx, cfg, true)
+	if err == nil {
+		_ = a.appendLog("alocações de rota órfãs removidas: %d", len(orphanPaths))
+		_ = a.Store.AppendSecurityAudit("ROUTE_ALLOCATIONS_PRUNE", fmt.Sprintf("count=%d paths=%v", len(orphanPaths), orphanPaths))
+	}
+	return orphanPaths, result, err
 }
 
 func (a *App) SetAllowlist(ctx context.Context, selector string, cidrs []string) (ApplyResult, error) {

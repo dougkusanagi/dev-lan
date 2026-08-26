@@ -88,25 +88,31 @@ type Config struct {
 	Version int `json:"version"`
 	// Revision is the monotonic persisted revision, distinct from Version
 	// (the schema version). It is used for optimistic concurrency control.
-	Revision           uint64             `json:"revision,omitempty"`
-	DefaultMode        Mode               `json:"default_mode"`
-	RouteBasePort      int                `json:"route_base_port,omitempty"`
-	LANAddress         string             `json:"lan_address"`
-	WindowsPort        int                `json:"windows_port"`
-	HTTPSPort          int                `json:"https_port"`
-	TLSEnabled         bool               `json:"tls_enabled"`
-	WSLPort            int                `json:"wsl_port"`
-	PHPFPMOsocket      string             `json:"php_fpm_socket"`
-	PHPDefaultVersion  string             `json:"php_default_version"`
-	PHPVersions        []PHPVersionConfig `json:"php_versions"`
-	PHPFPMPool         PHPFPMPoolConfig   `json:"php_fpm_pool"`
-	Composer           ComposerConfig     `json:"composer"`
-	DevBasePort        int                `json:"dev_base_port,omitempty"`
-	DefaultIdleTimeout string             `json:"default_idle_timeout,omitempty"`
-	Allowlist          []string           `json:"allowlist,omitempty"`
-	AuthUsers          []AuthUser         `json:"auth_users,omitempty"`
-	Projects           []Project          `json:"projects"`
-	Parks              []Park             `json:"parks"`
+	Revision       uint64 `json:"revision,omitempty"`
+	DefaultMode    Mode   `json:"default_mode"`
+	RouteBasePort  int    `json:"route_base_port,omitempty"`
+	RoutePortCount int    `json:"route_port_count,omitempty"`
+	// RoutePortAllocations is state, not a user-facing preference. It is kept
+	// in the same in-memory aggregate so the application can commit it together
+	// with config.toml and state.json.
+	RoutePortAllocations map[string]int     `json:"route_port_allocations,omitempty"`
+	LANAddress           string             `json:"lan_address"`
+	WindowsPort          int                `json:"windows_port"`
+	HTTPSPort            int                `json:"https_port"`
+	UIPort               int                `json:"ui_port,omitempty"`
+	TLSEnabled           bool               `json:"tls_enabled"`
+	WSLPort              int                `json:"wsl_port"`
+	PHPFPMOsocket        string             `json:"php_fpm_socket"`
+	PHPDefaultVersion    string             `json:"php_default_version"`
+	PHPVersions          []PHPVersionConfig `json:"php_versions"`
+	PHPFPMPool           PHPFPMPoolConfig   `json:"php_fpm_pool"`
+	Composer             ComposerConfig     `json:"composer"`
+	DevBasePort          int                `json:"dev_base_port,omitempty"`
+	DefaultIdleTimeout   string             `json:"default_idle_timeout,omitempty"`
+	Allowlist            []string           `json:"allowlist,omitempty"`
+	AuthUsers            []AuthUser         `json:"auth_users,omitempty"`
+	Projects             []Project          `json:"projects"`
+	Parks                []Park             `json:"parks"`
 }
 
 type ResolvedProject struct {
@@ -357,9 +363,11 @@ func NewConfig() Config {
 		Version:           1,
 		DefaultMode:       ModePHP,
 		RouteBasePort:     8080,
+		RoutePortCount:    100,
 		LANAddress:        "auto",
 		WindowsPort:       80,
 		HTTPSPort:         443,
+		UIPort:            3210,
 		WSLPort:           8181,
 		PHPFPMOsocket:     "/run/php/php-fpm.sock",
 		PHPDefaultVersion: "8.5",
@@ -385,6 +393,9 @@ func (c *Config) Normalize() error {
 	if c.RouteBasePort == 0 {
 		c.RouteBasePort = 8080
 	}
+	if c.RoutePortCount == 0 {
+		c.RoutePortCount = 100
+	}
 	if c.LANAddress == "" {
 		c.LANAddress = "auto"
 	}
@@ -396,6 +407,9 @@ func (c *Config) Normalize() error {
 	}
 	if c.HTTPSPort == 0 {
 		c.HTTPSPort = 443
+	}
+	if c.UIPort == 0 {
+		c.UIPort = 3210
 	}
 	if c.PHPFPMOsocket == "" {
 		c.PHPFPMOsocket = "/run/php/php-fpm.sock"
@@ -415,8 +429,11 @@ func (c *Config) Normalize() error {
 	if !c.DefaultMode.Valid() {
 		return fmt.Errorf("modo global inválido %q", c.DefaultMode)
 	}
-	if c.RouteBasePort < 1024 || c.RouteBasePort > 65000 {
+	if c.RouteBasePort < 1024 || c.RouteBasePort > 65535 {
 		return fmt.Errorf("porta base de rota inválida: %d", c.RouteBasePort)
+	}
+	if c.RoutePortCount < 1 || c.RoutePortCount > 65535-c.RouteBasePort+1 {
+		return fmt.Errorf("quantidade de portas de rota inválida: %d", c.RoutePortCount)
 	}
 	if c.WindowsPort < 1 || c.WindowsPort > 65535 {
 		return fmt.Errorf("porta Windows inválida: %d", c.WindowsPort)
@@ -426,6 +443,17 @@ func (c *Config) Normalize() error {
 	}
 	if c.HTTPSPort < 1 || c.HTTPSPort > 65535 {
 		return fmt.Errorf("porta HTTPS inválida: %d", c.HTTPSPort)
+	}
+	if c.UIPort < 1 || c.UIPort > 65535 {
+		return fmt.Errorf("porta administrativa inválida: %d", c.UIPort)
+	}
+	for name, port := range map[string]int{"HTTP": c.WindowsPort, "HTTPS": c.HTTPSPort, "WSL": c.WSLPort} {
+		if c.UIPort == port {
+			return fmt.Errorf("porta administrativa %d conflita com %s", c.UIPort, name)
+		}
+	}
+	if c.UIPort >= c.RouteBasePort && c.UIPort < c.RouteBasePort+c.RoutePortCount {
+		return fmt.Errorf("porta administrativa %d está dentro do pool de rotas %d-%d", c.UIPort, c.RouteBasePort, c.RouteBasePort+c.RoutePortCount-1)
 	}
 	if c.TLSEnabled && c.WindowsPort == c.HTTPSPort {
 		return fmt.Errorf("portas HTTP e HTTPS não podem ser iguais: %d", c.WindowsPort)
@@ -444,6 +472,31 @@ func (c *Config) Normalize() error {
 	}
 	if _, err := normalizePHPBinary(c.Composer.Binary, "composer_binary"); err != nil {
 		return err
+	}
+
+	if c.RoutePortAllocations == nil {
+		c.RoutePortAllocations = map[string]int{}
+	} else {
+		normalizedAllocations := make(map[string]int, len(c.RoutePortAllocations))
+		seenAllocationPorts := make(map[int]string, len(c.RoutePortAllocations))
+		for rawPath, port := range c.RoutePortAllocations {
+			path, err := NormalizePath(rawPath)
+			if err != nil {
+				return fmt.Errorf("alocação de rota %q: %w", rawPath, err)
+			}
+			if port < 1024 || port > 65535 {
+				return fmt.Errorf("alocação de rota %q usa porta inválida: %d", path, port)
+			}
+			if _, exists := normalizedAllocations[path]; exists {
+				return fmt.Errorf("alocação de rota duplicada para %q", path)
+			}
+			if previous, exists := seenAllocationPorts[port]; exists && previous != path {
+				return fmt.Errorf("porta de rota %d alocada para %q e %q", port, previous, path)
+			}
+			normalizedAllocations[path] = port
+			seenAllocationPorts[port] = path
+		}
+		c.RoutePortAllocations = normalizedAllocations
 	}
 
 	for i, cidr := range c.Allowlist {
@@ -596,6 +649,52 @@ func (c *Config) Normalize() error {
 		}
 		if project.ComposerEnvironment != nil && !project.ComposerEnvironment.Valid() {
 			return fmt.Errorf("projeto %q: ambiente do Composer inválido %q", project.Name, *project.ComposerEnvironment)
+		}
+	}
+	for path, port := range c.RoutePortAllocations {
+		for name, reserved := range map[string]int{
+			"HTTP":  c.WindowsPort,
+			"HTTPS": c.HTTPSPort,
+			"WSL":   c.WSLPort,
+			"UI":    c.UIPort,
+		} {
+			if port == reserved {
+				return fmt.Errorf("alocação de rota %q conflita com a porta %s %d", path, name, port)
+			}
+		}
+		if owner, exists := seenRoutePorts[port]; exists {
+			allowed := false
+			for _, project := range c.Projects {
+				if project.Path == path && project.Name == owner && project.RoutePort != nil && *project.RoutePort == port {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				return fmt.Errorf("alocação de rota %q conflita com o override do projeto %q na porta %d", path, owner, port)
+			}
+		}
+	}
+	if c.UIPort == c.DevBasePort {
+		return fmt.Errorf("porta administrativa %d conflita com a base do runtime dev", c.UIPort)
+	}
+	for _, project := range c.Projects {
+		if project.RoutePort != nil && *project.RoutePort == c.UIPort {
+			return fmt.Errorf("porta administrativa %d conflita com a rota do projeto %q", c.UIPort, project.Name)
+		}
+		if project.DevPort != nil && *project.DevPort == c.UIPort {
+			return fmt.Errorf("porta administrativa %d conflita com o runtime do projeto %q", c.UIPort, project.Name)
+		}
+		devPort := c.DevPort(project)
+		if devPort == c.UIPort {
+			return fmt.Errorf("porta administrativa %d conflita com o runtime do projeto %q", c.UIPort, project.Name)
+		}
+		backend := devPort + 10000
+		if devPort > 55000 {
+			backend = devPort - 1000
+		}
+		if backend == c.UIPort {
+			return fmt.Errorf("porta administrativa %d conflita com o backend do runtime do projeto %q", c.UIPort, project.Name)
 		}
 	}
 
@@ -1250,6 +1349,9 @@ func (c Config) EffectiveRoutePort(project Project) int {
 	if project.RoutePort != nil && *project.RoutePort > 0 {
 		return *project.RoutePort
 	}
+	if port, found := c.RoutePortAllocations[project.Path]; found && port > 0 {
+		return port
+	}
 	base := c.RouteBasePort
 	if base == 0 {
 		base = 8080
@@ -1258,6 +1360,7 @@ func (c Config) EffectiveRoutePort(project Project) int {
 		c.WindowsPort: true,
 		c.HTTPSPort:   true,
 		c.WSLPort:     true,
+		c.UIPort:      true,
 	}
 	for _, p := range c.Projects {
 		if p.RoutePort != nil && *p.RoutePort > 0 {
@@ -1272,6 +1375,9 @@ func (c Config) EffectiveRoutePort(project Project) int {
 			candidate := base + index
 			for allocated[candidate] {
 				candidate++
+			}
+			if c.RoutePortCount > 0 && candidate >= base+c.RoutePortCount {
+				return 0
 			}
 			return candidate
 		}

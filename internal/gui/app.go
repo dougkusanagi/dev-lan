@@ -47,6 +47,9 @@ type SystemStatusView struct {
 	LANIP               string   `json:"lanIp"`
 	WindowsPort         int      `json:"windowsPort"`
 	HTTPSPort           int      `json:"httpsPort"`
+	RouteBasePort       int      `json:"routeBasePort"`
+	RoutePortCount      int      `json:"routePortCount"`
+	UIPort              int      `json:"uiPort"`
 	TLSEnabled          bool     `json:"tlsEnabled"`
 	DefaultMode         string   `json:"defaultMode"`
 	PHPDefaultVersion   string   `json:"phpDefaultVersion"`
@@ -324,7 +327,7 @@ func (a *App) GetStatus() (SystemStatusView, error) {
 	wslCaddyRunning := platform.IsAdminResponsive(platform.WSLCaddyAdminAddress)
 	hasBash, _ := a.service.WSL.HasCommand(ctx, "bash")
 	wslAvail := hasBash || a.service.WSLCaddy.Available(ctx) == nil
-	firewallOk, _ := platform.FirewallRule(ctx, "DevLAN")
+	firewallOk, _ := a.service.FirewallHealthy(ctx, cfg)
 
 	phpVers, _ := a.service.PHPVersions(ctx)
 	vers := make([]string, 0, len(phpVers))
@@ -336,6 +339,9 @@ func (a *App) GetStatus() (SystemStatusView, error) {
 		LANIP:               host,
 		WindowsPort:         cfg.WindowsPort,
 		HTTPSPort:           cfg.HTTPSPort,
+		RouteBasePort:       cfg.RouteBasePort,
+		RoutePortCount:      cfg.RoutePortCount,
+		UIPort:              cfg.UIPort,
 		TLSEnabled:          cfg.TLSEnabled,
 		DefaultMode:         string(cfg.DefaultMode),
 		PHPDefaultVersion:   cfg.PHPDefaultVersion,
@@ -635,11 +641,7 @@ func (a *App) ApplyDoctorFix(action, target string) error {
 		_, err := a.service.Reload(ctx)
 		return err
 	case "firewall":
-		cfg, err := a.service.Store.Load()
-		if err != nil {
-			return err
-		}
-		return platform.EnsureFirewall(ctx, cfg.WindowsPort, cfg.HTTPSPort)
+		return a.service.ReconcileFirewall(ctx)
 	case "restart-dev":
 		if target != "" {
 			return a.service.RestartDev(ctx, target)

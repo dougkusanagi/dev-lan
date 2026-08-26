@@ -123,14 +123,15 @@ func (s Store) saveTransaction(cfg domain.Config) error {
 	}
 	cfg.Revision = currentRevision + 1
 	state := stateFile{
-		Version:       cfg.Version,
-		SchemaVersion: StateSchemaVersion,
-		Revision:      cfg.Revision,
-		Allowlist:     cfg.Allowlist,
-		AuthUsers:     cfg.AuthUsers,
-		Projects:      cfg.Projects,
-		Parks:         cfg.Parks,
-		PHPVersions:   cfg.PHPVersions,
+		Version:              cfg.Version,
+		SchemaVersion:        StateSchemaVersion,
+		Revision:             cfg.Revision,
+		Allowlist:            cfg.Allowlist,
+		AuthUsers:            cfg.AuthUsers,
+		Projects:             cfg.Projects,
+		Parks:                cfg.Parks,
+		PHPVersions:          cfg.PHPVersions,
+		RoutePortAllocations: cfg.RoutePortAllocations,
 	}
 	stateData, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {

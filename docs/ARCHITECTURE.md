@@ -38,6 +38,12 @@ interna do Caddy e encaminha ao mesmo upstream WSL.
 
 Sua configuração deve mudar pouco. A lógica de PHP e de cada projeto permanece no WSL.
 
+Cada projeto recebe uma porta LAN do pool persistido por caminho; a ordem de
+descoberta não altera uma atribuição existente. O firewall Windows cobre o
+pool somente no perfil `Private` e na origem `LocalSubnet`, enquanto o Caddy
+escuta apenas as portas efetivamente atribuídas. A porta administrativa `ui_port`
+fica fora do pool e permanece em loopback.
+
 ### Caddy no WSL
 
 A API administrativa do Caddy no Windows usa `127.0.0.1:2019`, enquanto a do

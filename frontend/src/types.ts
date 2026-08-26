@@ -41,6 +41,9 @@ export interface SystemStatus {
   lanIp: string;
   windowsPort: number;
   httpsPort: number;
+  routeBasePort: number;
+  routePortCount: number;
+  uiPort: number;
   tlsEnabled: boolean;
   defaultMode: string;
   phpDefaultVersion: string;

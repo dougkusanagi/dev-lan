@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -75,6 +76,42 @@ func IsPortAvailable(port int) bool {
 	return true
 }
 
+// ListeningTCPPorts returns ports already occupied by host listeners. It is
+// intentionally a Windows adapter: WSL project listeners are not host route
+// listeners and are supplied separately by the application reservations.
+// Tests inject a snapshot directly into App.ExternalListeners.
+func ListeningTCPPorts(ctx context.Context) ([]int, error) {
+	if runtime.GOOS != "windows" {
+		return nil, nil
+	}
+	out, err := NewExecRunner("netstat").Run(ctx, "-ano", "-p", "tcp")
+	if err != nil {
+		return nil, err
+	}
+	seen := map[int]struct{}{}
+	for _, line := range strings.Split(strings.ReplaceAll(out, "\r\n", "\n"), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 4 || !strings.EqualFold(fields[0], "TCP") || !strings.EqualFold(fields[3], "LISTENING") {
+			continue
+		}
+		local := fields[1]
+		separator := strings.LastIndexByte(local, ':')
+		if separator < 0 {
+			continue
+		}
+		port, parseErr := strconv.Atoi(local[separator+1:])
+		if parseErr == nil && port >= 1 && port <= 65535 {
+			seen[port] = struct{}{}
+		}
+	}
+	ports := make([]int, 0, len(seen))
+	for port := range seen {
+		ports = append(ports, port)
+	}
+	sort.Ints(ports)
+	return ports, nil
+}
+
 func IsAdminResponsive(address string) bool {
 	conn, err := net.DialTimeout("tcp", address, 300*time.Millisecond)
 	if err != nil {
@@ -94,12 +131,17 @@ func FirewallRule(ctx context.Context, name string) (bool, error) {
 			return false, err
 		}
 		// netsh uses a non-zero exit code for a missing rule on some versions.
-		if strings.Contains(strings.ToLower(output), "no rules") {
+		if firewallOutputHasNoRules(output) {
 			return false, nil
 		}
 		return false, err
 	}
-	return !strings.Contains(strings.ToLower(output), "no rules"), nil
+	return !firewallOutputHasNoRules(output), nil
+}
+
+// FirewallRuleExists is the descriptive alias retained for newer callers.
+func FirewallRuleExists(ctx context.Context, name string) (bool, error) {
+	return FirewallRule(ctx, name)
 }
 
 func OpenURL(url string) error {

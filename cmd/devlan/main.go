@@ -820,7 +820,7 @@ func defaultDataDir() string {
 func runWSLClient(ctx context.Context, dataDir, command string, args []string) error {
 	allowed := map[string]bool{
 		"link": true, "unlink": true, "park": true, "unpark": true,
-		"links": true, "status": true, "reload": true, "doctor": true, "open": true,
+		"links": true, "status": true, "reload": true, "doctor": true, "open": true, "route": true,
 	}
 	if !allowed[command] {
 		return fmt.Errorf("comando %q ainda não está disponível no cliente WSL; use o controlador Windows", command)
@@ -835,7 +835,7 @@ func runWSLClient(ctx context.Context, dataDir, command string, args []string) e
 	if message, ok := payload["message"].(string); ok && message != "" {
 		fmt.Println(message)
 	}
-	if command == "links" || command == "status" || command == "doctor" {
+	if command == "links" || command == "status" || command == "doctor" || command == "route" {
 		if command == "links" {
 			if projects, ok := payload["projects"]; ok {
 				data, _ := json.MarshalIndent(projects, "", "  ")
@@ -846,8 +846,16 @@ func runWSLClient(ctx context.Context, dataDir, command string, args []string) e
 				data, _ := json.MarshalIndent(status, "", "  ")
 				fmt.Println(string(data))
 			}
-		} else if checks, ok := payload["checks"]; ok {
-			data, _ := json.MarshalIndent(checks, "", "  ")
+		} else if command == "doctor" {
+			if checks, ok := payload["checks"]; ok {
+				data, _ := json.MarshalIndent(checks, "", "  ")
+				fmt.Println(string(data))
+			}
+		} else if allocations, ok := payload["allocations"]; ok {
+			data, _ := json.MarshalIndent(allocations, "", "  ")
+			fmt.Println(string(data))
+		} else if paths, ok := payload["paths"]; ok {
+			data, _ := json.MarshalIndent(paths, "", "  ")
 			fmt.Println(string(data))
 		}
 	}
@@ -1475,6 +1483,9 @@ Operação:
 Rotas e Segurança:
   route [NAME] [--port auto|N]
                              inspeciona ou sobrescreve a porta LAN
+  route allocations          lista alocações persistidas
+  route allocations prune [--dry-run]
+                             remove órfãos de forma explícita
   expose NAME [--duration D]
                              expõe projeto temporariamente
   unexpose NAME              revoga exposição de projeto
@@ -1544,7 +1555,7 @@ func printCommandUsage(command string) {
 		"logs":       "uso: devlan logs [COMPONENT]",
 		"open":       "uso: devlan open [NAME]",
 		"mode":       "uso: devlan mode default MODE | devlan mode NAME MODE|inherit",
-		"route":      "uso: devlan route [NAME] [--port auto|PORT]",
+		"route":      "uso: devlan route [NAME] [--port auto|PORT] | devlan route allocations [prune [--dry-run]]",
 		"expose":     "uso: devlan expose NAME [--duration 30m|1h|2h]",
 		"unexpose":   "uso: devlan unexpose NAME",
 		"allowlist":  "uso: devlan allowlist [default|NAME] [set|add|remove|clear CIDR...]",
@@ -1681,6 +1692,9 @@ Ajuda:
 }
 
 func runRoute(ctx context.Context, service *app.App, args []string) error {
+	if len(args) > 0 && args[0] == "allocations" {
+		return runRouteAllocations(ctx, service, args[1:])
+	}
 	if len(args) == 0 {
 		cfg, err := service.Store.Load()
 		if err != nil {
@@ -1742,6 +1756,56 @@ func runRoute(ctx context.Context, service *app.App, args []string) error {
 		return err
 	}
 	fmt.Printf("Porta LAN do projeto %s atualizada.\n", name)
+	return nil
+}
+
+func runRouteAllocations(ctx context.Context, service *app.App, args []string) error {
+	if len(args) == 0 {
+		allocations, err := service.RouteAllocations(ctx)
+		if err != nil {
+			return err
+		}
+		if len(allocations) == 0 {
+			fmt.Println("Nenhuma alocação automática persistida.")
+			return nil
+		}
+		writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(writer, "CAMINHO\tPORTA\tSTATUS")
+		for _, allocation := range allocations {
+			status := "ativa"
+			if allocation.Orphan {
+				status = "órfã (prune explícito)"
+			}
+			fmt.Fprintf(writer, "%s\t%d\t%s\n", allocation.Path, allocation.Port, status)
+		}
+		return writer.Flush()
+	}
+	if args[0] != "prune" {
+		return fmt.Errorf("uso: devlan route allocations | devlan route allocations prune [--dry-run]")
+	}
+	dryRun := false
+	if len(args) == 2 && args[1] == "--dry-run" {
+		dryRun = true
+	} else if len(args) != 1 {
+		return fmt.Errorf("uso: devlan route allocations prune [--dry-run]")
+	}
+	paths, result, err := service.PruneRouteAllocations(ctx, dryRun)
+	printWarnings(result.Warnings)
+	if err != nil {
+		return err
+	}
+	if len(paths) == 0 {
+		fmt.Println("Nenhuma alocação órfã encontrada.")
+		return nil
+	}
+	if dryRun {
+		fmt.Printf("%d alocação(ões) seriam removidas:\n", len(paths))
+	} else {
+		fmt.Printf("%d alocação(ões) órfãs removidas:\n", len(paths))
+	}
+	for _, path := range paths {
+		fmt.Printf("- %s\n", path)
+	}
 	return nil
 }
 

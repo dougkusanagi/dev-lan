@@ -135,14 +135,15 @@ func (s Store) Ensure() error {
 }
 
 type stateFile struct {
-	Version       int                       `json:"version"`
-	SchemaVersion int                       `json:"schema_version,omitempty"`
-	Revision      uint64                    `json:"revision"`
-	Allowlist     []string                  `json:"allowlist,omitempty"`
-	AuthUsers     []domain.AuthUser         `json:"auth_users,omitempty"`
-	Projects      []domain.Project          `json:"projects"`
-	Parks         []domain.Park             `json:"parks"`
-	PHPVersions   []domain.PHPVersionConfig `json:"php_versions,omitempty"`
+	Version              int                       `json:"version"`
+	SchemaVersion        int                       `json:"schema_version,omitempty"`
+	Revision             uint64                    `json:"revision"`
+	Allowlist            []string                  `json:"allowlist,omitempty"`
+	AuthUsers            []domain.AuthUser         `json:"auth_users,omitempty"`
+	Projects             []domain.Project          `json:"projects"`
+	Parks                []domain.Park             `json:"parks"`
+	PHPVersions          []domain.PHPVersionConfig `json:"php_versions,omitempty"`
+	RoutePortAllocations map[string]int            `json:"route_port_allocations,omitempty"`
 }
 
 func (s Store) Load() (domain.Config, error) {
@@ -191,6 +192,7 @@ func (s Store) LoadLocked() (domain.Config, error) {
 		cfg.Projects = state.Projects
 		cfg.Parks = state.Parks
 		cfg.PHPVersions = state.PHPVersions
+		cfg.RoutePortAllocations = state.RoutePortAllocations
 		if len(state.Allowlist) > 0 {
 			cfg.Allowlist = state.Allowlist
 		}
@@ -262,9 +264,11 @@ func renderTOMLConfig(cfg domain.Config) string {
 	fmt.Fprintf(&b, "version = %d\n", cfg.Version)
 	fmt.Fprintf(&b, "default_mode = %s\n", strconv.Quote(string(cfg.DefaultMode)))
 	fmt.Fprintf(&b, "route_base_port = %d\n", cfg.RouteBasePort)
+	fmt.Fprintf(&b, "route_port_count = %d\n", cfg.RoutePortCount)
 	fmt.Fprintf(&b, "lan_address = %s\n", strconv.Quote(cfg.LANAddress))
 	fmt.Fprintf(&b, "windows_port = %d\n", cfg.WindowsPort)
 	fmt.Fprintf(&b, "https_port = %d\n", cfg.HTTPSPort)
+	fmt.Fprintf(&b, "ui_port = %d\n", cfg.UIPort)
 	fmt.Fprintf(&b, "tls_enabled = %t\n", cfg.TLSEnabled)
 	fmt.Fprintf(&b, "wsl_port = %d\n", cfg.WSLPort)
 	fmt.Fprintf(&b, "php_fpm_socket = %s\n", strconv.Quote(cfg.PHPFPMOsocket))
@@ -325,6 +329,12 @@ func parseTOMLConfig(data []byte, cfg *domain.Config) error {
 				return fmt.Errorf("linha %d: https_port inválida", lineNumber+1)
 			}
 			cfg.HTTPSPort = parsed
+		case "ui_port":
+			parsed, err := strconv.Atoi(value)
+			if err != nil {
+				return fmt.Errorf("linha %d: ui_port inválida", lineNumber+1)
+			}
+			cfg.UIPort = parsed
 		case "tls_enabled":
 			parsed, err := strconv.ParseBool(value)
 			if err != nil {
@@ -347,6 +357,12 @@ func parseTOMLConfig(data []byte, cfg *domain.Config) error {
 				return fmt.Errorf("linha %d: route_base_port inválida", lineNumber+1)
 			}
 			cfg.RouteBasePort = parsed
+		case "route_port_count":
+			parsed, err := strconv.Atoi(value)
+			if err != nil {
+				return fmt.Errorf("linha %d: route_port_count inválido", lineNumber+1)
+			}
+			cfg.RoutePortCount = parsed
 		case "allowlist":
 			list, err := parseTOMLStringList(value)
 			if err != nil {
@@ -775,7 +791,7 @@ func StableJSON(cfg domain.Config) ([]byte, error) {
 	sort.Slice(parks, func(i, j int) bool { return parks[i].Path < parks[j].Path })
 	versions := append([]domain.PHPVersionConfig(nil), cfg.PHPVersions...)
 	sort.Slice(versions, func(i, j int) bool { return versions[i].Version < versions[j].Version })
-	state := stateFile{Version: cfg.Version, SchemaVersion: StateSchemaVersion, Revision: cfg.Revision, Projects: projects, Parks: parks, PHPVersions: versions}
+	state := stateFile{Version: cfg.Version, SchemaVersion: StateSchemaVersion, Revision: cfg.Revision, Projects: projects, Parks: parks, PHPVersions: versions, RoutePortAllocations: cfg.RoutePortAllocations}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return nil, err

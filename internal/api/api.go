@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -66,6 +67,10 @@ func (s *Server) Start() (Endpoint, error) {
 	if err := s.store.Ensure(); err != nil {
 		return Endpoint{}, err
 	}
+	cfg, err := s.store.Load()
+	if err != nil {
+		return Endpoint{}, fmt.Errorf("validar configuração antes de iniciar a API: %w", err)
+	}
 	if _, err := os.Stat(s.store.Paths().APIEndpoint); err == nil {
 		if endpoint, readErr := ReadEndpoint(s.store); readErr == nil {
 			checkContext, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
@@ -86,9 +91,9 @@ func (s *Server) Start() (Endpoint, error) {
 	if err != nil {
 		return Endpoint{}, err
 	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(cfg.UIPort))
 	if err != nil {
-		return Endpoint{}, fmt.Errorf("iniciar API local: %w", err)
+		return Endpoint{}, fmt.Errorf("iniciar API local na ui_port %d: %w", cfg.UIPort, err)
 	}
 	endpoint := Endpoint{
 		Version:   ProtocolVersion,
@@ -214,6 +219,9 @@ func (s *Server) handleStatus(writer http.ResponseWriter, request *http.Request)
 		"default_mode":     cfg.DefaultMode,
 		"windows_port":     cfg.WindowsPort,
 		"https_port":       cfg.HTTPSPort,
+		"route_base_port":  cfg.RouteBasePort,
+		"route_port_count": cfg.RoutePortCount,
+		"ui_port":          cfg.UIPort,
 		"tls_enabled":      cfg.TLSEnabled,
 		"project_count":    len(cfg.Projects),
 		"park_count":       len(cfg.Parks),
@@ -379,7 +387,7 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 			writeJSONError(writer, http.StatusInternalServerError, err.Error())
 			return
 		}
-		response["status"] = map[string]any{"revision": cfg.Revision, "default_mode": cfg.DefaultMode, "windows_port": cfg.WindowsPort, "https_port": cfg.HTTPSPort, "tls_enabled": cfg.TLSEnabled, "project_count": len(cfg.Projects), "park_count": len(cfg.Parks)}
+		response["status"] = map[string]any{"revision": cfg.Revision, "default_mode": cfg.DefaultMode, "windows_port": cfg.WindowsPort, "https_port": cfg.HTTPSPort, "route_base_port": cfg.RouteBasePort, "route_port_count": cfg.RoutePortCount, "ui_port": cfg.UIPort, "tls_enabled": cfg.TLSEnabled, "project_count": len(cfg.Projects), "park_count": len(cfg.Parks)}
 	case "reload":
 		if len(input.Args) != 0 {
 			writeJSONError(writer, http.StatusBadRequest, "uso: reload")
@@ -392,6 +400,61 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 		}
 		response["result"] = result
 		response["message"] = "Configurações recarregadas."
+	case "route":
+		if len(input.Args) > 0 && input.Args[0] == "allocations" {
+			if len(input.Args) == 1 {
+				allocations, err := s.service.RouteAllocations(ctx)
+				if err != nil {
+					writeJSONError(writer, http.StatusInternalServerError, err.Error())
+					return
+				}
+				response["allocations"] = allocations
+				break
+			}
+			if len(input.Args) == 2 && input.Args[1] == "prune" {
+				paths, result, err := s.service.PruneRouteAllocations(ctx, false)
+				if err != nil {
+					writeJSONError(writer, http.StatusConflict, err.Error())
+					return
+				}
+				response["paths"] = paths
+				response["result"] = result
+				break
+			}
+			if len(input.Args) == 3 && input.Args[1] == "prune" && input.Args[2] == "--dry-run" {
+				paths, result, err := s.service.PruneRouteAllocations(ctx, true)
+				if err != nil {
+					writeJSONError(writer, http.StatusInternalServerError, err.Error())
+					return
+				}
+				response["paths"] = paths
+				response["result"] = result
+				break
+			}
+			writeJSONError(writer, http.StatusBadRequest, "uso: route allocations [prune [--dry-run]]")
+			return
+		}
+		if len(input.Args) != 3 || input.Args[1] != "--port" {
+			writeJSONError(writer, http.StatusBadRequest, "uso: route NAME --port auto|PORT")
+			return
+		}
+		var port *int
+		if input.Args[2] != "auto" {
+			parsed, parseErr := strconv.Atoi(input.Args[2])
+			if parseErr != nil || parsed < 1024 || parsed > 65535 {
+				writeJSONError(writer, http.StatusBadRequest, "porta inválida")
+				return
+			}
+			port = &parsed
+		}
+		result, err := s.service.SetRoutePort(ctx, input.Args[0], port)
+		if err != nil {
+			writeJSONError(writer, http.StatusConflict, err.Error())
+			return
+		}
+		response["result"] = result
+		response["warnings"] = result.Warnings
+		response["message"] = "Porta LAN atualizada."
 	case "doctor":
 		if len(input.Args) > 1 {
 			writeJSONError(writer, http.StatusBadRequest, "uso: doctor [NAME]")

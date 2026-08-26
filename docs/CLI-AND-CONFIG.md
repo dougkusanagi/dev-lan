@@ -27,6 +27,12 @@ controlador sem conversão para um segundo estado.
 
 `link` associa um nome estável a um diretório específico e tem prioridade sobre projetos descobertos por `park`.
 
+`route_base_port` e `route_port_count` definem o pool LAN. A alocação automática
+é persistida em `state.json` por caminho normalizado, portanto a ordem de
+descoberta não troca URLs. Um override de projeto não apaga a alocação
+automática anterior; `--port auto` pode restaurá-la. `ui_port` é reservado para
+a API local e não é aberto no firewall.
+
 ### Diretórios estacionados
 
 ```powershell
@@ -263,7 +269,14 @@ devlan route [NAME]
 # Configurar ou restaurar a porta LAN de um projeto
 devlan route painel --port 8085
 devlan route painel --port auto
+devlan route allocations
+devlan route allocations prune --dry-run
+devlan route allocations prune
 ```
+
+`route allocations` lista portas, incluindo alocações órfãs mantidas para
+evitar reatribuição acidental. O prune só remove órfãos mediante comando
+explícito; com `--dry-run`, não altera estado nem arquivos gerados.
 
 ### Exposição Temporária e Expiração
 
