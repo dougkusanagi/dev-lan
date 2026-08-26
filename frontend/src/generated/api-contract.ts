@@ -55,6 +55,12 @@ export interface SystemStatus {
   protocolVersion: number;
 }
 
+export interface Overview {
+  projects: ProjectInfo[];
+  status: SystemStatus;
+  phpVersions: PHPVersion[];
+}
+
 export interface PHPVersion {
   version: string;
   installed: boolean;
@@ -130,6 +136,12 @@ export interface RouteSnapshot {
 export const DEVLAN_API_CONTRACT = {
   "protocolVersion": 1,
   "operations": {
+    "getOverview": {
+      "method": "GET",
+      "path": "/api/v1/overview",
+      "wails": "GetOverview",
+      "response": "Overview"
+    },
     "getProjects": {
       "method": "GET",
       "path": "/api/v1/projects",

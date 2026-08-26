@@ -130,6 +130,14 @@ func (p *DevProxy) Status(name string) (running, starting bool) {
 	return entry.running, entry.starting
 }
 
+// Has reports whether this proxy owns the project's gateway. A missing entry
+// must be distinguishable from a known stopped gateway so callers can ask the
+// underlying manager for the status of projects discovered outside this
+// process.
+func (p *DevProxy) Has(name string) bool {
+	return p != nil && p.entryFor(name) != nil
+}
+
 // Close stops all backend processes and gateway listeners owned by this
 // supervisor. It is called by the service/UI lifecycle before shutdown.
 func (p *DevProxy) Close() error {

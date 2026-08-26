@@ -44,6 +44,15 @@ type SystemStatusView struct {
 	ProtocolVersion     int      `json:"protocolVersion"`
 }
 
+// OverviewView is the single read model used by the browser polling loop. It
+// keeps one materialized WSL snapshot consistent across projects, status and
+// PHP panels.
+type OverviewView struct {
+	Projects    []ProjectView    `json:"projects"`
+	Status      SystemStatusView `json:"status"`
+	PHPVersions []PHPVersionView `json:"phpVersions"`
+}
+
 type PHPVersionView struct {
 	Version    string   `json:"version"`
 	Installed  bool     `json:"installed"`

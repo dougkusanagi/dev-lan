@@ -50,17 +50,23 @@ export default function AppShell({ client = api, pollIntervalMs = 5000 }: AppShe
     const version = ++refreshVersion.current;
     if (initialLoad.current) setLoading(true);
     try {
-      const [p, s, versions] = await Promise.all([
-        client.getProjects(),
-        client.getStatus(),
-        client.getPHPVersions(),
-      ]);
+      const overview = client.getOverview
+        ? await client.getOverview()
+        : await Promise.all([
+            client.getProjects(),
+            client.getStatus(),
+            client.getPHPVersions(),
+          ]).then(([projects, status, phpVersions]) => ({ projects, status, phpVersions }));
       if (version !== refreshVersion.current) return;
-      setProjects(p);
-      setSystem(s);
-      setPHPVersions(versions);
+      setProjects(overview.projects);
+      setSystem(overview.status);
+      setPHPVersions(overview.phpVersions);
       setLoadError('');
-      setSelected((current) => (p.some((x) => x.name === current) ? current : p[0]?.name || ''));
+      setSelected((current) =>
+        overview.projects.some((x) => x.name === current)
+          ? current
+          : overview.projects[0]?.name || '',
+      );
     } catch (e) {
       if (version === refreshVersion.current) {
         const message = e instanceof APIError && e.status === 0 ? 'API indisponível.' : String(e);

@@ -55,6 +55,23 @@ function jsonResponse(value: unknown, statusCode = 200) {
 }
 
 describe('HTTP DevLAN client', () => {
+  it('loads the browser read model through one aggregate endpoint', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse({ projects: [project], status, phpVersions: [] }));
+    const client = new HttpDevLANClient({ fetchImpl });
+
+    await expect(client.getOverview()).resolves.toMatchObject({
+      projects: [project],
+      status,
+      phpVersions: [],
+    });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      '/api/v1/overview',
+      expect.objectContaining({ method: 'GET', credentials: 'same-origin' }),
+    );
+  });
+
   it('sends same-origin credentials and the CSRF double-submit header for mutations', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ message: 'ok' }));
     // biome-ignore lint/suspicious/noDocumentCookie: exercise the browser double-submit cookie.

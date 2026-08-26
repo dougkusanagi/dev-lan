@@ -19,6 +19,7 @@ import (
 
 type ProjectView = localapi.ProjectView
 type SystemStatusView = localapi.SystemStatusView
+type OverviewView = localapi.OverviewView
 type PHPVersionView = localapi.PHPVersionView
 type DoctorCheckView = localapi.DoctorCheckView
 type GlobalConfigView = localapi.GlobalConfigView
@@ -70,6 +71,12 @@ func (a *App) GetStatus() (SystemStatusView, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return localapi.BuildStatusView(ctx, a.service)
+}
+
+func (a *App) GetOverview(filter string) (OverviewView, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	return localapi.BuildOverviewView(ctx, a.service, filter)
 }
 
 func (a *App) GetMetrics(project, rawRange string) (*metrics.Snapshot, error) {

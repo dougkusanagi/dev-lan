@@ -1049,7 +1049,7 @@ func runPHP(ctx context.Context, service *app.App, args []string) error {
 		if len(args) > 1 {
 			return fmt.Errorf("uso: devlan php list")
 		}
-		versions, err := service.PHPVersions(ctx)
+		versions, err := service.PHPVersions(platform.WithWSLOperation(ctx, platform.WSLOperationStatus))
 		if err != nil {
 			return err
 		}
@@ -1407,7 +1407,9 @@ func printProjects(service *app.App, filter string, asJSON bool) error {
 	if err != nil {
 		return err
 	}
-	effective, err := service.EffectiveConfig(context.Background(), cfg)
+	effective, err := service.EffectiveConfig(
+		platform.WithWSLOperation(context.Background(), platform.WSLOperationDiscovery), cfg,
+	)
 	if err != nil {
 		return err
 	}
@@ -1529,6 +1531,7 @@ func sslState(enabled bool) string {
 }
 
 func printStatus(ctx context.Context, service *app.App, dataDir string) error {
+	ctx = platform.WithWSLOperation(ctx, platform.WSLOperationStatus)
 	cfg, err := service.Store.Load()
 	if err != nil {
 		return err

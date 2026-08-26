@@ -54,12 +54,18 @@ interfaces ou para rotas desconhecidas. A versão atual expõe:
 
 ```text
 GET  /v1/health
+GET  /v1/overview
 GET  /v1/status
 GET  /v1/projects
 GET  /v1/config
 POST /v1/reload
 POST /v1/command   (cliente Linux WSL; allowlist de operações)
 ```
+
+O dashboard browser-first usa `GET /v1/overview` (também disponível em
+`/api/v1/overview`) para receber projetos, status e versões PHP na mesma
+fotografia. Isso evita três polls independentes e mantém a descoberta/status
+WSL agrupados.
 
 Para verificar o processo em execução:
 

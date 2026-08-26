@@ -49,6 +49,14 @@
         "protocolVersion": { "type": "number", "required": true }
       }
     },
+    "Overview": {
+      "goType": "OverviewView",
+      "fields": {
+        "projects": { "type": "ProjectInfo[]", "required": true },
+        "status": { "type": "SystemStatus", "required": true },
+        "phpVersions": { "type": "PHPVersion[]", "required": true }
+      }
+    },
     "PHPVersion": {
       "goType": "PHPVersionView",
       "fields": {
@@ -139,6 +147,7 @@
     }
   },
   "operations": {
+    "getOverview": { "method": "GET", "path": "/api/v1/overview", "wails": "GetOverview", "response": "Overview" },
     "getProjects": { "method": "GET", "path": "/api/v1/projects", "wails": "GetProjects", "response": "ProjectInfo[]" },
     "getStatus": { "method": "GET", "path": "/api/v1/status", "wails": "GetStatus", "response": "SystemStatus" },
     "getMetrics": { "method": "GET", "path": "/api/v1/metrics", "wails": "GetMetrics", "response": "MetricsSnapshot | null" },

@@ -9,6 +9,7 @@ export type {
   LocalDevState,
   MetricsRange,
   MetricsSnapshot,
+  Overview,
   PHPVersion,
   ProjectConfigUpdate,
   ProjectFramework,

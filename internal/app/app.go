@@ -280,6 +280,7 @@ func (a *App) InstallWithOptions(ctx context.Context, configureFirewall bool) (A
 }
 
 func (a *App) InstallWithPort(ctx context.Context, configureFirewall bool, windowsPort int) (ApplyResult, error) {
+	ctx = platform.WithWSLOperation(ctx, platform.WSLOperationInstall)
 	cfg, err := a.Store.Load()
 	if err != nil {
 		return ApplyResult{}, err
@@ -310,12 +311,14 @@ func (a *App) InstallWithPort(ctx context.Context, configureFirewall bool, windo
 	if err := a.WSLCaddy.Available(ctx); err != nil {
 		result.Warnings = append(result.Warnings, "Caddy no WSL não encontrado; instale-o e execute devlan doctor")
 	}
+	phpCommands := []string{"php-fpm", "php-fpm8.5", "php-fpm8.4", "php-fpm8.3", "php-fpm8.2", "php-fpm8.1"}
 	phpFound := false
-	for _, command := range []string{"php-fpm", "php-fpm8.5", "php-fpm8.4", "php-fpm8.3", "php-fpm8.2", "php-fpm8.1"} {
-		found, _ := a.WSL.HasCommand(ctx, command)
-		if found {
-			phpFound = true
-			break
+	if found, findErr := a.WSL.HasCommands(ctx, phpCommands...); findErr == nil {
+		for _, command := range phpCommands {
+			if found[command] {
+				phpFound = true
+				break
+			}
 		}
 	}
 	if !phpFound {
@@ -1037,6 +1040,7 @@ func projectBySelector(projects []domain.Project, selector string) (domain.Proje
 }
 
 func (a *App) Reload(ctx context.Context) (ApplyResult, error) {
+	ctx = platform.WithWSLOperation(ctx, platform.WSLOperationReload)
 	a.mutationMu.Lock()
 	defer a.mutationMu.Unlock()
 	var result ApplyResult
@@ -1355,7 +1359,7 @@ func (a *App) EffectiveConfig(ctx context.Context, cfg domain.Config) (domain.Co
 		knownPaths[project.Path] = struct{}{}
 	}
 	for _, park := range cfg.Parks {
-		discovered, err := a.Detector.BatchDiscoverProjects(ctx, park.Path)
+		discovered, err := a.Detector.BatchDiscoverProjects(platform.WithWSLOperation(ctx, platform.WSLOperationDiscovery), park.Path)
 		if err != nil {
 			if errors.Is(err, platform.ErrUnavailable) {
 				continue
@@ -1441,8 +1445,14 @@ func (a *App) ensureProjectAccess(ctx context.Context, cfg domain.Config) error 
 	if _, ok := a.Detector.Inspector.(detect.SmartInspector); !ok {
 		return nil
 	}
+	paths := make([]string, 0, len(cfg.Projects))
 	for _, project := range cfg.Projects {
-		if err := a.WSL.GrantProjectAccess(ctx, project.Path); err != nil {
+		if strings.HasPrefix(project.Path, "/") {
+			paths = append(paths, project.Path)
+		}
+	}
+	if len(paths) > 0 {
+		if err := a.WSL.GrantProjectsAccess(ctx, paths...); err != nil {
 			return err
 		}
 	}
@@ -1456,6 +1466,7 @@ type Check struct {
 }
 
 func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
+	ctx = platform.WithWSLOperation(ctx, platform.WSLOperationDoctor)
 	cfg, err := a.Store.Load()
 	if err != nil {
 		return nil, err
@@ -1487,10 +1498,13 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 		checks = append(checks, Check{"Caddy WSL", "OK", "disponível"})
 	}
 
-	// Check Node & JS package managers
-	for _, tool := range []string{"node", "npm", "pnpm", "yarn", "bun"} {
-		if has, _ := a.WSL.HasCommand(ctx, tool); has {
-			checks = append(checks, Check{"WSL " + tool, "OK", "disponível"})
+	// Check Node & JS package managers in one WSL session.
+	tools := []string{"node", "npm", "pnpm", "yarn", "bun"}
+	if found, findErr := a.WSL.HasCommands(ctx, tools...); findErr == nil {
+		for _, tool := range tools {
+			if found[tool] {
+				checks = append(checks, Check{"WSL " + tool, "OK", "disponível"})
+			}
 		}
 	}
 
@@ -1518,12 +1532,13 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 	if len(cfg.PHPVersions) == 0 {
 		phpCommands := []string{"php-fpm", "php-fpm8.5", "php-fpm8.4", "php-fpm8.3", "php-fpm8.2", "php-fpm8.1"}
 		phpFound := false
-		for _, command := range phpCommands {
-			found, _ := a.WSL.HasCommand(ctx, command)
-			if found {
-				checks = append(checks, Check{"PHP-FPM", "OK", command})
-				phpFound = true
-				break
+		if found, findErr := a.WSL.HasCommands(ctx, phpCommands...); findErr == nil {
+			for _, command := range phpCommands {
+				if found[command] {
+					checks = append(checks, Check{"PHP-FPM", "OK", command})
+					phpFound = true
+					break
+				}
 			}
 		}
 		if !phpFound {
@@ -1546,7 +1561,12 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 				}
 			}
 		}
+		socketPaths := make([]string, 0, len(cfg.PHPVersions))
 		for _, version := range cfg.PHPVersions {
+			socketPaths = append(socketPaths, domain.PHPSharedSocket(version.Version))
+		}
+		sockets, socketErr := a.WSL.IsSockets(ctx, socketPaths...)
+		for index, version := range cfg.PHPVersions {
 			if item, found := installed[version.Version]; found {
 				checks = append(checks, Check{"PHP " + version.Version, "OK", item.FPMBinary})
 			} else {
@@ -1557,10 +1577,13 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 				pool = version.Pool
 			}
 			checks = append(checks, Check{"Pool PHP " + version.Version, "OK", fmt.Sprintf("ondemand, max_children=%d, idle_timeout=%s, max_requests=%d", pool.MaxChildren, pool.IdleTimeout, pool.MaxRequests)})
-			if socket, socketErr := a.WSL.IsSocket(ctx, domain.PHPSharedSocket(version.Version)); socketErr == nil && socket {
-				checks = append(checks, Check{"Socket PHP " + version.Version, "OK", domain.PHPSharedSocket(version.Version)})
+			socketPath := socketPaths[index]
+			if socketErr != nil {
+				checks = append(checks, Check{"Socket PHP " + version.Version, "WARN", "WSL indisponível"})
+			} else if sockets[socketPath] {
+				checks = append(checks, Check{"Socket PHP " + version.Version, "OK", socketPath})
 			} else {
-				checks = append(checks, Check{"Socket PHP " + version.Version, "WARN", domain.PHPSharedSocket(version.Version) + " não é socket"})
+				checks = append(checks, Check{"Socket PHP " + version.Version, "WARN", socketPath + " não é socket"})
 			}
 		}
 	}
@@ -1984,7 +2007,10 @@ func (a *App) projectHasManifest(ctx context.Context, project domain.Project, na
 	if _, err := os.Stat(filepath.Join(filepath.FromSlash(project.Path), name)); err == nil {
 		return true
 	}
-	_, err := a.WSL.Run(ctx, "/bin/sh", "-c", `test -f "$1/$2"`, "devlan", project.Path, name)
+	if runtime.GOOS != "windows" || !strings.HasPrefix(project.Path, "/") {
+		return false
+	}
+	_, err := a.WSL.Run(ctx, "/usr/bin/test", "-f", pathpkg.Join(project.Path, name))
 	return err == nil
 }
 
@@ -1999,6 +2025,57 @@ func (a *App) ProjectDevLogs(ctx context.Context, selector string, lines int) (s
 	return a.Dev.Logs(ctx, project, lines)
 }
 
+// DevStatuses resolves a set of already-materialized projects without
+// resolving parks once per row. WSLDevManager can inspect all Linux PID files
+// in one execution-plane call; a proxy-owned gateway is answered locally.
+func (a *App) DevStatuses(ctx context.Context, cfg domain.Config, projects []domain.Project) (map[string]platform.DevProcessStatus, error) {
+	if a.Dev == nil {
+		return nil, fmt.Errorf("gerenciador dev não configurado")
+	}
+	ctx = platform.WithWSLOperation(ctx, platform.WSLOperationStatus)
+	result := make(map[string]platform.DevProcessStatus, len(projects))
+	requests := make([]platform.DevStatusRequest, 0, len(projects))
+	for _, project := range projects {
+		resolved, err := cfg.Resolve(project.Name)
+		if err != nil {
+			continue
+		}
+		port := cfg.DevPort(project)
+		if a.DevProxy != nil && os.Getenv("DEVLAN_TEST_MOCK") != "1" && a.DevProxy.Has(project.Name) {
+			running, starting := a.DevProxy.Status(project.Name)
+			state := platform.StateStopped
+			if starting {
+				state = platform.StateStarting
+			} else if running {
+				state = platform.StateRunning
+			}
+			result[project.Name] = platform.DevProcessStatus{ProjectName: project.Name, Port: port, State: state}
+			continue
+		}
+		if resolved.Mode == domain.ModeDev || resolved.Mode == domain.ModeAuto || (resolved.Mode == domain.ModePHP && isLaravelDevScript(cfg, project)) {
+			requests = append(requests, platform.DevStatusRequest{Project: project, Port: port})
+		}
+	}
+	if len(requests) == 0 {
+		return result, nil
+	}
+	if batcher, ok := a.Dev.(platform.DevStatusBatcher); ok {
+		items, err := batcher.StatusBatch(ctx, requests)
+		for _, item := range items {
+			result[item.ProjectName] = item
+		}
+		return result, err
+	}
+	for _, request := range requests {
+		item, err := a.Dev.Status(ctx, request.Project, request.Port)
+		if err != nil {
+			return result, err
+		}
+		result[item.ProjectName] = item
+	}
+	return result, nil
+}
+
 func (a *App) DevStatus(ctx context.Context, selector string) (platform.DevProcessStatus, error) {
 	if a.Dev == nil {
 		return platform.DevProcessStatus{}, fmt.Errorf("gerenciador dev não configurado")
@@ -2007,18 +2084,16 @@ func (a *App) DevStatus(ctx context.Context, selector string) (platform.DevProce
 	if err != nil {
 		return platform.DevProcessStatus{}, err
 	}
-	port := cfg.DevPort(project)
-	if a.DevProxy != nil && os.Getenv("DEVLAN_TEST_MOCK") != "1" {
-		running, starting := a.DevProxy.Status(project.Name)
-		state := platform.StateStopped
-		if starting {
-			state = platform.StateStarting
-		} else if running {
-			state = platform.StateRunning
-		}
-		return platform.DevProcessStatus{ProjectName: project.Name, Port: port, State: state}, nil
+	statuses, statusErr := a.DevStatuses(ctx, cfg, []domain.Project{project})
+	if status, ok := statuses[project.Name]; ok {
+		return status, statusErr
 	}
-	return a.Dev.Status(ctx, project, port)
+	if statusErr != nil {
+		return platform.DevProcessStatus{}, statusErr
+	}
+	// Preserve the single-project command's historical behavior for static or
+	// PHP projects that are not part of the grouped dev-status request.
+	return a.Dev.Status(ctx, project, cfg.DevPort(project))
 }
 
 func (a *App) SetProjectStaticDir(ctx context.Context, selector, staticDir string) (ApplyResult, error) {
@@ -2480,10 +2555,15 @@ func (a *App) DiagnosticBundle(ctx context.Context, targetPath string) (string, 
 	if err != nil {
 		return "", fmt.Errorf("serializar diagnóstico: %w", err)
 	}
+	wslStatsData, err := json.MarshalIndent(a.WSL.StatsSnapshot(), "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("serializar inventário WSL: %w", err)
+	}
 
 	entries := map[string][]byte{
 		"config.json": exported,
 		"doctor.json": append(doctorData, '\n'),
+		"wsl.json":    append(wslStatsData, '\n'),
 		"runtime.txt": []byte(fmt.Sprintf("runtime=%s\ndata_dir=%s\n", RuntimeDescription(), a.Store.Paths().Dir)),
 	}
 	paths := a.Store.Paths()

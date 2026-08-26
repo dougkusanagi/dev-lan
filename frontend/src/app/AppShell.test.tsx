@@ -50,6 +50,23 @@ function clientWith(projects: ProjectInfo[], overrides: Partial<SystemStatus> = 
 }
 
 describe('AppShell states and keyboard behavior', () => {
+  it('uses the aggregate read model for each refresh', async () => {
+    const client = clientWith([project]);
+    const calls: string[] = [];
+    client.getOverview = async () => {
+      calls.push('getOverview');
+      return { projects: [project], status, phpVersions: [] };
+    };
+
+    render(<AppShell client={client} pollIntervalMs={0} />);
+    await screen.findByRole('heading', { name: 'catalogo' });
+
+    expect(calls).toEqual(['getOverview']);
+    expect(client.calls).not.toContain('getProjects');
+    expect(client.calls).not.toContain('getStatus');
+    expect(client.calls).not.toContain('getPHPVersions');
+  });
+
   it('shows a deterministic loading state before the first response', async () => {
     let resolveProjects: (items: ProjectInfo[]) => void = () => undefined;
     const pending = new Promise<ProjectInfo[]>((resolve) => {

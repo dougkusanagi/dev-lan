@@ -215,6 +215,8 @@ func (s *Server) Handler(token ...string) http.Handler {
 	apiMux.HandleFunc("/v1/health", s.handleHealth)
 	apiMux.HandleFunc("/api/v1/status", s.handleStatus)
 	apiMux.HandleFunc("/v1/status", s.handleStatus)
+	apiMux.HandleFunc("/api/v1/overview", s.handleOverview)
+	apiMux.HandleFunc("/v1/overview", s.handleOverview)
 
 	// Projects
 	apiMux.HandleFunc("/api/v1/projects", s.handleProjects)
@@ -508,6 +510,20 @@ func (s *Server) handleStatus(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 	view, err := BuildStatusView(request.Context(), s.service)
+	if err != nil {
+		writeJSONError(writer, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(writer, http.StatusOK, view)
+}
+
+func (s *Server) handleOverview(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		methodNotAllowed(writer, http.MethodGet)
+		return
+	}
+	filter := request.URL.Query().Get("filter")
+	view, err := BuildOverviewView(request.Context(), s.service, filter)
 	if err != nil {
 		writeJSONError(writer, http.StatusInternalServerError, err.Error())
 		return

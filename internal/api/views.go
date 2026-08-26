@@ -14,7 +14,18 @@ import (
 	"github.com/dougkusanagi/dev-lan/internal/platform"
 )
 
-func BuildProjectViews(ctx context.Context, service *app.App, filter string) ([]ProjectView, error) {
+type projectViewRuntime struct {
+	cfg         domain.Config
+	effective   domain.Config
+	edgeReady   bool
+	wslReady    bool
+	host        string
+	sockets     map[string]bool
+	socketErr   error
+	devStatuses map[string]platform.DevProcessStatus
+}
+
+func loadProjectViewRuntime(ctx context.Context, service *app.App) (*projectViewRuntime, error) {
 	cfg, err := service.Store.Load()
 	if err != nil {
 		return nil, err
@@ -39,6 +50,42 @@ func BuildProjectViews(ctx context.Context, service *app.App, filter string) ([]
 		}
 	}
 
+	runtime := &projectViewRuntime{
+		cfg:         cfg,
+		effective:   effective,
+		edgeReady:   edgeReady,
+		wslReady:    wslReady,
+		host:        host,
+		sockets:     make(map[string]bool),
+		devStatuses: make(map[string]platform.DevProcessStatus),
+	}
+
+	// Socket checks are grouped by request, so a poll has at most one WSL
+	// execution for all PHP projects.
+	socketPaths := make([]string, 0, len(effective.Projects))
+	for _, project := range effective.Projects {
+		resolved, resolveErr := effective.Resolve(project.Name)
+		if resolveErr == nil && resolved.Mode == domain.ModePHP && wslReady && os.Getenv("DEVLAN_TEST_MOCK") != "1" {
+			socketPaths = append(socketPaths, effective.PHPSocket(project))
+		}
+	}
+	if len(socketPaths) > 0 {
+		runtime.sockets, runtime.socketErr = service.WSL.IsSockets(
+			platform.WithWSLOperation(ctx, platform.WSLOperationStatus), socketPaths...,
+		)
+	}
+
+	if statuses, statusErr := service.DevStatuses(
+		platform.WithWSLOperation(ctx, platform.WSLOperationStatus), effective, effective.Projects,
+	); statusErr == nil || len(statuses) > 0 {
+		runtime.devStatuses = statuses
+	}
+	return runtime, nil
+}
+
+func renderProjectViews(runtime *projectViewRuntime, filter string) []ProjectView {
+	effective := runtime.effective
+	cfg := runtime.cfg
 	filterLower := strings.ToLower(strings.TrimSpace(filter))
 	result := make([]ProjectView, 0, len(effective.Projects))
 	linkedProjects := make(map[string]struct{}, len(cfg.Projects))
@@ -59,7 +106,7 @@ func BuildProjectViews(ctx context.Context, service *app.App, filter string) ([]
 		}
 
 		tlsActive := effective.SecureProject(project)
-		url := resolved.URL(host, cfg.WindowsPort, cfg.HTTPSPort, tlsActive)
+		url := resolved.URL(runtime.host, cfg.WindowsPort, cfg.HTTPSPort, tlsActive)
 
 		kind := "parked"
 		if _, linked := linkedProjects[project.Name]; linked {
@@ -120,30 +167,29 @@ func BuildProjectViews(ctx context.Context, service *app.App, filter string) ([]
 		if devCapable {
 			view.LocalDevState = "stopped"
 		}
-		if !edgeReady || !wslReady {
+		if !runtime.edgeReady || !runtime.wslReady {
 			view.Status = "degraded"
 			missing := make([]string, 0, 2)
-			if !edgeReady {
+			if !runtime.edgeReady {
 				missing = append(missing, "Caddy Windows")
 			}
-			if !wslReady {
+			if !runtime.wslReady {
 				missing = append(missing, "Caddy WSL")
 			}
 			view.StatusDetail = "infraestrutura indisponível: " + strings.Join(missing, ", ")
 		}
-		if resolved.Mode == domain.ModePHP && wslReady && os.Getenv("DEVLAN_TEST_MOCK") != "1" {
+		if resolved.Mode == domain.ModePHP && runtime.wslReady && os.Getenv("DEVLAN_TEST_MOCK") != "1" {
 			socket := effective.PHPSocket(project)
-			socketReady, socketErr := service.WSL.IsSocket(ctx, socket)
-			if socketErr != nil || !socketReady {
+			if runtime.socketErr != nil || !runtime.sockets[socket] {
 				view.Status = "degraded"
 				view.StatusDetail = "socket PHP-FPM indisponível: " + socket
 			}
 		}
 
-		// Check dev server status if applicable
+		// Use the grouped status snapshot. The previous per-row resolve path
+		// caused park discovery to execute once per project.
 		if devCapable {
-			devStatus, devErr := service.DevStatus(ctx, project.Name)
-			if devErr == nil {
+			if devStatus, ok := runtime.devStatuses[project.Name]; ok {
 				view.DevPort = devStatus.Port
 				view.DevPid = devStatus.PID
 				switch devStatus.State {
@@ -178,15 +224,31 @@ func BuildProjectViews(ctx context.Context, service *app.App, filter string) ([]
 		result = append(result, view)
 	}
 
-	return result, nil
+	return result
 }
 
-func BuildStatusView(ctx context.Context, service *app.App) (SystemStatusView, error) {
-	cfg, err := service.Store.Load()
+func BuildProjectViews(ctx context.Context, service *app.App, filter string) ([]ProjectView, error) {
+	runtime, err := loadProjectViewRuntime(ctx, service)
 	if err != nil {
-		return SystemStatusView{}, err
+		return nil, err
 	}
+	return renderProjectViews(runtime, filter), nil
+}
 
+func wslAvailability(ctx context.Context, service *app.App) bool {
+	if os.Getenv("DEVLAN_TEST_MOCK") == "1" {
+		return true
+	}
+	found, err := service.WSL.HasCommands(
+		platform.WithWSLOperation(ctx, platform.WSLOperationStatus), "bash", "caddy",
+	)
+	if err != nil {
+		return false
+	}
+	return found["bash"] || found["caddy"]
+}
+
+func buildSystemStatusView(ctx context.Context, service *app.App, cfg domain.Config, phpVersions []app.PHPVersionStatus, wslAvailable bool) SystemStatusView {
 	host := cfg.LANAddress
 	if host == "auto" {
 		var lanErr error
@@ -198,14 +260,10 @@ func BuildStatusView(ctx context.Context, service *app.App) (SystemStatusView, e
 
 	winCaddyRunning := platform.IsAdminResponsive(platform.WindowsCaddyAdminAddress)
 	wslCaddyRunning := platform.IsAdminResponsive(platform.WSLCaddyAdminAddress)
-	hasBash, _ := service.WSL.HasCommand(ctx, "bash")
-	wslAvail := hasBash || service.WSLCaddy.Available(ctx) == nil
 	firewallOk, _ := service.FirewallHealthy(ctx, cfg)
-
-	phpVers, _ := service.PHPVersions(ctx)
-	vers := make([]string, 0, len(phpVers))
-	for _, v := range phpVers {
-		vers = append(vers, v.Version)
+	vers := make([]string, 0, len(phpVersions))
+	for _, version := range phpVersions {
+		vers = append(vers, version.Version)
 	}
 
 	return SystemStatusView{
@@ -220,12 +278,48 @@ func BuildStatusView(ctx context.Context, service *app.App) (SystemStatusView, e
 		PHPDefaultVersion:   cfg.PHPDefaultVersion,
 		WindowsCaddyRunning: winCaddyRunning,
 		WSLCaddyRunning:     wslCaddyRunning,
-		WSLAvailable:        wslAvail,
+		WSLAvailable:        wslAvailable,
 		FirewallOk:          firewallOk,
 		PHPVersions:         vers,
 		TotalProjects:       len(cfg.Projects),
 		ProtocolVersion:     ProtocolVersion,
+	}
+}
+
+func phpVersionViews(items []app.PHPVersionStatus) []PHPVersionView {
+	result := make([]PHPVersionView, 0, len(items))
+	for _, item := range items {
+		result = append(result, PHPVersionView{
+			Version: item.Version, Installed: item.Installed, Configured: item.Configured, Extensions: item.Extensions,
+		})
+	}
+	return result
+}
+
+// BuildOverviewView is the browser polling boundary. It materializes parks
+// once and shares the resulting runtime/status/PHP snapshot across the three
+// panels that used to issue independent requests.
+func BuildOverviewView(ctx context.Context, service *app.App, filter string) (OverviewView, error) {
+	ctx = platform.WithWSLOperation(ctx, platform.WSLOperationPolling)
+	runtime, err := loadProjectViewRuntime(ctx, service)
+	if err != nil {
+		return OverviewView{}, err
+	}
+	phpItems, _ := service.PHPVersions(platform.WithWSLOperation(ctx, platform.WSLOperationStatus))
+	return OverviewView{
+		Projects:    renderProjectViews(runtime, filter),
+		Status:      buildSystemStatusView(ctx, service, runtime.cfg, phpItems, wslAvailability(ctx, service)),
+		PHPVersions: phpVersionViews(phpItems),
 	}, nil
+}
+
+func BuildStatusView(ctx context.Context, service *app.App) (SystemStatusView, error) {
+	cfg, err := service.Store.Load()
+	if err != nil {
+		return SystemStatusView{}, err
+	}
+	phpVers, _ := service.PHPVersions(platform.WithWSLOperation(ctx, platform.WSLOperationStatus))
+	return buildSystemStatusView(ctx, service, cfg, phpVers, wslAvailability(ctx, service)), nil
 }
 
 func BuildGlobalConfigView(service *app.App) (GlobalConfigView, error) {
@@ -244,15 +338,11 @@ func BuildGlobalConfigView(service *app.App) (GlobalConfigView, error) {
 }
 
 func BuildPHPVersionsView(ctx context.Context, service *app.App) ([]PHPVersionView, error) {
-	items, err := service.PHPVersions(ctx)
+	items, err := service.PHPVersions(platform.WithWSLOperation(ctx, platform.WSLOperationStatus))
 	if err != nil {
 		return nil, err
 	}
-	result := make([]PHPVersionView, 0, len(items))
-	for _, item := range items {
-		result = append(result, PHPVersionView{Version: item.Version, Installed: item.Installed, Configured: item.Configured, Extensions: item.Extensions})
-	}
-	return result, nil
+	return phpVersionViews(items), nil
 }
 
 func BuildDoctorChecksView(ctx context.Context, service *app.App, name string) ([]DoctorCheckView, error) {

@@ -4,6 +4,7 @@ import type {
   GlobalConfig,
   MetricsRange,
   MetricsSnapshot,
+  Overview,
   PHPVersion,
   ProjectConfigUpdate,
   ProjectInfo,
@@ -177,6 +178,15 @@ export function parseProjectInfo(value: unknown, path = 'projects[]'): ProjectIn
 
 export function parseProjects(value: unknown): ProjectInfo[] {
   return arrayOf(value, 'projects', parseProjectInfo);
+}
+
+export function parseOverview(value: unknown, expectedVersion = DEVLAN_PROTOCOL_VERSION): Overview {
+  const item = record(value, 'overview');
+  return {
+    projects: parseProjects(item.projects),
+    status: parseSystemStatus(item.status, expectedVersion),
+    phpVersions: parsePHPVersions(item.phpVersions),
+  };
 }
 
 export function parseSystemStatus(

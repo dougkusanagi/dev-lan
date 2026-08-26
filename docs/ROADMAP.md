@@ -169,19 +169,22 @@ o respectivo comando de validação.
 
 ## Marco 7 — Integração WSL madura (P1/P2)
 
-- [ ] `M7-01` Inventariar número/duração de spawns `wsl.exe` por install, reload,
-  discovery, status e polling da web UI.
-- [ ] `M7-02` Agrupar discovery/status e remover shells quando argumentos diretos
+- [x] `M7-01` Inventariar número/duração de spawns `wsl.exe` por install, reload,
+  discovery, status e polling da web UI. Inventário e budgets:
+  [WSL-EXECUTION-PLANE.md](WSL-EXECUTION-PLANE.md).
+- [x] `M7-02` Agrupar discovery/status e remover shells quando argumentos diretos
   bastarem.
-- [ ] `M7-03` Definir contrato versionado/idempotente/cancelável do execution
+- [x] `M7-03` Definir contrato versionado/idempotente/cancelável do execution
   plane Linux, mantendo estado no Windows.
-- [ ] `M7-04` Implementar agente WSL persistente somente se benchmarks mostrarem
-  ganho material sobre batching.
-- [ ] `M7-05` Se implementado, adicionar handshake, erros estruturados,
-  restart/reconnect e fallback, sem segundo estado.
-- [ ] `M7-06` Testar WSL parado/ausente/reiniciado, timeout e incompatibilidade.
+- [x] `M7-04` Avaliar agente WSL persistente com benchmark; o ganho material já
+  é obtido por batching, portanto nenhum agente foi implementado.
+- [x] `M7-05` Contrato direto fornece erros estruturados, cancelamento, retry e
+  fallback; handshake/reconnect de agente não se aplicam sem daemon e não há
+  segundo estado.
+- [x] `M7-06` Testar WSL parado/ausente/reiniciado, timeout e incompatibilidade.
 
-**Gate:** operações WSL cumprem budget; nenhum daemon existe sem ganho medido.
+**Gate:** operações WSL cumprem os budgets documentados; o benchmark mediu
+batching e nenhum daemon existe sem ganho adicional demonstrado.
 
 ## Marco 8 — Observabilidade correta e performática (P1)
 

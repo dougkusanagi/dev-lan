@@ -16,6 +16,16 @@ Um executável Go concentra regras de negócio e oferece a CLI. Ele será respon
 
 Operações administrativas devem ser pequenas e explícitas. A execução normal de `link`, `status` e `open` não deve pedir elevação.
 
+### Fronteira WSL medida
+
+O núcleo usa `wsl.exe` como transporte do execution plane e agrupa discovery,
+status, sondagens de binários/sockets e ACLs com argumentos posicionais. O
+dashboard browser-first consulta o read model agregado
+`GET /api/v1/overview`, evitando materializar projetos, status e PHP em três
+polls independentes. O runner mantém contagem e duração agregadas sem guardar
+comandos; budgets e a decisão de não criar agente Linux persistente estão em
+[Integração WSL — Marco 7](WSL-EXECUTION-PLANE.md).
+
 ### CLI no WSL
 
 O bootstrap instala também um binário Linux `devlan` no WSL. Ele é um cliente

@@ -2,7 +2,6 @@ package platform
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -80,16 +79,19 @@ func (m WSLPHPManager) List(ctx context.Context) ([]PHPInstallation, error) {
 		return nil, fmt.Errorf("%w: WSL não configurado", ErrUnavailable)
 	}
 	versions := []string{"8.5", "8.4", "8.3", "8.2", "8.1", "8.0", "7.4"}
+	commands := make([]string, 0, len(versions)*2+1)
+	for _, version := range versions {
+		commands = append(commands, phpCommand(version), fpmCommand(version))
+	}
+	commands = append(commands, "php")
+	found, err := m.WSL.HasCommands(ctx, commands...)
+	if err != nil {
+		return nil, err
+	}
 	result := make([]PHPInstallation, 0, len(versions))
 	for _, version := range versions {
-		php, err := m.WSL.HasCommand(ctx, phpCommand(version))
-		if err != nil && !errors.Is(err, ErrUnavailable) {
-			return nil, err
-		}
-		fpm, fpmErr := m.WSL.HasCommand(ctx, fpmCommand(version))
-		if fpmErr != nil && !errors.Is(fpmErr, ErrUnavailable) {
-			return nil, fpmErr
-		}
+		php := found[phpCommand(version)]
+		fpm := found[fpmCommand(version)]
 		if !php && !fpm {
 			continue
 		}
@@ -103,7 +105,7 @@ func (m WSLPHPManager) List(ctx context.Context) ([]PHPInstallation, error) {
 	// A distribution may expose only the unversioned binaries. Discover its
 	// branch with a fixed PHP expression, never with project-provided code.
 	if len(result) == 0 {
-		if found, err := m.WSL.HasCommand(ctx, "php"); err == nil && found {
+		if found["php"] {
 			output, runErr := m.WSL.Run(ctx, "php", "-r", "echo PHP_MAJOR_VERSION.'.'.PHP_MINOR_VERSION;")
 			if runErr == nil {
 				if version, normalizeErr := normalizePHPVersion(strings.TrimSpace(output)); normalizeErr == nil {
@@ -151,13 +153,7 @@ func (m WSLPHPManager) runAsRoot(ctx context.Context, args ...string) (string, e
 	if m.WSL.Binary == "" {
 		return "", fmt.Errorf("%w: WSL não configurado", ErrUnavailable)
 	}
-	commandArgs := []string{}
-	if m.WSL.Distribution != "" {
-		commandArgs = append(commandArgs, "--distribution", m.WSL.Distribution)
-	}
-	commandArgs = append(commandArgs, "--user", "root", "--exec")
-	commandArgs = append(commandArgs, args...)
-	return NewExecRunner(m.WSL.Binary).Run(ctx, commandArgs...)
+	return m.WSL.RunAsRoot(ctx, args...)
 }
 
 func (m WSLPHPManager) EnsureRepository(ctx context.Context, version string) error {

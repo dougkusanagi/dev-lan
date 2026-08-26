@@ -2,6 +2,7 @@ import {
   parseDoctorChecks,
   parseGlobalConfig,
   parseMetricsSnapshot,
+  parseOverview,
   parsePHPVersions,
   parseProjects,
   parseSystemStatus,
@@ -11,6 +12,7 @@ import type {
   GlobalConfig,
   MetricsRange,
   MetricsSnapshot,
+  Overview,
   PHPVersion,
   ProjectConfigUpdate,
   ProjectInfo,
@@ -20,6 +22,7 @@ import type {
 export { VersionMismatchError } from './contracts';
 
 export interface WailsApp {
+  GetOverview?: (filter: string) => Promise<unknown>;
   GetProjects: (filter: string) => Promise<unknown>;
   GetStatus: () => Promise<unknown>;
   GetMetrics?: (project: string, range: MetricsRange) => Promise<unknown>;
@@ -66,6 +69,7 @@ declare global {
 }
 
 export interface DevLANClient {
+  getOverview?: (filter?: string) => Promise<Overview>;
   getProjects(filter?: string): Promise<ProjectInfo[]>;
   getStatus(): Promise<SystemStatus>;
   getMetrics(project: string, range: MetricsRange): Promise<MetricsSnapshot | null>;
@@ -213,6 +217,11 @@ export class HttpDevLANClient implements DevLANClient {
   getProjects(filter = ''): Promise<ProjectInfo[]> {
     const query = filter ? `?filter=${encodeURIComponent(filter)}` : '';
     return this.request('GET', `/api/v1/projects${query}`, undefined, parseProjects);
+  }
+
+  getOverview(filter = ''): Promise<Overview> {
+    const query = filter ? `?filter=${encodeURIComponent(filter)}` : '';
+    return this.request('GET', `/api/v1/overview${query}`, undefined, parseOverview);
   }
 
   getStatus(): Promise<SystemStatus> {
@@ -368,6 +377,16 @@ export class WailsDevLANClient implements DevLANClient {
     private readonly runtime?: WailsRuntime,
   ) {}
 
+  async getOverview(filter = ''): Promise<Overview> {
+    if (this.app.GetOverview) return parseOverview(await this.app.GetOverview(filter));
+    const [projects, status, phpVersions] = await Promise.all([
+      this.getProjects(filter),
+      this.getStatus(),
+      this.getPHPVersions(),
+    ]);
+    return { projects, status, phpVersions };
+  }
+
   async getProjects(filter = ''): Promise<ProjectInfo[]> {
     return parseProjects(await this.app.GetProjects(filter));
   }
@@ -505,6 +524,16 @@ export class MockDevLANClient implements DevLANClient {
     this.calls.push(String(name));
     const error = this.failures[name];
     if (error) throw error;
+  }
+
+  async getOverview(filter = '') {
+    this.check('getOverview');
+    const [projects, status, phpVersions] = await Promise.all([
+      this.getProjects(filter),
+      this.getStatus(),
+      this.getPHPVersions(),
+    ]);
+    return { projects, status, phpVersions };
   }
 
   async getProjects(filter = '') {
