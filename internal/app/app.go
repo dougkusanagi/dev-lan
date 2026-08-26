@@ -1501,7 +1501,7 @@ func (a *App) StopDev(ctx context.Context, selector string) error {
 	port := cfg.DevPort(project)
 	var stopErr error
 	if a.DevProxy != nil && os.Getenv("DEVLAN_TEST_MOCK") != "1" {
-		stopErr = a.DevProxy.StopNow(ctx, project.Name)
+		stopErr = a.DevProxy.StopProject(ctx, project, port)
 	} else {
 		stopErr = a.Dev.StopDev(ctx, project, port)
 	}
@@ -1523,7 +1523,7 @@ func (a *App) RestartDev(ctx context.Context, selector string) error {
 	port := cfg.DevPort(project)
 	cmd := cfg.DevCommand(project)
 	if a.DevProxy != nil && os.Getenv("DEVLAN_TEST_MOCK") != "1" {
-		if err := a.DevProxy.StopNow(ctx, project.Name); err != nil {
+		if err := a.DevProxy.StopProject(ctx, project, port); err != nil {
 			return err
 		}
 		if err := a.DevProxy.StartNow(ctx, project, port, cmd, cfg.ProjectIdleTimeout(project)); err != nil {
@@ -1544,6 +1544,18 @@ func (a *App) BuildProject(ctx context.Context, selector string) (string, error)
 	if err != nil {
 		return "", err
 	}
+	resolved, err := cfg.Resolve(project.Name)
+	if err != nil {
+		return "", err
+	}
+	// A production/LAN preview must consume the compiled manifest, never the
+	// Vite hot file. Stop the local HMR process first; StopDev also removes
+	// public/hot, including a process started by the CLI in another session.
+	if resolved.Mode == domain.ModeDev || isLaravelDevScript(cfg, project) {
+		if err := a.StopDev(ctx, project.Name); err != nil {
+			return "", fmt.Errorf("preparar preview LAN: %w", err)
+		}
+	}
 	pm := cfg.PackageManager(project)
 	out, err := a.Dev.Build(ctx, project, pm)
 	if err == nil {
@@ -1553,19 +1565,43 @@ func (a *App) BuildProject(ctx context.Context, selector string) (string, error)
 }
 
 func (a *App) InstallDeps(ctx context.Context, selector string) (string, error) {
-	if a.Dev == nil {
-		return "", fmt.Errorf("gerenciador dev não configurado")
-	}
 	project, cfg, err := a.resolveProject(ctx, selector)
 	if err != nil {
 		return "", err
 	}
-	pm := cfg.PackageManager(project)
-	out, err := a.Dev.InstallDeps(ctx, project, pm)
-	if err == nil {
+	outputs := make([]string, 0, 2)
+	if a.projectHasManifest(ctx, project, "package.json") {
+		if a.Dev == nil {
+			return "", fmt.Errorf("gerenciador dev não configurado")
+		}
+		pm := cfg.PackageManager(project)
+		out, installErr := a.Dev.InstallDeps(ctx, project, pm)
+		outputs = append(outputs, out)
+		if installErr != nil {
+			return strings.Join(outputs, "\n"), installErr
+		}
 		_ = a.appendLog("deps install %s (%s)", project.Name, pm)
 	}
-	return out, err
+	if a.projectHasManifest(ctx, project, "composer.json") {
+		out, installErr := a.RunComposer(ctx, project.Name, "", []string{"--working-dir=" + project.Path, "install", "--no-interaction"})
+		outputs = append(outputs, out)
+		if installErr != nil {
+			return strings.Join(outputs, "\n"), installErr
+		}
+		_ = a.appendLog("deps install %s (composer)", project.Name)
+	}
+	if len(outputs) == 0 {
+		return "", fmt.Errorf("nenhum package.json ou composer.json encontrado em %s", project.Name)
+	}
+	return strings.Join(outputs, "\n"), nil
+}
+
+func (a *App) projectHasManifest(ctx context.Context, project domain.Project, name string) bool {
+	if _, err := os.Stat(filepath.Join(filepath.FromSlash(project.Path), name)); err == nil {
+		return true
+	}
+	_, err := a.WSL.Run(ctx, "/bin/sh", "-c", `test -f "$1/$2"`, "devlan", project.Path, name)
+	return err == nil
 }
 
 func (a *App) ProjectDevLogs(ctx context.Context, selector string, lines int) (string, error) {

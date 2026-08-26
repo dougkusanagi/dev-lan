@@ -106,6 +106,20 @@ func (p *DevProxy) StopNow(ctx context.Context, name string) error {
 	return nil
 }
 
+// StopProject also stops a backend that was started by a short-lived CLI
+// process and therefore has no gateway entry in this DevProxy instance.
+func (p *DevProxy) StopProject(ctx context.Context, project domain.Project, listenPort int) error {
+	if entry := p.entryFor(project.Name); entry != nil {
+		p.mu.Lock()
+		running := entry.running
+		p.mu.Unlock()
+		if running {
+			return p.StopNow(ctx, project.Name)
+		}
+	}
+	return p.manager.StopDev(ctx, project, devBackendPort(listenPort))
+}
+
 func (p *DevProxy) Status(name string) (running, starting bool) {
 	entry := p.entryFor(name)
 	if entry == nil {

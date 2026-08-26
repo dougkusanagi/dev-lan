@@ -35,6 +35,15 @@ devlan doctor
 devlan status
 ```
 
+O bootstrap existe para colocar a CLI e os pré-requisitos na máquina. Depois
+disso, `devlan install` é o comando idempotente para criar ou reconciliar os
+arquivos gerenciados, as configurações de Caddy/PHP-FPM e a regra de firewall. Execute-o em um
+PowerShell elevado quando a operação envolver firewall ou certificados:
+
+```powershell
+devlan install
+```
+
 ## O que o bootstrap instala
 
 - WSL/Ubuntu quando não existe uma distribuição instalada; nesse caso o
@@ -50,6 +59,10 @@ devlan status
   `pm.process_idle_timeout=10s` e `pm.max_requests=500`.
 - `devlan.exe` em `%LOCALAPPDATA%\DevLAN\bin`, PATH do usuário e a regra de
   firewall privada do DevLAN.
+
+O executável instalado usa o subsistema de console do Windows: `devlan`,
+`devlan -h` e mensagens de erro sempre aparecem no PowerShell. A interface
+Wails é iniciada explicitamente por `devlan gui`.
 
 O bootstrap pode ser executado novamente com segurança. Go e Caddy no Windows
 são reutilizados quando já existem; no WSL, PHP-FPM da versão escolhida, suas

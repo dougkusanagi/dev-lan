@@ -398,13 +398,18 @@ function Build-Devlan {
     $bin = Join-Path $InstallRoot 'bin'
     New-Item -ItemType Directory -Path $bin -Force | Out-Null
     $target = Join-Path $bin 'devlan.exe'
+    $resourcePath = Join-Path $SourceRoot 'cmd\devlan\devlan_resource_windows_amd64.syso'
     Push-Location $SourceRoot
     try {
-        # Wails requires the desktop build tag. Production enables the
-        # production runtime path, and windowsgui prevents a console window
-        # from being created when the GUI is launched.
-        Invoke-Native $GoPath @('build', '-tags', 'desktop,production', '-ldflags', '-w -s -H windowsgui', '-trimpath', '-o', $target, './cmd/devlan') | Write-Host
+        Invoke-Native $GoPath @('run', './cmd/devlan-resource', '-output', $resourcePath) | Write-Host
+        # The installed executable is first and foremost a CLI. Keep the
+        # console subsystem so `devlan`, `devlan -h` and errors are visible in
+        # PowerShell. The desktop build tag still enables `devlan gui`.
+        Invoke-Native $GoPath @('build', '-tags', 'desktop,production', '-ldflags', '-w -s', '-trimpath', '-o', $target, './cmd/devlan') | Write-Host
     } finally {
+        if (Test-Path -LiteralPath $resourcePath) {
+            Remove-Item -LiteralPath $resourcePath -Force
+        }
         Pop-Location
     }
     Add-UserPath $bin

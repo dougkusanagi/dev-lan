@@ -94,6 +94,12 @@ func TestResolvedProjectURLUsesTLSState(t *testing.T) {
 	}
 }
 
+func TestLocalDevURLUsesProjectLocalhostOrigin(t *testing.T) {
+	if got, want := LocalDevURL("cj-spec-sheet"), "https://cj-spec-sheet.localhost"; got != want {
+		t.Fatalf("LocalDevURL() = %q, want %q", got, want)
+	}
+}
+
 func TestPHPVersionAndPoolResolution(t *testing.T) {
 	cfg := NewConfig()
 	if _, err := cfg.AddPHPVersion("8.3", []string{"xml", "mbstring"}); err != nil {
@@ -299,5 +305,3 @@ func TestExposureExpiration(t *testing.T) {
 		t.Fatal("permanent-app não deveria estar expirado")
 	}
 }
-
-

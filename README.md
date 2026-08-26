@@ -111,7 +111,11 @@ ou configurar WSL, Caddy e a regra de firewall. Em seguida, execute:
 curl.exe -fsSL https://raw.githubusercontent.com/dougkusanagi/dev-lan/master/scripts/install.ps1 -o "$env:TEMP\devlan-install.ps1"; powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\devlan-install.ps1"
 ```
 
-O fluxo completo e as opções estão em [docs/INSTALL.md](docs/INSTALL.md).
+O script de bootstrap instala o executável e suas dependências; ao final ele
+executa `devlan install`, que cria ou reconcilia a configuração gerenciada. Com
+a CLI já instalada, `devlan install` é o comando padrão e idempotente para
+configurar novamente o ambiente. O fluxo completo e as opções estão em
+[docs/INSTALL.md](docs/INSTALL.md).
 
 ## Desenvolvimento
 
@@ -130,8 +134,7 @@ go run ./cmd/devlan --data-dir .devlan install
 go run ./cmd/devlan --data-dir .devlan doctor
 ```
 
-Para compilar a versão desktop no Windows, use o script que já inclui as tags
-e flags necessárias do Wails:
+Para compilar a CLI com suporte à interface desktop no Windows, use o script:
 
 ```powershell
 .\scripts\build.ps1

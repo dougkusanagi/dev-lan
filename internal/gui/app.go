@@ -20,26 +20,29 @@ import (
 )
 
 type ProjectView struct {
-	Name           string `json:"name"`
-	Path           string `json:"path"`
-	Kind           string `json:"kind"` // "linked" or "parked"
-	Mode           string `json:"mode"`
-	EffectiveMode  string `json:"effectiveMode"`
-	Framework      string `json:"framework"`
-	URL            string `json:"url"`
-	LANURL         string `json:"lanUrl"`
-	TLSEnabled     bool   `json:"tlsEnabled"`
-	RoutingMode    string `json:"routingMode"`
-	Port           int    `json:"port,omitempty"`
-	Host           string `json:"host,omitempty"`
-	Status         string `json:"status"` // "ready", "starting", "stopped", "degraded", "error"
-	StatusDetail   string `json:"statusDetail,omitempty"`
-	PHPVersion     string `json:"phpVersion,omitempty"`
-	PackageManager string `json:"packageManager,omitempty"`
-	StaticDir      string `json:"staticDir,omitempty"`
-	DevRunning     bool   `json:"devRunning"`
-	DevPid         int    `json:"devPid,omitempty"`
-	DevPort        int    `json:"devPort,omitempty"`
+	Name            string `json:"name"`
+	Path            string `json:"path"`
+	Kind            string `json:"kind"` // "linked" or "parked"
+	Mode            string `json:"mode"`
+	EffectiveMode   string `json:"effectiveMode"`
+	Framework       string `json:"framework"`
+	URL             string `json:"url"`
+	LANURL          string `json:"lanUrl"`
+	LocalDevURL     string `json:"localDevUrl"`
+	LocalDevState   string `json:"localDevState"`   // "active", "starting", "stopped", "available"
+	LANPreviewState string `json:"lanPreviewState"` // "ready" or "paused"
+	TLSEnabled      bool   `json:"tlsEnabled"`
+	RoutingMode     string `json:"routingMode"`
+	Port            int    `json:"port,omitempty"`
+	Host            string `json:"host,omitempty"`
+	Status          string `json:"status"` // "ready", "starting", "stopped", "degraded", "error"
+	StatusDetail    string `json:"statusDetail,omitempty"`
+	PHPVersion      string `json:"phpVersion,omitempty"`
+	PackageManager  string `json:"packageManager,omitempty"`
+	StaticDir       string `json:"staticDir,omitempty"`
+	DevRunning      bool   `json:"devRunning"`
+	DevPid          int    `json:"devPid,omitempty"`
+	DevPort         int    `json:"devPort,omitempty"`
 }
 
 type SystemStatusView struct {
@@ -220,23 +223,30 @@ func (a *App) GetProjects(filter string) ([]ProjectView, error) {
 		}
 
 		view := ProjectView{
-			Name:           project.Name,
-			Path:           project.Path,
-			Kind:           kind,
-			Mode:           modeVal,
-			EffectiveMode:  string(resolved.Mode),
-			Framework:      framework,
-			URL:            url,
-			LANURL:         url,
-			TLSEnabled:     tlsActive,
-			RoutingMode:    string(resolved.RouteMode),
-			Port:           resolved.RoutePort,
-			Host:           resolved.RouteHost,
-			Status:         "ready",
-			PHPVersion:     phpVer,
-			PackageManager: pm,
-			StaticDir:      staticDir,
-			DevRunning:     false,
+			Name:            project.Name,
+			Path:            project.Path,
+			Kind:            kind,
+			Mode:            modeVal,
+			EffectiveMode:   string(resolved.Mode),
+			Framework:       framework,
+			URL:             url,
+			LANURL:          url,
+			LocalDevURL:     domain.LocalDevURL(project.Name),
+			LocalDevState:   "available",
+			LANPreviewState: "ready",
+			TLSEnabled:      tlsActive,
+			RoutingMode:     string(resolved.RouteMode),
+			Port:            resolved.RoutePort,
+			Host:            resolved.RouteHost,
+			Status:          "ready",
+			PHPVersion:      phpVer,
+			PackageManager:  pm,
+			StaticDir:       staticDir,
+			DevRunning:      false,
+		}
+		devCapable := resolved.Mode == domain.ModeDev || resolved.Mode == domain.ModeAuto || (resolved.Mode == domain.ModePHP && effective.PHPProjectPreset(project) == domain.PHPPresetLaravel)
+		if devCapable {
+			view.LocalDevState = "stopped"
 		}
 		if !edgeReady || !wslReady {
 			view.Status = "degraded"
@@ -259,7 +269,7 @@ func (a *App) GetProjects(filter string) ([]ProjectView, error) {
 		}
 
 		// Check dev server status if applicable
-		if resolved.Mode == domain.ModeDev || resolved.Mode == domain.ModeAuto || (resolved.Mode == domain.ModePHP && effective.PHPProjectPreset(project) == domain.PHPPresetLaravel) {
+		if devCapable {
 			devStatus, devErr := a.service.DevStatus(ctx, project.Name)
 			if devErr == nil {
 				view.DevPort = devStatus.Port
@@ -267,11 +277,15 @@ func (a *App) GetProjects(filter string) ([]ProjectView, error) {
 				switch devStatus.State {
 				case platform.StateRunning:
 					view.DevRunning = true
+					view.LocalDevState = "active"
+					view.LANPreviewState = "paused"
 					if view.Status != "degraded" {
 						view.Status = "ready"
 					}
 				case platform.StateStarting:
 					view.DevRunning = true
+					view.LocalDevState = "starting"
+					view.LANPreviewState = "paused"
 					if view.Status != "degraded" {
 						view.Status = "starting"
 					}

@@ -115,22 +115,31 @@ func RenderWindows(cfg domain.Config) (string, error) {
 		if host == "" || host == "auto" {
 			host = "localhost"
 		}
-		fmt.Fprintf(&b, "https://%s:%d {\n", host, cfg.HTTPSPort)
+		fmt.Fprintf(&b, "https://%s:%d", host, cfg.HTTPSPort)
+		for _, route := range routes {
+			fmt.Fprintf(&b, " https://%s.localhost", route.Project.Name)
+		}
+		b.WriteString(" {\n")
 		b.WriteString("    bind 0.0.0.0\n")
 		b.WriteString("    tls internal\n")
 		b.WriteString("    encode gzip\n")
+		renderWindowsLocalRoutes(&b, cfg, routes)
 		if hasProjectTLSPreferences(cfg) {
 			for index, name := range secureProjectNames(cfg) {
 				fmt.Fprintf(&b, "    @devlan_secure_path_%d path /%s /%s/*\n", index, name, name)
 				fmt.Fprintf(&b, "    handle @devlan_secure_path_%d {\n", index)
 				fmt.Fprintf(&b, "        reverse_proxy 127.0.0.1:%d {\n", cfg.WSLPort)
 				b.WriteString("            header_up X-DevLAN-HTTPS on\n")
+				b.WriteString("            header_up -X-DevLAN-Project\n")
+				b.WriteString("            header_up -X-DevLAN-Local\n")
 				b.WriteString("        }\n")
 				b.WriteString("    }\n")
 				fmt.Fprintf(&b, "    @devlan_secure_referer_%d header_regexp Referer ^https://[^/]+/%s(?:/|$)\n", index, regexp.QuoteMeta(name))
 				fmt.Fprintf(&b, "    handle @devlan_secure_referer_%d {\n", index)
 				fmt.Fprintf(&b, "        reverse_proxy 127.0.0.1:%d {\n", cfg.WSLPort)
 				b.WriteString("            header_up X-DevLAN-HTTPS on\n")
+				b.WriteString("            header_up -X-DevLAN-Project\n")
+				b.WriteString("            header_up -X-DevLAN-Local\n")
 				b.WriteString("        }\n")
 				b.WriteString("    }\n")
 			}
@@ -147,10 +156,14 @@ func RenderWindows(cfg domain.Config) (string, error) {
 			}
 			fmt.Fprintf(&b, "    reverse_proxy 127.0.0.1:%d {\n", cfg.WSLPort)
 			b.WriteString("        header_up X-DevLAN-HTTPS on\n")
+			b.WriteString("        header_up -X-DevLAN-Project\n")
+			b.WriteString("        header_up -X-DevLAN-Local\n")
 			b.WriteString("    }\n")
 		} else {
 			fmt.Fprintf(&b, "    reverse_proxy 127.0.0.1:%d {\n", cfg.WSLPort)
 			b.WriteString("        header_up X-DevLAN-HTTPS on\n")
+			b.WriteString("        header_up -X-DevLAN-Project\n")
+			b.WriteString("        header_up -X-DevLAN-Local\n")
 			b.WriteString("    }\n")
 		}
 		b.WriteString("}\n")
@@ -158,8 +171,17 @@ func RenderWindows(cfg domain.Config) (string, error) {
 		fmt.Fprintf(&b, ":%d {\n", cfg.WindowsPort)
 		b.WriteString("    bind 0.0.0.0\n")
 		b.WriteString("    encode gzip\n")
-		fmt.Fprintf(&b, "    reverse_proxy 127.0.0.1:%d\n", cfg.WSLPort)
+		fmt.Fprintf(&b, "    reverse_proxy 127.0.0.1:%d {\n", cfg.WSLPort)
+		b.WriteString("        header_up -X-DevLAN-Project\n")
+		b.WriteString("        header_up -X-DevLAN-Local\n")
+		b.WriteString("    }\n")
 		b.WriteString("}\n")
+	}
+
+	// When LAN TLS is disabled, local HMR still uses one secure listener so
+	// cookies and Vite URLs remain stable on the developer's machine.
+	if !cfg.TLSEnabled {
+		renderWindowsLocalOnly(&b, cfg, routes)
 	}
 
 	// Render dedicated port forwarders for projects configured in 'port' mode
@@ -192,6 +214,70 @@ func RenderWindows(cfg domain.Config) (string, error) {
 	}
 
 	return b.String(), nil
+}
+
+func renderWindowsLocalOnly(b *strings.Builder, cfg domain.Config, routes []Route) {
+	if len(routes) == 0 {
+		return
+	}
+	b.WriteString("\n")
+	for index, route := range routes {
+		if index > 0 {
+			b.WriteString(" ")
+		}
+		fmt.Fprintf(b, "https://%s.localhost", route.Project.Name)
+	}
+	b.WriteString(" {\n")
+	b.WriteString("    tls internal\n")
+	b.WriteString("    encode gzip\n")
+	renderWindowsLocalRoutes(b, cfg, routes)
+	b.WriteString("}\n")
+}
+
+func renderWindowsLocalRoutes(b *strings.Builder, cfg domain.Config, routes []Route) {
+	for _, route := range routes {
+		name := route.Project.Name
+		fmt.Fprintf(b, "\n    @devlan_local_edge_%s {\n", name)
+		fmt.Fprintf(b, "        host %s.localhost\n", name)
+		b.WriteString("        remote_ip 127.0.0.1 ::1\n")
+		b.WriteString("    }\n")
+		fmt.Fprintf(b, "    handle @devlan_local_edge_%s {\n", name)
+
+		if route.Mode == domain.ModePHP && route.Preset == domain.PHPPresetLaravel {
+			matcher := "devlan_local_vite_" + name
+			backend := viteBackendPort(cfg.DevPort(route.Project))
+			// Vite's HMR websocket uses the root path, so it must be routed
+			// before the PHP fallback. Caddy preserves websocket upgrades.
+			fmt.Fprintf(b, "        @%s_ws header Upgrade websocket\n", matcher)
+			fmt.Fprintf(b, "        handle @%s_ws {\n", matcher)
+			fmt.Fprintf(b, "            reverse_proxy 127.0.0.1:%d\n", backend)
+			b.WriteString("        }\n")
+			fmt.Fprintf(b, "        @%s path /@* /resources/* /node_modules/* /__laravel_vite_plugin__/* /src/*\n", matcher)
+			fmt.Fprintf(b, "        handle @%s {\n", matcher)
+			fmt.Fprintf(b, "            reverse_proxy 127.0.0.1:%d\n", backend)
+			b.WriteString("        }\n")
+		}
+
+		if route.Mode == domain.ModeDev {
+			fmt.Fprintf(b, "        reverse_proxy 127.0.0.1:%d\n", cfg.DevPort(route.Project))
+		} else {
+			fmt.Fprintf(b, "        reverse_proxy 127.0.0.1:%d {\n", cfg.WSLPort)
+			b.WriteString("            header_up -X-DevLAN-Project\n")
+			fmt.Fprintf(b, "            header_up X-DevLAN-Project %s\n", name)
+			b.WriteString("            header_up -X-DevLAN-Local\n")
+			b.WriteString("            header_up X-DevLAN-Local on\n")
+			b.WriteString("            header_up X-DevLAN-HTTPS on\n")
+			b.WriteString("        }\n")
+		}
+		b.WriteString("    }\n")
+	}
+}
+
+func viteBackendPort(listen int) int {
+	if listen <= 55000 {
+		return listen + 10000
+	}
+	return listen - 1000
 }
 
 func unsecureProjectNames(cfg domain.Config) []string {
@@ -273,6 +359,21 @@ func RenderWSLWithAccessLog(cfg domain.Config, accessLogPath string) (string, er
 	b.WriteString("    respond @devlan_health \"ok\" 200\n\n")
 
 	now := time.Now()
+
+	// Host-based local development requests intentionally use the project
+	// document root (without the LAN /project prefix), so Laravel generates
+	// normal browser URLs while the Vite origin remains https://project.localhost.
+	for _, route := range routes {
+		name := route.Project.Name
+		fmt.Fprintf(&b, "    @devlan_local_%s header_regexp Host ^%s\\.localhost(?::\\d+)?$\n", name, regexp.QuoteMeta(name))
+		fmt.Fprintf(&b, "    handle @devlan_local_%s {\n", name)
+		if cfg.IsExposureExpired(route.Project, now) {
+			b.WriteString("        respond \"Acesso expirado\" 403\n")
+		} else {
+			renderProjectServing(&b, cfg, route, true)
+		}
+		b.WriteString("    }\n\n")
+	}
 
 	// 1. Port-based routes (matched by X-DevLAN-Port header forwarded from Windows edge)
 	for _, route := range routes {
