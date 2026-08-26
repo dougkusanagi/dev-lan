@@ -128,19 +128,21 @@ sem `Referer`, hosts file ou DNS.
   canal autenticado quando necessário.
 - [ ] `M5-09` Fazer `devlan gui`/tray abrir `devlan.localhost`, com fallback
   acionável para a porta.
-- [ ] `M5-10` Manter `ui_access=local` como default; acesso LAN só entra depois
+- [ ] `M5-10` Fazer `devlan gui` iniciar a interface em segundo plano e devolver
+  o terminal; oferecer `devlan gui --foreground` para diagnóstico e logs.
+- [ ] `M5-11` Manter `ui_access=local` como default; acesso LAN só entra depois
   de autenticação, TLS, rate limiting, sessão revogável e firewall dedicados.
-- [ ] `M5-11` Fazer o bootstrap via `curl` instalar o DevLAN Core — CLI,
+- [ ] `M5-12` Fazer o bootstrap via `curl` instalar o DevLAN Core — CLI,
   servidor web/API e infraestrutura Windows+WSL — sem exigir o componente
   desktop nativo.
-- [ ] `M5-12` Implementar `devlan desktop install|status|uninstall` para instalar
+- [ ] `M5-13` Implementar `devlan desktop install|status|uninstall` para instalar
   e remover independentemente um artefato Windows assinado, verificado e
   compatível com a versão principal da API.
-- [ ] `M5-13` Componente desktop opcional: tray, notificações, inicialização com
+- [ ] `M5-14` Componente desktop opcional: tray, notificações, inicialização com
   login e atalho para abrir a interface web.
-- [ ] `M5-14` Permitir habilitar/desabilitar a inicialização com login sem
+- [ ] `M5-15` Permitir habilitar/desabilitar a inicialização com login sem
   reinstalar o Core e sem exigir que a janela Wails permaneça aberta.
-- [ ] `M5-15` Definir instalação por usuário, atualização atômica, rollback e
+- [ ] `M5-16` Definir instalação por usuário, atualização atômica, rollback e
   mensagem acionável quando Desktop e Core tiverem versões incompatíveis.
 
 **Gate:** a mesma GUI/API funciona nas duas URLs locais, nenhuma mutação é
