@@ -1,4 +1,13 @@
-import { MetricsRange, MetricsSnapshot, ProjectInfo, SystemStatus, DoctorCheck, GlobalConfig, ProjectConfigUpdate, PHPVersion } from './types';
+import type {
+  DoctorCheck,
+  GlobalConfig,
+  MetricsRange,
+  MetricsSnapshot,
+  PHPVersion,
+  ProjectConfigUpdate,
+  ProjectInfo,
+  SystemStatus,
+} from './types';
 
 declare global {
   interface Window {
@@ -49,9 +58,15 @@ declare global {
 const isWails = typeof window !== 'undefined' && !!window.go?.gui?.App;
 const mockDevProjects = new Set(['portal-vite']);
 
+function getWailsApp() {
+  const app = window.go?.gui?.App;
+  if (!app) throw new Error('Wails App indisponível.');
+  return app;
+}
+
 export const api = {
   async getProjects(filter = ''): Promise<ProjectInfo[]> {
-    if (isWails) return window.go!.gui!.App!.GetProjects(filter);
+    if (isWails) return getWailsApp().GetProjects(filter);
     return [
       {
         name: 'financeiro',
@@ -89,12 +104,12 @@ export const api = {
         devRunning: mockDevProjects.has('portal-vite'),
         devPort: 5173,
         devPid: 12450,
-      }
+      },
     ];
   },
 
   async getStatus(): Promise<SystemStatus> {
-    if (isWails) return window.go!.gui!.App!.GetStatus();
+    if (isWails) return getWailsApp().GetStatus();
     return {
       lanIp: '192.168.1.100',
       windowsPort: 80,
@@ -113,14 +128,14 @@ export const api = {
 
   async getMetrics(project: string, range: MetricsRange): Promise<MetricsSnapshot | null> {
     if (isWails) {
-      const method = window.go!.gui!.App!.GetMetrics;
+      const method = getWailsApp().GetMetrics;
       return method ? method(project, range) : null;
     }
     return null;
   },
 
   async getGlobalConfig(): Promise<GlobalConfig> {
-    if (isWails) return window.go!.gui!.App!.GetGlobalConfig();
+    if (isWails) return getWailsApp().GetGlobalConfig();
     return {
       defaultMode: 'auto',
       windowsPort: 80,
@@ -133,7 +148,7 @@ export const api = {
   },
 
   async getPHPVersions(): Promise<PHPVersion[]> {
-    if (isWails) return window.go!.gui!.App!.GetPHPVersions();
+    if (isWails) return getWailsApp().GetPHPVersions();
     return [
       { version: '8.3', installed: true, configured: true },
       { version: '8.5', installed: true, configured: false },
@@ -141,123 +156,143 @@ export const api = {
   },
 
   async installPHPVersion(version: string): Promise<void> {
-    if (isWails) return window.go!.gui!.App!.InstallPHPVersion(version);
+    if (isWails) return getWailsApp().InstallPHPVersion(version);
   },
 
   async removePHPVersion(version: string): Promise<void> {
-    if (isWails) return window.go!.gui!.App!.RemovePHPVersion(version);
+    if (isWails) return getWailsApp().RemovePHPVersion(version);
   },
 
   async setDefaultPHPVersion(version: string): Promise<void> {
-    if (isWails) return window.go!.gui!.App!.SetDefaultPHPVersion(version);
+    if (isWails) return getWailsApp().SetDefaultPHPVersion(version);
   },
 
   async saveGlobalConfig(cfg: GlobalConfig): Promise<void> {
-    if (isWails) return window.go!.gui!.App!.SaveGlobalConfig(cfg);
+    if (isWails) return getWailsApp().SaveGlobalConfig(cfg);
   },
 
   async saveProjectConfig(update: ProjectConfigUpdate): Promise<void> {
-    if (isWails) return window.go!.gui!.App!.SaveProjectConfig(update);
+    if (isWails) return getWailsApp().SaveProjectConfig(update);
   },
 
   async linkProject(name: string, path: string): Promise<void> {
-    if (isWails) return window.go!.gui!.App!.LinkProject(name, path);
+    if (isWails) return getWailsApp().LinkProject(name, path);
   },
 
   async unlinkProject(name: string): Promise<void> {
-    if (isWails) return window.go!.gui!.App!.UnlinkProject(name);
+    if (isWails) return getWailsApp().UnlinkProject(name);
   },
 
   async hideProject(name: string): Promise<void> {
-    if (isWails) return window.go!.gui!.App!.HideProject(name);
+    if (isWails) return getWailsApp().HideProject(name);
   },
 
   async parkDir(path: string): Promise<void> {
-    if (isWails) return window.go!.gui!.App!.ParkDir(path);
+    if (isWails) return getWailsApp().ParkDir(path);
   },
 
   async unparkDir(path: string): Promise<void> {
-    if (isWails) return window.go!.gui!.App!.UnparkDir(path);
+    if (isWails) return getWailsApp().UnparkDir(path);
   },
 
   async startDev(name: string): Promise<void> {
-    if (isWails) return window.go!.gui!.App!.StartDev(name);
+    if (isWails) return getWailsApp().StartDev(name);
     mockDevProjects.add(name);
   },
 
   async stopDev(name: string): Promise<void> {
-    if (isWails) return window.go!.gui!.App!.StopDev(name);
+    if (isWails) return getWailsApp().StopDev(name);
     mockDevProjects.delete(name);
   },
 
   async restartDev(name: string): Promise<void> {
-    if (isWails) return window.go!.gui!.App!.RestartDev(name);
+    if (isWails) return getWailsApp().RestartDev(name);
     mockDevProjects.add(name);
   },
 
   async buildProject(name: string): Promise<string> {
-    if (isWails) return window.go!.gui!.App!.BuildProject(name);
+    if (isWails) return getWailsApp().BuildProject(name);
     return 'Build concluído com sucesso (Mock)';
   },
 
   async installDeps(name: string): Promise<string> {
-    if (isWails) return window.go!.gui!.App!.InstallDeps(name);
+    if (isWails) return getWailsApp().InstallDeps(name);
     return 'Dependências instaladas (Mock)';
   },
 
   async getProjectLogs(name: string, lines = 100): Promise<string> {
-    if (isWails) return window.go!.gui!.App!.GetProjectLogs(name, lines);
+    if (isWails) return getWailsApp().GetProjectLogs(name, lines);
     return `[DevLAN Log Mock para ${name}]\nServidor inicializado em http://localhost:5173\nPronto para receber conexões da LAN.`;
   },
 
   async runDoctor(name = ''): Promise<DoctorCheck[]> {
-    if (isWails) return window.go!.gui!.App!.RunDoctor(name);
+    if (isWails) return getWailsApp().RunDoctor(name);
     return [
-      { name: 'Firewall', status: 'OK', detail: 'Porta 80 e 443 abertas para rede privada', fixable: false },
-      { name: 'Caddy Windows', status: 'OK', detail: 'Executando e respondendo em 127.0.0.1:2019', fixable: false },
-      { name: 'Caddy WSL', status: 'OK', detail: 'Executando e respondendo em 127.0.0.1:2020', fixable: false },
-      { name: 'PHP-FPM', status: 'OK', detail: 'PHP 8.3 mestre ativo com pm=ondemand', fixable: false },
+      {
+        name: 'Firewall',
+        status: 'OK',
+        detail: 'Porta 80 e 443 abertas para rede privada',
+        fixable: false,
+      },
+      {
+        name: 'Caddy Windows',
+        status: 'OK',
+        detail: 'Executando e respondendo em 127.0.0.1:2019',
+        fixable: false,
+      },
+      {
+        name: 'Caddy WSL',
+        status: 'OK',
+        detail: 'Executando e respondendo em 127.0.0.1:2020',
+        fixable: false,
+      },
+      {
+        name: 'PHP-FPM',
+        status: 'OK',
+        detail: 'PHP 8.3 mestre ativo com pm=ondemand',
+        fixable: false,
+      },
     ];
   },
 
   async applyDoctorFix(action: string, target: string): Promise<void> {
-    if (isWails) return window.go!.gui!.App!.ApplyDoctorFix(action, target);
+    if (isWails) return getWailsApp().ApplyDoctorFix(action, target);
   },
 
   async openURL(url: string): Promise<void> {
     if (isWails) {
-      return window.go!.gui!.App!.OpenURL(url);
+      return getWailsApp().OpenURL(url);
     }
     window.open(url, '_blank');
   },
 
   async copyURL(url: string): Promise<void> {
     if (isWails) {
-      return window.go!.gui!.App!.CopyURL(url);
+      return getWailsApp().CopyURL(url);
     }
     await navigator.clipboard.writeText(url);
   },
 
   async reload(): Promise<void> {
-    if (isWails) return window.go!.gui!.App!.Reload();
+    if (isWails) return getWailsApp().Reload();
   },
 
   async exportConfigJSON(): Promise<string> {
-    if (isWails) return window.go!.gui!.App!.ExportConfigJSON();
+    if (isWails) return getWailsApp().ExportConfigJSON();
     return JSON.stringify({}, null, 2);
   },
 
   async exportDiagnostic(): Promise<string> {
-    if (isWails) return window.go!.gui!.App!.ExportDiagnostic();
+    if (isWails) return getWailsApp().ExportDiagnostic();
     return '';
   },
 
   async trustCA(): Promise<void> {
-    if (isWails) return window.go!.gui!.App!.TrustCA();
+    if (isWails) return getWailsApp().TrustCA();
   },
 
   async getSecurityAudit(lines = 100): Promise<string> {
-    if (isWails) return window.go!.gui!.App!.GetSecurityAudit(lines);
+    if (isWails) return getWailsApp().GetSecurityAudit(lines);
     return '';
-  }
+  },
 };
