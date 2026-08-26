@@ -67,6 +67,7 @@ func RenderWindows(cfg domain.Config) (string, error) {
 	fmt.Fprintf(&b, "    admin %s\n", windowsAdminAddress)
 	if cfg.TLSEnabled {
 		b.WriteString("    auto_https disable_redirects\n")
+		b.WriteString("    local_certs\n")
 	} else {
 		b.WriteString("    auto_https off\n")
 	}
@@ -102,8 +103,14 @@ func RenderWindows(cfg domain.Config) (string, error) {
 		b.WriteString("        header_up -X-DevLAN-Project\n")
 		b.WriteString("        header_up -X-DevLAN-Local\n")
 		b.WriteString("        header_up -X-DevLAN-HTTPS\n")
+		b.WriteString("        header_up -X-Forwarded-For\n")
+		b.WriteString("        header_up -X-Forwarded-Host\n")
+		b.WriteString("        header_up -X-Forwarded-Proto\n")
+		b.WriteString("        header_up -X-Forwarded-Port\n")
 		fmt.Fprintf(&b, "        header_up X-DevLAN-Port %d\n", port)
 		fmt.Fprintf(&b, "        header_up X-DevLAN-Project %s\n", route.Project.Name)
+		b.WriteString("        header_up X-Forwarded-Host {http.request.host}\n")
+		b.WriteString("        header_up X-Forwarded-Proto {http.request.scheme}\n")
 		fmt.Fprintf(&b, "        header_up X-Forwarded-Port %d\n", port)
 		if cfg.TLSEnabled && cfg.SecureProject(route.Project) {
 			b.WriteString("        header_up X-DevLAN-HTTPS on\n")
@@ -116,20 +123,38 @@ func RenderWindows(cfg domain.Config) (string, error) {
 }
 
 func renderWindowsLocalOnly(b *strings.Builder, cfg domain.Config, routes []Route) {
-	if len(routes) == 0 {
-		return
+	uiPort := cfg.UIPort
+	if uiPort == 0 {
+		uiPort = 3210
 	}
-	b.WriteString("\n")
-	for index, route := range routes {
-		if index > 0 {
-			b.WriteString(" ")
-		}
-		fmt.Fprintf(b, "https://%s.localhost", route.Project.Name)
+	b.WriteString("\nhttps://devlan.localhost")
+	for _, route := range routes {
+		fmt.Fprintf(b, " https://%s.localhost", route.Project.Name)
 	}
 	b.WriteString(" {\n")
 	b.WriteString("    tls internal\n")
 	b.WriteString("    encode gzip\n")
+	b.WriteString("\n    @devlan_admin_edge {\n")
+	b.WriteString("        host devlan.localhost\n")
+	b.WriteString("        remote_ip 127.0.0.1 ::1\n")
+	b.WriteString("    }\n")
+	b.WriteString("    handle @devlan_admin_edge {\n")
+	fmt.Fprintf(b, "        reverse_proxy 127.0.0.1:%d\n", uiPort)
+	b.WriteString("    }\n")
 	renderWindowsLocalRoutes(b, cfg, routes)
+	b.WriteString("    respond \"Acesso local permitido somente via loopback\" 403\n")
+	b.WriteString("}\n")
+
+	// Local names are HTTPS-only by contract, but users who type an http URL
+	// should receive an upgrade. The remote matcher keeps this listener from
+	// becoming a LAN route merely because a client forges a Host header.
+	b.WriteString("\nhttp://devlan.localhost")
+	for _, route := range routes {
+		fmt.Fprintf(b, " http://%s.localhost", route.Project.Name)
+	}
+	b.WriteString(" {\n")
+	b.WriteString("    @devlan_local_http_loopback remote_ip 127.0.0.1 ::1\n")
+	b.WriteString("    redir @devlan_local_http_loopback https://{http.request.host}{uri} permanent\n")
 	b.WriteString("    respond \"Acesso local permitido somente via loopback\" 403\n")
 	b.WriteString("}\n")
 }
@@ -166,9 +191,16 @@ func renderWindowsLocalRoutes(b *strings.Builder, cfg domain.Config, routes []Ro
 			b.WriteString("            header_up -X-DevLAN-Project\n")
 			b.WriteString("            header_up -X-DevLAN-Local\n")
 			b.WriteString("            header_up -X-DevLAN-HTTPS\n")
+			b.WriteString("            header_up -X-Forwarded-For\n")
+			b.WriteString("            header_up -X-Forwarded-Host\n")
+			b.WriteString("            header_up -X-Forwarded-Proto\n")
+			b.WriteString("            header_up -X-Forwarded-Port\n")
 			fmt.Fprintf(b, "            header_up X-DevLAN-Project %s\n", name)
 			b.WriteString("            header_up X-DevLAN-Local on\n")
 			b.WriteString("            header_up X-DevLAN-HTTPS on\n")
+			b.WriteString("            header_up X-Forwarded-Host {http.request.host}\n")
+			b.WriteString("            header_up X-Forwarded-Proto https\n")
+			b.WriteString("            header_up X-Forwarded-Port 443\n")
 			b.WriteString("        }\n")
 		}
 		b.WriteString("    }\n")
@@ -235,7 +267,10 @@ func RenderWSLWithAccessLog(cfg domain.Config, accessLogPath string) (string, er
 	// document root, so absolute URLs and HMR remain on one origin.
 	for _, route := range routes {
 		name := route.Project.Name
-		fmt.Fprintf(&b, "    @devlan_local_%s header_regexp Host ^%s\\.localhost(?::\\d+)?$\n", name, regexp.QuoteMeta(name))
+		fmt.Fprintf(&b, "    @devlan_local_%s {\n", name)
+		fmt.Fprintf(&b, "        header_regexp Host ^%s\\.localhost(?::\\d+)?$\n", regexp.QuoteMeta(name))
+		b.WriteString("        header X-DevLAN-Local on\n")
+		b.WriteString("    }\n")
 		fmt.Fprintf(&b, "    handle @devlan_local_%s {\n", name)
 		if cfg.IsExposureExpired(route.Project, now) {
 			b.WriteString("        respond \"Acesso expirado\" 403\n")

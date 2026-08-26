@@ -124,4 +124,16 @@ func TestPhase4CLIRuns(t *testing.T) {
 	if err := run([]string{"--data-dir", dir, "security", "audit", "--lines", "10"}); err != nil {
 		t.Fatalf("security audit failed: %v", err)
 	}
+
+	// Test desktop commands
+	if err := run([]string{"--data-dir", dir, "desktop", "status"}); err != nil {
+		t.Fatalf("desktop status failed: %v", err)
+	}
+	if err := run([]string{"--data-dir", dir, "desktop", "install"}); err != nil {
+		t.Fatalf("desktop install failed: %v", err)
+	}
+	if err := run([]string{"--data-dir", dir, "desktop", "uninstall"}); err != nil {
+		t.Fatalf("desktop uninstall failed: %v", err)
+	}
 }
+

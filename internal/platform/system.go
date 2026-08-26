@@ -2,6 +2,10 @@ package platform
 
 import (
 	"context"
+	"crypto/sha1"
+	"crypto/x509"
+	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net"
@@ -203,4 +207,40 @@ func FindCARootCertPath() string {
 		}
 	}
 	return ""
+}
+
+// CARootTrusted reports whether the Caddy local root is installed in either
+// Windows Root store. Caddy can be trusted per-user without elevation or in
+// LocalMachine when elevated, so both stores must be checked.
+func CARootTrusted(ctx context.Context, certificatePath string) (bool, error) {
+	if runtime.GOOS != "windows" {
+		return false, fmt.Errorf("verificação do repositório de certificados só se aplica ao Windows")
+	}
+	data, err := os.ReadFile(certificatePath)
+	if err != nil {
+		return false, fmt.Errorf("ler CA local: %w", err)
+	}
+	if block, _ := pem.Decode(data); block != nil {
+		data = block.Bytes
+	}
+	certificate, err := x509.ParseCertificate(data)
+	if err != nil {
+		return false, fmt.Errorf("ler certificado raiz local: %w", err)
+	}
+	fingerprint := sha1.Sum(certificate.Raw)
+	thumbprint := strings.ToUpper(hex.EncodeToString(fingerprint[:]))
+
+	for _, arguments := range [][]string{
+		{"-user", "-store", "Root"},
+		{"-store", "Root"},
+	} {
+		output, commandErr := exec.CommandContext(ctx, "certutil.exe", arguments...).CombinedOutput()
+		if commandErr != nil {
+			return false, fmt.Errorf("consultar repositório de certificados do Windows: %w", commandErr)
+		}
+		if strings.Contains(strings.ToUpper(string(output)), thumbprint) {
+			return true, nil
+		}
+	}
+	return false, nil
 }

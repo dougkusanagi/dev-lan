@@ -216,7 +216,7 @@ func TestRenderWSLAddsIsolatedLocalHostRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, expected := range []string{
-		"@devlan_local_spec-sheet header_regexp Host ^spec-sheet\\.localhost(?::\\d+)?$",
+		"@devlan_local_spec-sheet {\n        header_regexp Host ^spec-sheet\\.localhost(?::\\d+)?$\n        header X-DevLAN-Local on\n    }",
 		"root * \"/home/dev/spec-sheet/public\"",
 	} {
 		if !strings.Contains(result, expected) {
@@ -363,6 +363,10 @@ func TestRenderWindowsAndWSLHeaderSecurityAndLoopbackRestriction(t *testing.T) {
 		"header_up -X-DevLAN-Project",
 		"header_up -X-DevLAN-Local",
 		"header_up -X-DevLAN-HTTPS",
+		"header_up -X-Forwarded-For",
+		"header_up -X-Forwarded-Host",
+		"header_up -X-Forwarded-Proto",
+		"header_up -X-Forwarded-Port",
 		"header_up X-DevLAN-Port 8080",
 		"header_up X-DevLAN-Project myapp",
 		"header_up X-Forwarded-Port 8080",
@@ -379,5 +383,63 @@ func TestRenderWindowsAndWSLHeaderSecurityAndLoopbackRestriction(t *testing.T) {
 	}
 	if !strings.Contains(wslResult, "bind 127.0.0.1") {
 		t.Fatalf("Caddyfile WSL deveria conter bind 127.0.0.1:\n%s", wslResult)
+	}
+	if !strings.Contains(wslResult, "header X-DevLAN-Local on") {
+		t.Fatalf("rota .localhost no WSL deve exigir a identidade local de confiança:\n%s", wslResult)
+	}
+}
+
+func TestRenderWSLDoesNotTreatForgedLocalHostAsLocalOrigin(t *testing.T) {
+	cfg := domain.NewConfig()
+	cfg.Projects = []domain.Project{{Name: "myapp", Path: "/home/dev/myapp"}}
+	result, err := RenderWSL(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localMatcher := "@devlan_local_myapp {\n        header_regexp Host ^myapp\\.localhost(?::\\d+)?$\n        header X-DevLAN-Local on\n    }"
+	if !strings.Contains(result, localMatcher) {
+		t.Fatalf("Host .localhost sem X-DevLAN-Local não pode selecionar a rota local:\n%s", result)
+	}
+}
+
+func TestRenderWindowsRedirectsLocalHTTPOnlyFromLoopback(t *testing.T) {
+	cfg := domain.NewConfig()
+	cfg.Projects = []domain.Project{{Name: "myapp", Path: "/home/dev/myapp"}}
+	result, err := RenderWindows(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"http://devlan.localhost http://myapp.localhost {",
+		"@devlan_local_http_loopback remote_ip 127.0.0.1 ::1",
+		"redir @devlan_local_http_loopback https://{http.request.host}{uri} permanent",
+	} {
+		if !strings.Contains(result, expected) {
+			t.Fatalf("redirect HTTP local ausente ou exposto indevidamente (%q):\n%s", expected, result)
+		}
+	}
+}
+
+func TestRenderWindowsRoutesDevLANLocalhostToUIPort(t *testing.T) {
+	cfg := domain.NewConfig()
+	cfg.UIPort = 3210
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	result, err := RenderWindows(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"https://devlan.localhost {",
+		"@devlan_admin_edge {",
+		"host devlan.localhost",
+		"remote_ip 127.0.0.1 ::1",
+		"reverse_proxy 127.0.0.1:3210",
+		"respond \"Acesso local permitido somente via loopback\" 403",
+	} {
+		if !strings.Contains(result, expected) {
+			t.Fatalf("Caddyfile Windows não contém rota de devlan.localhost esperada %q:\n%s", expected, result)
+		}
 	}
 }

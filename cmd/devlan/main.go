@@ -15,11 +15,13 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"errors"
+
 	localapi "github.com/dougkusanagi/dev-lan/internal/api"
 	"github.com/dougkusanagi/dev-lan/internal/app"
 	"github.com/dougkusanagi/dev-lan/internal/config"
+	"github.com/dougkusanagi/dev-lan/internal/desktop"
 	"github.com/dougkusanagi/dev-lan/internal/domain"
-	"github.com/dougkusanagi/dev-lan/internal/gui"
 	"github.com/dougkusanagi/dev-lan/internal/platform"
 	backgroundservice "github.com/dougkusanagi/dev-lan/internal/service"
 	"github.com/dougkusanagi/dev-lan/internal/startup"
@@ -68,9 +70,12 @@ func run(args []string) error {
 	service := app.New(dataDir)
 	var ctx context.Context
 	var cancel context.CancelFunc
-	if (command == "api" && len(args) > 0 && args[0] == "serve") ||
-		(command == "service" && len(args) > 0 && args[0] == "run") {
+	if command == "gui" && len(args) > 0 && (args[0] == "--foreground" || args[0] == "-f") {
 		ctx, cancel = signal.NotifyContext(context.Background(), os.Interrupt)
+	} else if (command == "api" && (len(args) == 0 || args[0] == "serve")) ||
+		(command == "service" && len(args) > 0 && args[0] == "run") {
+		ctx = context.Background()
+		cancel = func() {}
 	} else {
 		ctx, cancel = context.WithTimeout(context.Background(), 45*time.Second)
 	}
@@ -425,7 +430,10 @@ func run(args []string) error {
 		return runCA(ctx, service, args)
 
 	case "gui":
-		return gui.Launch(service)
+		return runGUI(ctx, service, dataDir, args)
+
+	case "desktop":
+		return runDesktop(ctx, dataDir, args)
 
 	case "security":
 		return runSecurity(ctx, service, args)
@@ -515,9 +523,6 @@ func runConfig(ctx context.Context, service *app.App, args []string) error {
 
 func runAPI(ctx context.Context, service *app.App, args []string) error {
 	if len(args) == 0 || args[0] == "serve" {
-		if len(args) > 1 {
-			return fmt.Errorf("uso: devlan api serve")
-		}
 		server := localapi.New(service)
 		endpoint, err := server.Start()
 		if err != nil {
@@ -545,6 +550,140 @@ func runAPI(ctx context.Context, service *app.App, args []string) error {
 		return nil
 	}
 	return fmt.Errorf("uso: devlan api serve | devlan api status")
+}
+
+func runGUI(ctx context.Context, service *app.App, dataDir string, args []string) error {
+	foreground := false
+	for _, arg := range args {
+		if arg == "--foreground" || arg == "-f" {
+			foreground = true
+		} else {
+			return fmt.Errorf("uso: devlan gui [--foreground]")
+		}
+	}
+
+	cfg, err := service.Store.Load()
+	if err != nil {
+		return err
+	}
+	uiPort := cfg.UIPort
+	if uiPort == 0 {
+		uiPort = 3210
+	}
+
+	targetURL := "https://devlan.localhost/"
+	if !platform.IsAdminResponsive(platform.WindowsCaddyAdminAddress) {
+		targetURL = fmt.Sprintf("http://127.0.0.1:%d/", uiPort)
+	}
+
+	if foreground {
+		fmt.Printf("DevLAN GUI Web Server ativo em %s (porta %d)\n", targetURL, uiPort)
+		fmt.Println("Pressione Ctrl+C para encerrar.")
+		server := localapi.New(service)
+		endpoint, err := server.Start()
+		if err != nil && !errors.Is(err, localapi.ErrAlreadyRunning) {
+			return err
+		}
+		_ = platform.OpenURL(targetURL)
+		if endpoint.Address != "" {
+			fmt.Printf("Servidor escutando em %s\n", endpoint.Address)
+		}
+		<-ctx.Done()
+		return server.Close(context.Background())
+	}
+
+	// 1. Check if the server is already responsive
+	client := localapi.Client{Store: service.Store}
+	checkCtx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	res, checkErr := client.Do(checkCtx, http.MethodGet, "/v1/health", nil)
+	cancel()
+	isRunning := checkErr == nil && res != nil && res.StatusCode == http.StatusOK
+	if res != nil {
+		_ = res.Body.Close()
+	}
+
+	// 2. If not running, spawn detached background process
+	if !isRunning {
+		executable, execErr := os.Executable()
+		if execErr != nil {
+			return fmt.Errorf("obter caminho do executável: %w", execErr)
+		}
+		cmdArgs := []string{"api", "serve"}
+		if dataDir != "" && dataDir != defaultDataDir() {
+			cmdArgs = []string{"--data-dir", dataDir, "api", "serve"}
+		}
+		if err := platform.SpawnBackgroundDaemon(executable, cmdArgs); err != nil {
+			return fmt.Errorf("iniciar servidor web em segundo plano: %w", err)
+		}
+
+		// Wait for server to become responsive
+		started := false
+		for i := 0; i < 30; i++ {
+			time.Sleep(100 * time.Millisecond)
+			waitCtx, waitCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			waitRes, waitErr := client.Do(waitCtx, http.MethodGet, "/v1/health", nil)
+			waitCancel()
+			if waitErr == nil && waitRes != nil && waitRes.StatusCode == http.StatusOK {
+				_ = waitRes.Body.Close()
+				started = true
+				break
+			}
+			if waitRes != nil {
+				_ = waitRes.Body.Close()
+			}
+		}
+		if !started {
+			return fmt.Errorf("servidor web em segundo plano não respondeu na porta %d", uiPort)
+		}
+	}
+
+	fmt.Printf("Servidor Web DevLAN ativo em 127.0.0.1:%d\n", uiPort)
+
+	if err := platform.OpenURL(targetURL); err != nil {
+		fmt.Printf("Interface disponível em: %s (porta alternativa: http://127.0.0.1:%d/)\n", targetURL, uiPort)
+	} else {
+		fmt.Printf("Interface aberta no navegador: %s (porta alternativa: http://127.0.0.1:%d/)\n", targetURL, uiPort)
+	}
+	return nil
+}
+
+func runDesktop(ctx context.Context, dataDir string, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("uso: devlan desktop install | status | uninstall")
+	}
+	switch args[0] {
+	case "install":
+		if len(args) != 1 {
+			return fmt.Errorf("uso: devlan desktop install")
+		}
+		if err := desktop.Install(ctx, dataDir); err != nil {
+			return err
+		}
+		fmt.Println("Integração desktop instalada com sucesso (atalhos criados).")
+		return nil
+	case "uninstall":
+		if len(args) != 1 {
+			return fmt.Errorf("uso: devlan desktop uninstall")
+		}
+		if err := desktop.Uninstall(ctx, dataDir); err != nil {
+			return err
+		}
+		fmt.Println("Integração desktop removida.")
+		return nil
+	case "status":
+		if len(args) != 1 {
+			return fmt.Errorf("uso: devlan desktop status")
+		}
+		st, err := desktop.CurrentState(ctx, dataDir)
+		if err != nil {
+			return err
+		}
+		data, _ := json.MarshalIndent(st, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	default:
+		return fmt.Errorf("subcomando desktop desconhecido: %s (use install, status, uninstall)", args[0])
+	}
 }
 
 func runBackgroundService(ctx context.Context, dataDir string, args []string) error {
@@ -1465,7 +1604,8 @@ Servidores Dev e Estáticos:
   dev NAME [OPÇÕES]          configura ou gerencia servidor dev
 
 Operação:
-  gui                        inicia a interface gráfica desktop (Wails)
+  gui [--foreground]         inicia o dashboard web no navegador (devlan.localhost)
+  desktop install|...        instala/gerencia atalhos e integração de desktop
   status                     mostra componentes, projetos e URLs
   reload                     valida/aplica configurações e recarrega Caddy
   trust                      instala e confia na CA interna do Caddy (Administrador*)
@@ -1551,6 +1691,8 @@ func printCommandUsage(command string) {
 		"park":       "uso: devlan park PATH | devlan park ignore NAME|PATH | devlan park unignore PATH",
 		"unpark":     "uso: devlan unpark PATH",
 		"parked":     "uso: devlan parked",
+		"gui":        "uso: devlan gui [--foreground]",
+		"desktop":    "uso: devlan desktop install | status | uninstall",
 		"status":     "uso: devlan status",
 		"reload":     "uso: devlan reload",
 		"trust":      "uso: devlan trust",

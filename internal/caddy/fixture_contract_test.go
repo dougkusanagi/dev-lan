@@ -214,11 +214,11 @@ func TestDualOriginCaddyfileGeneration(t *testing.T) {
 	// Verify WSL Caddy listeners and handlers
 	for _, expected := range []string{
 		"bind 127.0.0.1",
-		"@devlan_local_app-php header_regexp Host ^app-php\\.localhost(?::\\d+)?$",
+		"@devlan_local_app-php {\n        header_regexp Host ^app-php\\.localhost(?::\\d+)?$\n        header X-DevLAN-Local on\n    }",
 		"@devlan_port_app-php header X-DevLAN-Port 8080",
 		`root * "/home/dev/app-php/public"`,
 		"env HTTPS {http.request.header.X-DevLAN-HTTPS}",
-		"@devlan_local_app-static header_regexp Host ^app-static\\.localhost(?::\\d+)?$",
+		"@devlan_local_app-static {\n        header_regexp Host ^app-static\\.localhost(?::\\d+)?$\n        header X-DevLAN-Local on\n    }",
 		"@devlan_port_app-static header X-DevLAN-Port 8081",
 		`root * "/home/dev/app-static/dist"`,
 		"try_files {path} {path}/ /index.html",

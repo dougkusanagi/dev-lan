@@ -11,6 +11,11 @@ import (
 	"time"
 )
 
+const (
+	ProtocolVersion = 1
+	CoreVersion     = "0.0.1"
+)
+
 // Mode is the serving strategy for a registered project. Only php is
 // executed by the MVP; the other values are part of the stable schema so the
 // registry can evolve without breaking existing projects.

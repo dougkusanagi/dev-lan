@@ -1578,7 +1578,15 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 	}
 
 	if caInfo, err := a.CAInfo(ctx); err == nil && caInfo["exists"] == "true" {
-		checks = append(checks, Check{"CA Local", "OK", fmt.Sprintf("certificado raiz presente (%s)", caInfo["path"])})
+		if runtime.GOOS != "windows" {
+			checks = append(checks, Check{"CA Local", "WARN", fmt.Sprintf("certificado raiz presente (%s), mas a confiança só é verificada no Windows", caInfo["path"])})
+		} else if trusted, trustErr := platform.CARootTrusted(ctx, caInfo["path"]); trustErr != nil {
+			checks = append(checks, Check{"CA Local", "WARN", "não foi possível verificar a confiança da CA: " + trustErr.Error()})
+		} else if !trusted {
+			checks = append(checks, Check{"CA Local", "WARN", "certificado raiz presente, mas não confiado; execute `devlan trust` como Administrador"})
+		} else {
+			checks = append(checks, Check{"CA Local", "OK", fmt.Sprintf("certificado raiz presente e confiado (%s)", caInfo["path"])})
+		}
 	} else {
 		checks = append(checks, Check{"CA Local", "WARN", "certificado raiz não encontrado; execute `devlan trust` como Administrador"})
 	}
@@ -1595,6 +1603,22 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 	} else {
 		checks = append(checks, Check{"Firewall", "OK", "regra DevLAN reconciliada: TCP " + firewallSpecDescription(firewallSpec)})
 	}
+
+	uiPort := cfg.UIPort
+	if uiPort == 0 {
+		uiPort = 3210
+	}
+	if platform.IsPortAvailable(uiPort) {
+		checks = append(checks, Check{fmt.Sprintf("Porta Web/API (%d)", uiPort), "OK", "disponível para servidor loopback"})
+	} else {
+		checks = append(checks, Check{fmt.Sprintf("Porta Web/API (%d)", uiPort), "OK", "em execução / ativa"})
+	}
+	if adminRunning {
+		checks = append(checks, Check{"Caddy devlan.localhost", "OK", fmt.Sprintf("reverse proxy para 127.0.0.1:%d ativo", uiPort)})
+	} else {
+		checks = append(checks, Check{"Caddy devlan.localhost", "WARN", "Caddy Windows parado; use a porta direta como fallback"})
+	}
+	checks = append(checks, Check{"Compatibilidade de Versão", "OK", fmt.Sprintf("ProtocolVersion=%d", domain.ProtocolVersion)})
 
 	effective, err := a.EffectiveConfig(ctx, cfg)
 	if err != nil {

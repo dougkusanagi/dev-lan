@@ -1,5 +1,5 @@
-// Package api exposes the authenticated loopback protocol shared by the
-// optional Windows service, the CLI and future UI clients.
+// Package api exposes the loopback web server and authenticated API
+// shared by the browser GUI, Windows service, CLI and WSL clients.
 package api
 
 import (
@@ -11,9 +11,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -21,13 +24,17 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dougkusanagi/dev-lan/frontend"
 	"github.com/dougkusanagi/dev-lan/internal/app"
 	"github.com/dougkusanagi/dev-lan/internal/config"
+	"github.com/dougkusanagi/dev-lan/internal/domain"
 )
 
 const (
 	ProtocolVersion = 1
 	tokenSize       = 32
+	csrfCookieName  = "devlan_csrf"
+	csrfHeaderName  = "X-DevLAN-CSRF-Token"
 	maxRequestBody  = 1 << 20
 )
 
@@ -50,6 +57,7 @@ type Server struct {
 
 	mu         sync.Mutex
 	listener   net.Listener
+	listeners  []net.Listener
 	httpServer *http.Server
 	endpoint   Endpoint
 }
@@ -71,16 +79,27 @@ func (s *Server) Start() (Endpoint, error) {
 	if err != nil {
 		return Endpoint{}, fmt.Errorf("validar configuração antes de iniciar a API: %w", err)
 	}
+	uiPort := cfg.UIPort
+	if os.Getenv("DEVLAN_TEST_MOCK") == "1" {
+		uiPort = 0
+	} else if uiPort == 0 {
+		uiPort = 3210
+	}
+	expectedPort := strconv.Itoa(uiPort)
+
 	if _, err := os.Stat(s.store.Paths().APIEndpoint); err == nil {
 		if endpoint, readErr := ReadEndpoint(s.store); readErr == nil {
-			checkContext, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-			response, requestErr := (Client{Store: s.store}).Do(checkContext, http.MethodGet, "/v1/health", nil)
-			cancel()
-			if response != nil {
-				_ = response.Body.Close()
-			}
-			if requestErr == nil && response != nil && response.StatusCode < 400 {
-				return endpoint, ErrAlreadyRunning
+			_, port, _ := net.SplitHostPort(endpoint.Address)
+			if (expectedPort == "0" && port != "") || port == expectedPort {
+				checkContext, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+				response, requestErr := (Client{Store: s.store}).Do(checkContext, http.MethodGet, "/v1/health", nil)
+				cancel()
+				if response != nil {
+					_ = response.Body.Close()
+				}
+				if requestErr == nil && response != nil && response.StatusCode < 400 {
+					return endpoint, ErrAlreadyRunning
+				}
 			}
 		}
 		_ = os.Remove(s.store.Paths().APIEndpoint)
@@ -91,10 +110,23 @@ func (s *Server) Start() (Endpoint, error) {
 	if err != nil {
 		return Endpoint{}, err
 	}
-	listener, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(cfg.UIPort))
+
+	listener, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(uiPort))
 	if err != nil {
-		return Endpoint{}, fmt.Errorf("iniciar API local na ui_port %d: %w", cfg.UIPort, err)
+		return Endpoint{}, fmt.Errorf("iniciar API local na ui_port %d: %w", uiPort, err)
 	}
+	listeners := []net.Listener{listener}
+	// The mock uses port 0, so a second listener would receive a different
+	// ephemeral port. Production always uses the configured stable ui_port.
+	if os.Getenv("DEVLAN_TEST_MOCK") != "1" {
+		listener6, listen6Err := net.Listen("tcp", "[::1]:"+strconv.Itoa(uiPort))
+		if listen6Err != nil {
+			_ = listener.Close()
+			return Endpoint{}, fmt.Errorf("iniciar API local IPv6 na ui_port %d: %w", uiPort, listen6Err)
+		}
+		listeners = append(listeners, listener6)
+	}
+
 	endpoint := Endpoint{
 		Version:   ProtocolVersion,
 		Address:   listener.Addr().String(),
@@ -102,19 +134,35 @@ func (s *Server) Start() (Endpoint, error) {
 		PID:       os.Getpid(),
 		StartedAt: time.Now().UTC().Format(time.RFC3339),
 	}
-	server := &http.Server{Handler: s.Handler(token)}
+
+	server := &http.Server{
+		Handler:        s.Handler(token),
+		ReadTimeout:    30 * time.Second,
+		WriteTimeout:   60 * time.Second,
+		IdleTimeout:    120 * time.Second,
+		MaxHeaderBytes: 1 << 20,
+	}
+
 	if err := writeEndpoint(s.store.Paths().APIEndpoint, endpoint); err != nil {
-		_ = listener.Close()
+		for _, item := range listeners {
+			_ = item.Close()
+		}
 		return Endpoint{}, err
 	}
+
 	s.listener = listener
+	s.listeners = listeners
 	s.httpServer = server
 	s.endpoint = endpoint
-	go func() {
-		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			_ = s.service.Store.AppendSecurityAudit("API_STOP", "servidor local encerrado: "+err.Error())
-		}
-	}()
+
+	for _, item := range listeners {
+		go func(current net.Listener) {
+			if err := server.Serve(current); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				_ = s.service.Store.AppendSecurityAudit("API_STOP", "servidor local encerrado: "+err.Error())
+			}
+		}(item)
+	}
+
 	_ = s.service.Store.AppendSecurityAudit("API_START", "API local autenticada em "+endpoint.Address)
 	return endpoint, nil
 }
@@ -130,8 +178,10 @@ func (s *Server) Serve(ctx context.Context) error {
 func (s *Server) Close(ctx context.Context) error {
 	s.mu.Lock()
 	server := s.httpServer
+	listeners := s.listeners
 	endpointPath := s.store.Paths().APIEndpoint
 	s.listener = nil
+	s.listeners = nil
 	s.httpServer = nil
 	s.endpoint = Endpoint{}
 	s.mu.Unlock()
@@ -139,6 +189,9 @@ func (s *Server) Close(ctx context.Context) error {
 		return nil
 	}
 	err := server.Shutdown(ctx)
+	for _, listener := range listeners {
+		_ = listener.Close()
+	}
 	_ = os.Remove(endpointPath)
 	_ = s.service.Store.AppendSecurityAudit("API_STOP", "API local encerrada")
 	return err
@@ -154,41 +207,288 @@ func (s *Server) Handler(token ...string) http.Handler {
 			secret = loaded
 		}
 	}
-	mux := http.NewServeMux()
-	guard := func(handler http.HandlerFunc) http.HandlerFunc {
-		return func(writer http.ResponseWriter, request *http.Request) {
-			if !authorized(request, secret) {
-				writeJSONError(writer, http.StatusUnauthorized, "token da API local ausente ou inválido")
-				return
-			}
-			if request.Body != nil {
-				request.Body = http.MaxBytesReader(writer, request.Body, maxRequestBody)
-			}
-			handler(writer, request)
-		}
-	}
-	mux.HandleFunc("/v1/health", guard(s.handleHealth))
-	mux.HandleFunc("/v1/status", guard(s.handleStatus))
-	mux.HandleFunc("/v1/projects", guard(s.handleProjects))
-	mux.HandleFunc("/v1/config", guard(s.handleConfig))
-	mux.HandleFunc("/v1/reload", guard(s.handleReload))
-	mux.HandleFunc("/v1/command", guard(s.handleCommand))
-	mux.HandleFunc("/", func(writer http.ResponseWriter, request *http.Request) {
+
+	apiMux := http.NewServeMux()
+
+	// Health & Status
+	apiMux.HandleFunc("/api/v1/health", s.handleHealth)
+	apiMux.HandleFunc("/v1/health", s.handleHealth)
+	apiMux.HandleFunc("/api/v1/status", s.handleStatus)
+	apiMux.HandleFunc("/v1/status", s.handleStatus)
+
+	// Projects
+	apiMux.HandleFunc("/api/v1/projects", s.handleProjects)
+	apiMux.HandleFunc("/v1/projects", s.handleProjects)
+	apiMux.HandleFunc("/api/v1/projects/logs", s.handleProjectLogs)
+	apiMux.HandleFunc("/api/v1/projects/link", s.handleProjectLink)
+	apiMux.HandleFunc("/api/v1/projects/unlink", s.handleProjectUnlink)
+	apiMux.HandleFunc("/api/v1/projects/hide", s.handleProjectHide)
+	apiMux.HandleFunc("/api/v1/projects/unhide", s.handleProjectUnhide)
+	apiMux.HandleFunc("/api/v1/projects/config", s.handleProjectConfig)
+	apiMux.HandleFunc("/api/v1/projects/start", s.handleProjectStart)
+	apiMux.HandleFunc("/api/v1/projects/stop", s.handleProjectStop)
+	apiMux.HandleFunc("/api/v1/projects/restart", s.handleProjectRestart)
+	apiMux.HandleFunc("/api/v1/projects/build", s.handleProjectBuild)
+	apiMux.HandleFunc("/api/v1/projects/deps", s.handleProjectDeps)
+	apiMux.HandleFunc("/api/v1/projects/tls", s.handleProjectTLS)
+
+	// Parks
+	apiMux.HandleFunc("/api/v1/parks/park", s.handlePark)
+	apiMux.HandleFunc("/api/v1/parks/unpark", s.handleUnpark)
+
+	// Config
+	apiMux.HandleFunc("/api/v1/config", s.handleConfig)
+	apiMux.HandleFunc("/v1/config", s.handleConfig)
+	apiMux.HandleFunc("/api/v1/config/export", s.handleConfigExport)
+	apiMux.HandleFunc("/api/v1/config/import", s.handleConfigImport)
+	apiMux.HandleFunc("/api/v1/reload", s.handleReload)
+	apiMux.HandleFunc("/v1/reload", s.handleReload)
+
+	// PHP
+	apiMux.HandleFunc("/api/v1/php/versions", s.handlePHPVersions)
+	apiMux.HandleFunc("/api/v1/php/install", s.handlePHPInstall)
+	apiMux.HandleFunc("/api/v1/php/remove", s.handlePHPRemove)
+	apiMux.HandleFunc("/api/v1/php/default", s.handlePHPDefault)
+
+	// Metrics & Doctor
+	apiMux.HandleFunc("/api/v1/metrics", s.handleMetrics)
+	apiMux.HandleFunc("/api/v1/doctor", s.handleDoctor)
+	apiMux.HandleFunc("/api/v1/doctor/fix", s.handleDoctorFix)
+
+	// Security
+	apiMux.HandleFunc("/api/v1/security/audit", s.handleSecurityAudit)
+	apiMux.HandleFunc("/api/v1/security/trust", s.handleSecurityTrust)
+
+	// WSL Command protocol
+	apiMux.HandleFunc("/api/v1/command", s.handleCommand)
+	apiMux.HandleFunc("/v1/command", s.handleCommand)
+
+	// Global 404 for unhandled API routes
+	apiMux.HandleFunc("/", func(writer http.ResponseWriter, request *http.Request) {
 		writeJSONError(writer, http.StatusNotFound, "rota da API local não encontrada")
 	})
-	return restrictLoopback(mux)
-}
 
-func restrictLoopback(next http.Handler) http.Handler {
+	var distFS fs.FS
+	if sub, err := fs.Sub(frontend.Assets, "dist"); err == nil {
+		distFS = sub
+	}
+
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		host, _, err := net.SplitHostPort(request.RemoteAddr)
-		if err != nil || (host != "127.0.0.1" && host != "::1") {
+		// 1. Loopback restriction (ui_access = local)
+		if !isLoopback(request.RemoteAddr) {
 			writeJSONError(writer, http.StatusForbidden, "API local aceita somente loopback")
 			return
 		}
-		next.ServeHTTP(writer, request)
+
+		// 2. Host allowlist validation
+		if !isValidHost(request.Host) {
+			writeJSONError(writer, http.StatusForbidden, "Host não permitido: "+request.Host)
+			return
+		}
+
+		// 3. Origin validation for browser requests
+		if origin := request.Header.Get("Origin"); origin != "" {
+			if !s.isValidOrigin(origin) {
+				writeJSONError(writer, http.StatusForbidden, "Origem não permitida: "+origin)
+				return
+			}
+		}
+
+		// 4. Security headers on all responses
+		setSecurityHeaders(writer)
+
+		// 5. Route to API or SPA
+		reqPath := path.Clean(request.URL.Path)
+		if strings.HasPrefix(reqPath, "/api/") || strings.HasPrefix(reqPath, "/v1/") {
+			// Limit body size for API
+			if request.Body != nil {
+				request.Body = http.MaxBytesReader(writer, request.Body, maxRequestBody)
+			}
+			// Authentication & CSRF check on mutations
+			if isMutation(request.Method) {
+				if !isAuthorizedOrCSRF(request, secret) {
+					writeJSONError(writer, http.StatusUnauthorized, "token da API local ou CSRF ausente ou inválido")
+					return
+				}
+			}
+			apiMux.ServeHTTP(writer, request)
+			return
+		}
+
+		// Serve embedded SPA static assets with history fallback
+		s.serveSPA(writer, request, distFS)
 	})
 }
+
+func (s *Server) serveSPA(writer http.ResponseWriter, request *http.Request, distFS fs.FS) {
+	if distFS == nil {
+		ensureCSRFCookie(writer, request)
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte("<!DOCTYPE html><html><body><h1>DevLAN</h1><p>Frontend não compilado.</p></body></html>"))
+		return
+	}
+
+	reqPath := path.Clean(strings.TrimPrefix(request.URL.Path, "/"))
+	if reqPath == "" || reqPath == "." {
+		reqPath = "index.html"
+	}
+
+	// Try opening static assets. A missing asset must remain a 404; serving the
+	// SPA document here makes browsers report misleading JS/CSS parse errors and
+	// violates the API/static boundary.
+	if strings.HasPrefix(reqPath, "assets/") || (reqPath != "index.html" && filepath.Ext(reqPath) != "" && filepath.Ext(reqPath) != ".html") {
+		file, err := distFS.Open(reqPath)
+		if err == nil {
+			defer file.Close()
+			stat, statErr := file.Stat()
+			if statErr == nil && !stat.IsDir() {
+				if strings.HasPrefix(reqPath, "assets/") {
+					writer.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				} else {
+					writer.Header().Set("Cache-Control", "no-cache")
+				}
+				http.FileServer(http.FS(distFS)).ServeHTTP(writer, request)
+				return
+			}
+		}
+		http.NotFound(writer, request)
+		return
+	}
+
+	// History fallback -> index.html
+	indexFile, err := distFS.Open("index.html")
+	if err != nil {
+		http.NotFound(writer, request)
+		return
+	}
+	defer indexFile.Close()
+
+	// Ensure CSRF cookie exists for SPA mutations
+	ensureCSRFCookie(writer, request)
+
+	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+	writer.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	_, _ = io.Copy(writer, indexFile)
+}
+
+func ensureCSRFCookie(writer http.ResponseWriter, request *http.Request) {
+	if _, err := request.Cookie(csrfCookieName); err != nil {
+		tokenBytes := make([]byte, 16)
+		_, _ = rand.Read(tokenBytes)
+		token := hex.EncodeToString(tokenBytes)
+		http.SetCookie(writer, &http.Cookie{
+			Name:     csrfCookieName,
+			Value:    token,
+			Path:     "/",
+			SameSite: http.SameSiteLaxMode,
+			HttpOnly: false, // Accessible by JS client for CSRF header
+		})
+	}
+}
+
+func isLoopback(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	return host == "127.0.0.1" || host == "::1" || host == "localhost"
+}
+
+func isValidHost(hostHeader string) bool {
+	host, _, err := net.SplitHostPort(hostHeader)
+	if err != nil {
+		host = hostHeader
+	}
+	host = strings.Trim(strings.ToLower(strings.TrimSpace(host)), "[]")
+	return host == "127.0.0.1" || host == "::1" || host == "localhost" || host == "devlan.localhost"
+}
+
+func (s *Server) isValidOrigin(origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return false
+	}
+	if !strings.EqualFold(u.Scheme, "https") && !strings.EqualFold(u.Scheme, "http") {
+		return false
+	}
+
+	// Origin is a full browser security principal: host alone is insufficient.
+	// Cookies are not scoped by port, so accepting any loopback port would let a
+	// malicious local web server set the double-submit CSRF cookie and mutate
+	// this API. Only the actual direct UI origin and the fixed Caddy origin are
+	// valid.
+	if strings.EqualFold(u.Scheme, "https") && strings.EqualFold(u.Host, "devlan.localhost") {
+		return true
+	}
+	if !strings.EqualFold(u.Scheme, "http") {
+		return false
+	}
+	cfg, err := s.store.Load()
+	if err != nil {
+		return false
+	}
+	uiPort := cfg.UIPort
+	if uiPort == 0 {
+		uiPort = 3210
+	}
+	if u.Port() != strconv.Itoa(uiPort) {
+		return false
+	}
+	host := strings.Trim(strings.ToLower(strings.TrimSpace(u.Hostname())), "[]")
+	return host == "127.0.0.1" || host == "::1" || host == "localhost"
+}
+
+func setSecurityHeaders(w http.ResponseWriter) {
+	h := w.Header()
+	h.Set("X-Frame-Options", "DENY")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+	h.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self' data:;")
+}
+
+func isMutation(method string) bool {
+	switch method {
+	case http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch:
+		return true
+	default:
+		return false
+	}
+}
+
+func isAuthorizedOrCSRF(request *http.Request, secret string) bool {
+	// 1. Check Bearer token (CLI / WSL)
+	if authorized(request, secret) {
+		return true
+	}
+
+	// 2. Check CSRF header vs cookie (Browser)
+	headerToken := strings.TrimSpace(request.Header.Get(csrfHeaderName))
+	cookie, err := request.Cookie(csrfCookieName)
+	if err == nil && headerToken != "" && cookie.Value != "" {
+		if subtle.ConstantTimeCompare([]byte(headerToken), []byte(cookie.Value)) == 1 {
+			return true
+		}
+	}
+
+	return false
+}
+
+func authorized(request *http.Request, token string) bool {
+	if token == "" {
+		return false
+	}
+	value := strings.TrimSpace(request.Header.Get("Authorization"))
+	if len(value) < len("Bearer ") || !strings.EqualFold(value[:len("Bearer ")], "Bearer ") {
+		return false
+	}
+	provided := strings.TrimSpace(value[len("Bearer "):])
+	if len(provided) != len(token) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(provided), []byte(token)) == 1
+}
+
+// Handlers
 
 func (s *Server) handleHealth(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodGet {
@@ -207,26 +507,12 @@ func (s *Server) handleStatus(writer http.ResponseWriter, request *http.Request)
 		methodNotAllowed(writer, http.MethodGet)
 		return
 	}
-	cfg, err := s.store.Load()
+	view, err := BuildStatusView(request.Context(), s.service)
 	if err != nil {
 		writeJSONError(writer, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{
-		"runtime":          runtime.GOOS + "/" + runtime.GOARCH,
-		"data_dir":         s.store.Paths().Dir,
-		"revision":         cfg.Revision,
-		"default_mode":     cfg.DefaultMode,
-		"windows_port":     cfg.WindowsPort,
-		"https_port":       cfg.HTTPSPort,
-		"route_base_port":  cfg.RouteBasePort,
-		"route_port_count": cfg.RoutePortCount,
-		"ui_port":          cfg.UIPort,
-		"tls_enabled":      cfg.TLSEnabled,
-		"project_count":    len(cfg.Projects),
-		"park_count":       len(cfg.Parks),
-		"protocol_version": ProtocolVersion,
-	})
+	writeJSON(writer, http.StatusOK, view)
 }
 
 func (s *Server) handleProjects(writer http.ResponseWriter, request *http.Request) {
@@ -234,22 +520,418 @@ func (s *Server) handleProjects(writer http.ResponseWriter, request *http.Reques
 		methodNotAllowed(writer, http.MethodGet)
 		return
 	}
-	cfg, err := s.store.Load()
+	filter := request.URL.Query().Get("filter")
+	views, err := BuildProjectViews(request.Context(), s.service, filter)
 	if err != nil {
 		writeJSONError(writer, http.StatusInternalServerError, err.Error())
 		return
 	}
-	safe, err := config.SanitizeForExport(cfg)
-	if err != nil {
-		writeJSONError(writer, http.StatusInternalServerError, err.Error())
+	writeJSON(writer, http.StatusOK, views)
+}
+
+func (s *Server) handleProjectLogs(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		methodNotAllowed(writer, http.MethodGet)
 		return
 	}
-	writeJSON(writer, http.StatusOK, safe.Projects)
+	name := request.URL.Query().Get("name")
+	linesStr := request.URL.Query().Get("lines")
+	lines := 100
+	if l, err := strconv.Atoi(linesStr); err == nil && l > 0 {
+		lines = l
+	}
+	devLogs, err := s.service.ProjectDevLogs(request.Context(), name, lines)
+	if err == nil && strings.TrimSpace(devLogs) != "" {
+		writeJSON(writer, http.StatusOK, map[string]string{"logs": devLogs})
+		return
+	}
+	globalLogs, _ := s.service.Logs("devlan")
+	writeJSON(writer, http.StatusOK, map[string]string{
+		"logs": fmt.Sprintf("Nenhum log de servidor dev para %s.\n\nLogs do DevLAN:\n%s", name, globalLogs),
+	})
+}
+
+func (s *Server) handleProjectLink(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer, http.MethodPost)
+		return
+	}
+	var input struct {
+		Name string `json:"name"`
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
+		return
+	}
+	proj, res, err := s.service.Link(request.Context(), input.Name, input.Path)
+	if err != nil {
+		writeJSONError(writer, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"message":  fmt.Sprintf("Projeto %s vinculado.", proj.Name),
+		"warnings": res.Warnings,
+	})
+}
+
+func (s *Server) handleProjectUnlink(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer, http.MethodPost)
+		return
+	}
+	var input struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
+		return
+	}
+	proj, res, err := s.service.Unlink(request.Context(), input.Name)
+	if err != nil {
+		writeJSONError(writer, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"message":  fmt.Sprintf("Projeto %s desvinculado.", proj.Name),
+		"warnings": res.Warnings,
+	})
+}
+
+func (s *Server) handleProjectHide(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer, http.MethodPost)
+		return
+	}
+	var input struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
+		return
+	}
+	res, err := s.service.IgnoreProject(request.Context(), input.Name)
+	if err != nil {
+		writeJSONError(writer, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"message":  fmt.Sprintf("Projeto %s ocultado.", input.Name),
+		"warnings": res.Warnings,
+	})
+}
+
+func (s *Server) handleProjectUnhide(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer, http.MethodPost)
+		return
+	}
+	var input struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
+		return
+	}
+	res, err := s.service.UnignoreProject(request.Context(), input.Path)
+	if err != nil {
+		writeJSONError(writer, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"message":  fmt.Sprintf("Projeto %s restaurado.", input.Path),
+		"warnings": res.Warnings,
+	})
+}
+
+func (s *Server) handleProjectConfig(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer, http.MethodPost)
+		return
+	}
+	var update ProjectConfigUpdate
+	if err := json.NewDecoder(request.Body).Decode(&update); err != nil {
+		writeJSONError(writer, http.StatusBadRequest, "configuração de projeto inválida")
+		return
+	}
+	ctx := request.Context()
+	if update.Mode != "" {
+		m, err := domain.ParseMode(update.Mode)
+		if err != nil {
+			writeJSONError(writer, http.StatusBadRequest, err.Error())
+			return
+		}
+		if _, err := s.service.SetProjectMode(ctx, update.Name, &m); err != nil {
+			writeJSONError(writer, http.StatusConflict, err.Error())
+			return
+		}
+	}
+	if update.TLSEnabled != nil {
+		if _, _, err := s.service.SetProjectTLS(ctx, update.Name, *update.TLSEnabled); err != nil {
+			writeJSONError(writer, http.StatusConflict, err.Error())
+			return
+		}
+	}
+	if update.PHPVersion != "" {
+		if _, err := s.service.SetProjectPHPVersion(ctx, update.Name, update.PHPVersion); err != nil {
+			writeJSONError(writer, http.StatusConflict, err.Error())
+			return
+		}
+	}
+	if update.PHPPreset != "" {
+		if _, err := s.service.SetProjectPHPPreset(ctx, update.Name, update.PHPPreset); err != nil {
+			writeJSONError(writer, http.StatusConflict, err.Error())
+			return
+		}
+	}
+	if update.RoutePort > 0 {
+		port := update.RoutePort
+		if _, err := s.service.SetRoutePort(ctx, update.Name, &port); err != nil {
+			writeJSONError(writer, http.StatusConflict, err.Error())
+			return
+		}
+	}
+	if update.StaticDir != "" {
+		if _, err := s.service.SetProjectStaticDir(ctx, update.Name, update.StaticDir); err != nil {
+			writeJSONError(writer, http.StatusConflict, err.Error())
+			return
+		}
+	}
+	if update.DevCommand != "" {
+		if _, err := s.service.SetProjectDevCommand(ctx, update.Name, update.DevCommand); err != nil {
+			writeJSONError(writer, http.StatusConflict, err.Error())
+			return
+		}
+	}
+	if update.DevPort > 0 {
+		if _, err := s.service.SetProjectDevPort(ctx, update.Name, update.DevPort); err != nil {
+			writeJSONError(writer, http.StatusConflict, err.Error())
+			return
+		}
+	}
+	writeJSON(writer, http.StatusOK, map[string]string{"message": "Configuração do projeto salva."})
+}
+
+func (s *Server) handleProjectStart(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer, http.MethodPost)
+		return
+	}
+	var input struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
+		return
+	}
+	if err := s.service.StartDev(request.Context(), input.Name); err != nil {
+		writeJSONError(writer, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]string{"message": "Servidor dev iniciado."})
+}
+
+func (s *Server) handleProjectStop(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer, http.MethodPost)
+		return
+	}
+	var input struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
+		return
+	}
+	if err := s.service.StopDev(request.Context(), input.Name); err != nil {
+		writeJSONError(writer, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]string{"message": "Servidor dev parado."})
+}
+
+func (s *Server) handleProjectRestart(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer, http.MethodPost)
+		return
+	}
+	var input struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
+		return
+	}
+	if err := s.service.RestartDev(request.Context(), input.Name); err != nil {
+		writeJSONError(writer, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]string{"message": "Servidor dev reiniciado."})
+}
+
+func (s *Server) handleProjectBuild(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer, http.MethodPost)
+		return
+	}
+	var input struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
+		return
+	}
+	out, err := s.service.BuildProject(request.Context(), input.Name)
+	if err != nil {
+		writeJSONError(writer, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]string{"output": out})
+}
+
+func (s *Server) handleProjectDeps(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer, http.MethodPost)
+		return
+	}
+	var input struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
+		return
+	}
+	out, err := s.service.InstallDeps(request.Context(), input.Name)
+	if err != nil {
+		writeJSONError(writer, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]string{"output": out})
+}
+
+func (s *Server) handleProjectTLS(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer, http.MethodPost)
+		return
+	}
+	var input struct {
+		Name    string `json:"name"`
+		Enabled bool   `json:"enabled"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
+		return
+	}
+	res, name, err := s.service.SetProjectTLS(request.Context(), input.Name, input.Enabled)
+	if err != nil {
+		writeJSONError(writer, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"message":  fmt.Sprintf("TLS de %s atualizado.", name),
+		"warnings": res.Warnings,
+	})
+}
+
+func (s *Server) handlePark(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer, http.MethodPost)
+		return
+	}
+	var input struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
+		return
+	}
+	park, res, err := s.service.Park(request.Context(), input.Path)
+	if err != nil {
+		writeJSONError(writer, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"message":  fmt.Sprintf("Pasta %s estacionada.", park.Path),
+		"warnings": res.Warnings,
+	})
+}
+
+func (s *Server) handleUnpark(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer, http.MethodPost)
+		return
+	}
+	var input struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
+		return
+	}
+	park, res, err := s.service.Unpark(request.Context(), input.Path)
+	if err != nil {
+		writeJSONError(writer, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"message":  fmt.Sprintf("Pasta %s desestacionada.", park.Path),
+		"warnings": res.Warnings,
+	})
 }
 
 func (s *Server) handleConfig(writer http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodGet {
-		methodNotAllowed(writer, http.MethodGet)
+	if request.Method == http.MethodGet {
+		view, err := BuildGlobalConfigView(s.service)
+		if err != nil {
+			writeJSONError(writer, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(writer, http.StatusOK, view)
+		return
+	}
+	if request.Method == http.MethodPost {
+		var view GlobalConfigView
+		if err := json.NewDecoder(request.Body).Decode(&view); err != nil {
+			writeJSONError(writer, http.StatusBadRequest, "configuração global inválida")
+			return
+		}
+		cfg, err := s.store.Load()
+		if err != nil {
+			writeJSONError(writer, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if view.DefaultMode != "" {
+			m, err := domain.ParseMode(view.DefaultMode)
+			if err != nil {
+				writeJSONError(writer, http.StatusBadRequest, err.Error())
+				return
+			}
+			cfg.DefaultMode = m
+		}
+		if view.WindowsPort > 0 {
+			cfg.WindowsPort = view.WindowsPort
+		}
+		if view.HTTPSPort > 0 {
+			cfg.HTTPSPort = view.HTTPSPort
+		}
+		cfg.TLSEnabled = view.TLSEnabled
+		if view.PHPDefaultVersion != "" {
+			cfg.PHPDefaultVersion = view.PHPDefaultVersion
+		}
+		cfg.Allowlist = view.Allowlist
+		if _, err := s.service.SaveConfigAndApply(request.Context(), cfg, true); err != nil {
+			writeJSONError(writer, http.StatusConflict, err.Error())
+			return
+		}
+		writeJSON(writer, http.StatusOK, map[string]string{"message": "Configuração global salva."})
+		return
+	}
+	methodNotAllowed(writer, http.MethodGet+", "+http.MethodPost)
+}
+
+func (s *Server) handleConfigExport(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer, http.MethodPost)
 		return
 	}
 	data, err := s.service.ExportConfig()
@@ -262,6 +944,27 @@ func (s *Server) handleConfig(writer http.ResponseWriter, request *http.Request)
 	_, _ = writer.Write(data)
 }
 
+func (s *Server) handleConfigImport(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer, http.MethodPost)
+		return
+	}
+	data, err := io.ReadAll(request.Body)
+	if err != nil {
+		writeJSONError(writer, http.StatusBadRequest, "ler corpo da requisição: "+err.Error())
+		return
+	}
+	res, err := s.service.ImportConfig(request.Context(), data)
+	if err != nil {
+		writeJSONError(writer, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"message":  "Configuração importada e aplicada com sucesso.",
+		"warnings": res.Warnings,
+	})
+}
+
 func (s *Server) handleReload(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodPost {
 		methodNotAllowed(writer, http.MethodPost)
@@ -272,12 +975,196 @@ func (s *Server) handleReload(writer http.ResponseWriter, request *http.Request)
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
 	}
-	writeJSON(writer, http.StatusOK, result)
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"message": "Configurações recarregadas com sucesso.",
+		"result":  result,
+	})
 }
 
-// commandRequest is intentionally a small allow-listed protocol surface for
-// the Linux WSL client. It is not a general-purpose remote shell: commands
-// are decoded and dispatched to domain methods below.
+func (s *Server) handlePHPVersions(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		methodNotAllowed(writer, http.MethodGet)
+		return
+	}
+	items, err := BuildPHPVersionsView(request.Context(), s.service)
+	if err != nil {
+		writeJSONError(writer, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(writer, http.StatusOK, items)
+}
+
+func (s *Server) handlePHPInstall(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer, http.MethodPost)
+		return
+	}
+	var input struct {
+		Version    string   `json:"version"`
+		Extensions []string `json:"extensions"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
+		return
+	}
+	res, err := s.service.PHPInstall(request.Context(), input.Version, input.Extensions)
+	if err != nil {
+		writeJSONError(writer, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"message":  fmt.Sprintf("PHP %s instalado.", input.Version),
+		"warnings": res.Warnings,
+	})
+}
+
+func (s *Server) handlePHPRemove(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer, http.MethodPost)
+		return
+	}
+	var input struct {
+		Version string `json:"version"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
+		return
+	}
+	res, err := s.service.PHPRemove(request.Context(), input.Version)
+	if err != nil {
+		writeJSONError(writer, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"message":  fmt.Sprintf("PHP %s removido.", input.Version),
+		"warnings": res.Warnings,
+	})
+}
+
+func (s *Server) handlePHPDefault(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer, http.MethodPost)
+		return
+	}
+	var input struct {
+		Version string `json:"version"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
+		return
+	}
+	res, err := s.service.SetDefaultPHPVersion(request.Context(), input.Version)
+	if err != nil {
+		writeJSONError(writer, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"message":  fmt.Sprintf("PHP padrão alterado para %s.", input.Version),
+		"warnings": res.Warnings,
+	})
+}
+
+func (s *Server) handleMetrics(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		methodNotAllowed(writer, http.MethodGet)
+		return
+	}
+	project := request.URL.Query().Get("project")
+	rawRange := request.URL.Query().Get("range")
+	if rawRange == "" {
+		rawRange = "1h"
+	}
+	snapshot, err := BuildMetricsSnapshot(s.service, project, rawRange)
+	if err != nil {
+		writeJSONError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(writer, http.StatusOK, snapshot)
+}
+
+func (s *Server) handleDoctor(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		methodNotAllowed(writer, http.MethodGet)
+		return
+	}
+	project := request.URL.Query().Get("project")
+	checks, err := BuildDoctorChecksView(request.Context(), s.service, project)
+	if err != nil {
+		writeJSONError(writer, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(writer, http.StatusOK, checks)
+}
+
+func (s *Server) handleDoctorFix(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer, http.MethodPost)
+		return
+	}
+	var input struct {
+		Action string `json:"action"`
+		Target string `json:"target"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
+		return
+	}
+	ctx := request.Context()
+	switch input.Action {
+	case "reload":
+		_, err := s.service.Reload(ctx)
+		if err != nil {
+			writeJSONError(writer, http.StatusConflict, err.Error())
+			return
+		}
+	case "firewall":
+		if err := s.service.ReconcileFirewall(ctx); err != nil {
+			writeJSONError(writer, http.StatusConflict, err.Error())
+			return
+		}
+	case "restart-dev":
+		if input.Target != "" {
+			if err := s.service.RestartDev(ctx, input.Target); err != nil {
+				writeJSONError(writer, http.StatusConflict, err.Error())
+				return
+			}
+		}
+	default:
+		_, _ = s.service.Reload(ctx)
+	}
+	writeJSON(writer, http.StatusOK, map[string]string{"message": "Correção aplicada."})
+}
+
+func (s *Server) handleSecurityAudit(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		methodNotAllowed(writer, http.MethodGet)
+		return
+	}
+	linesStr := request.URL.Query().Get("lines")
+	lines := 100
+	if l, err := strconv.Atoi(linesStr); err == nil && l > 0 {
+		lines = l
+	}
+	logs, err := s.service.SecurityAuditLogs(request.Context(), lines)
+	if err != nil {
+		writeJSONError(writer, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]string{"logs": logs})
+}
+
+func (s *Server) handleSecurityTrust(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer, http.MethodPost)
+		return
+	}
+	if err := s.service.Trust(request.Context()); err != nil {
+		writeJSONError(writer, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]string{"message": "Certificado raiz instalado e confiado."})
+}
+
 type commandRequest struct {
 	Command string   `json:"command"`
 	Args    []string `json:"args,omitempty"`
@@ -371,23 +1258,27 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 			writeJSONError(writer, http.StatusBadRequest, "uso: links [FILTRO]")
 			return
 		}
-		cfg, err := s.store.Load()
+		filter := ""
+		if len(input.Args) == 1 {
+			filter = input.Args[0]
+		}
+		views, err := BuildProjectViews(ctx, s.service, filter)
 		if err != nil {
 			writeJSONError(writer, http.StatusInternalServerError, err.Error())
 			return
 		}
-		response["projects"] = cfg.Projects
+		response["projects"] = views
 	case "status":
 		if len(input.Args) != 0 {
 			writeJSONError(writer, http.StatusBadRequest, "uso: status")
 			return
 		}
-		cfg, err := s.store.Load()
+		statusView, err := BuildStatusView(ctx, s.service)
 		if err != nil {
 			writeJSONError(writer, http.StatusInternalServerError, err.Error())
 			return
 		}
-		response["status"] = map[string]any{"revision": cfg.Revision, "default_mode": cfg.DefaultMode, "windows_port": cfg.WindowsPort, "https_port": cfg.HTTPSPort, "route_base_port": cfg.RouteBasePort, "route_port_count": cfg.RoutePortCount, "ui_port": cfg.UIPort, "tls_enabled": cfg.TLSEnabled, "project_count": len(cfg.Projects), "park_count": len(cfg.Parks)}
+		response["status"] = statusView
 	case "reload":
 		if len(input.Args) != 0 {
 			writeJSONError(writer, http.StatusBadRequest, "uso: reload")
@@ -497,21 +1388,6 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 	writeJSON(writer, http.StatusOK, response)
 }
 
-func authorized(request *http.Request, token string) bool {
-	if token == "" {
-		return false
-	}
-	value := strings.TrimSpace(request.Header.Get("Authorization"))
-	if len(value) < len("Bearer ") || !strings.EqualFold(value[:len("Bearer ")], "Bearer ") {
-		return false
-	}
-	provided := strings.TrimSpace(value[len("Bearer "):])
-	if len(provided) != len(token) {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(provided), []byte(token)) == 1
-}
-
 func ensureToken(path string) (string, error) {
 	if token, err := readToken(path); err == nil {
 		return token, nil
@@ -598,8 +1474,6 @@ func ReadEndpoint(store config.Store) (Endpoint, error) {
 	if endpoint.Version != ProtocolVersion || endpoint.Address == "" || !sameTokenPath(endpoint.TokenFile, store.Paths().APIToken) {
 		return Endpoint{}, ErrInvalidEndpoint
 	}
-	// The Windows controller writes a Windows-native token path. The WSL client
-	// validates its mounted equivalent and then reads through the Linux path.
 	endpoint.TokenFile = store.Paths().APIToken
 	host, _, err := net.SplitHostPort(endpoint.Address)
 	if err != nil || (host != "127.0.0.1" && host != "::1") {
@@ -625,8 +1499,6 @@ type Client struct {
 	HTTPClient *http.Client
 }
 
-// Command sends one of the allow-listed controller operations to the Windows
-// service. It is used by the native Linux client installed inside WSL.
 func (c Client) Command(ctx context.Context, command string, args []string) (map[string]any, error) {
 	body, err := json.Marshal(commandRequest{Command: command, Args: args})
 	if err != nil {
@@ -651,7 +1523,7 @@ func (c Client) Command(ctx context.Context, command string, args []string) (map
 }
 
 func (c Client) Do(ctx context.Context, method, route string, body io.Reader) (*http.Response, error) {
-	if !strings.HasPrefix(route, "/v1/") {
+	if !strings.HasPrefix(route, "/v1/") && !strings.HasPrefix(route, "/api/v1/") {
 		return nil, fmt.Errorf("rota da API local inválida: %q", route)
 	}
 	endpoint, err := ReadEndpoint(c.Store)

@@ -110,39 +110,39 @@ sem `Referer`, hosts file ou DNS.
 
 ## Marco 5 — Servidor da GUI web (P0/P1)
 
-- [ ] `M5-01` Adicionar `ui_port` estável/configurável (default planejado 3210)
+- [x] `M5-01` Adicionar `ui_port` estável/configurável (default planejado 3210)
   e bind loopback dual-stack por padrão.
-- [ ] `M5-02` Incorporar/servir o build da SPA com cache correto, history fallback
+- [x] `M5-02` Incorporar/servir o build da SPA com cache correto, history fallback
   e separação estrita de `/api/v1/*`.
-- [ ] `M5-03` Expor a mesma SPA/API em `http://127.0.0.1:ui_port/` e por reverse
+- [x] `M5-03` Expor a mesma SPA/API em `http://127.0.0.1:ui_port/` e por reverse
   proxy em `https://devlan.localhost/`.
-- [ ] `M5-04` Reservar o nome `devlan` e diagnosticar porta, servidor web, Caddy,
+- [x] `M5-04` Reservar o nome `devlan` e diagnosticar porta, servidor web, Caddy,
   certificado e compatibilidade de versões.
-- [ ] `M5-05` Criar `DevLANClient` e adapter HTTP; Wails/tray apenas abre/embute a
+- [x] `M5-05` Criar `DevLANClient` e adapter HTTP; Wails/tray apenas abre/embute a
   mesma superfície sem métodos de domínio duplicados.
-- [ ] `M5-06` Implementar Host/Origin allowlist, sessão local, CSRF, CSP, headers
+- [x] `M5-06` Implementar Host/Origin allowlist, sessão local, CSRF, CSP, headers
   seguros e métodos HTTP sem mutação em GET.
-- [ ] `M5-07` Garantir que token de arquivo, senhas e segredos nunca entrem no
+- [x] `M5-07` Garantir que token de arquivo, senhas e segredos nunca entrem no
   bundle/DTO/local storage/URL.
-- [ ] `M5-08` Adicionar limites/timeouts, shutdown gracioso e progresso/logs em
+- [x] `M5-08` Adicionar limites/timeouts, shutdown gracioso e progresso/logs em
   canal autenticado quando necessário.
-- [ ] `M5-09` Fazer `devlan gui`/tray abrir `devlan.localhost`, com fallback
+- [x] `M5-09` Fazer `devlan gui`/tray abrir `devlan.localhost`, com fallback
   acionável para a porta.
-- [ ] `M5-10` Fazer `devlan gui` iniciar a interface em segundo plano e devolver
+- [x] `M5-10` Fazer `devlan gui` iniciar a interface em segundo plano e devolver
   o terminal; oferecer `devlan gui --foreground` para diagnóstico e logs.
-- [ ] `M5-11` Manter `ui_access=local` como default; acesso LAN só entra depois
+- [x] `M5-11` Manter `ui_access=local` como default; acesso LAN só entra depois
   de autenticação, TLS, rate limiting, sessão revogável e firewall dedicados.
-- [ ] `M5-12` Fazer o bootstrap via `curl` instalar o DevLAN Core — CLI,
+- [x] `M5-12` Fazer o bootstrap via `curl` instalar o DevLAN Core — CLI,
   servidor web/API e infraestrutura Windows+WSL — sem exigir o componente
   desktop nativo.
-- [ ] `M5-13` Implementar `devlan desktop install|status|uninstall` para instalar
+- [x] `M5-13` Implementar `devlan desktop install|status|uninstall` para instalar
   e remover independentemente um artefato Windows assinado, verificado e
   compatível com a versão principal da API.
-- [ ] `M5-14` Componente desktop opcional: tray, notificações, inicialização com
+- [x] `M5-14` Componente desktop opcional: tray, notificações, inicialização com
   login e atalho para abrir a interface web.
-- [ ] `M5-15` Permitir habilitar/desabilitar a inicialização com login sem
+- [x] `M5-15` Permitir habilitar/desabilitar a inicialização com login sem
   reinstalar o Core e sem exigir que a janela Wails permaneça aberta.
-- [ ] `M5-16` Definir instalação por usuário, atualização atômica, rollback e
+- [x] `M5-16` Definir instalação por usuário, atualização atômica, rollback e
   mensagem acionável quando Desktop e Core tiverem versões incompatíveis.
 
 **Gate:** a mesma GUI/API funciona nas duas URLs locais, nenhuma mutação é

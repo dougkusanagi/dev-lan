@@ -52,8 +52,14 @@ func (m *proxyTestManager) RestartDev(ctx context.Context, p domain.Project, por
 	_ = m.StopDev(ctx, p, port)
 	return m.StartDev(ctx, p, port, command)
 }
-func (*proxyTestManager) Status(context.Context, domain.Project, int) (DevProcessStatus, error) {
-	return DevProcessStatus{}, nil
+func (m *proxyTestManager) Status(_ context.Context, _ domain.Project, port int) (DevProcessStatus, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state := StateStopped
+	if m.servers[port] != nil {
+		state = StateRunning
+	}
+	return DevProcessStatus{State: state}, nil
 }
 func (*proxyTestManager) InstallDeps(context.Context, domain.Project, string) (string, error) {
 	return "", nil
