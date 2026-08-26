@@ -21,10 +21,6 @@ export default tseslint.config(
     },
     rules: {
       ...reactHooks.configs.flat.recommended.rules,
-      // Existing data-loading effects update a loading flag before awaiting
-      // an external request. Keep this visible while the async state flow is
-      // refactored, without making the current valid pattern a lint failure.
-      'react-hooks/set-state-in-effect': 'warn',
       'react-refresh/only-export-components': [
         'warn',
         { allowConstantExport: true },
