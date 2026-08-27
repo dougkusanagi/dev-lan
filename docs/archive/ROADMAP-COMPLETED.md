@@ -261,77 +261,17 @@ para fechar o gate após reboot, VPN/troca de IP e `wsl --shutdown`.
 
 **Gate:** métricas corretas respeitam budgets de CPU/memória.
 
-## Marco 10 — Robustez e documentação (P1/P2)
+## Entregas incorporadas após o Marco 9
 
-> Snapshot do backlog no momento do arquivamento. Itens ainda abertos foram
-> migrados e reagrupados no [roadmap vigente](../ROADMAP.md); as caixas abaixo
-> não devem ser usadas para acompanhar progresso.
+- [x] Reutilizar reverse proxy/transporte no gateway JavaScript.
+- [x] Reconciliar remoção e troca de porta sem listeners órfãos.
+- [x] Tornar erros de discovery diagnósticos tipados e preservar sua causa.
+- [x] Atualizar a documentação para a topologia vigente e separar fontes de
+  verdade, planos e histórico.
+- [x] Definir o contrato conservador do uninstall e seu manifesto versionado.
+- [x] Implementar planner/dry-run e classificação estruturada do uninstall.
+- [x] Preservar projetos e oferecer políticas explícitas keep/purge.
+- [x] Adicionar operações longas com ID, consulta de estado e eventos SSE.
 
-- [ ] `M10-01` Configurar/testar timeouts e slow clients na API web.
-- [ ] `M10-02` Reutilizar reverse proxy/transporte no gateway dev.
-- [ ] `M10-03` Reconciliar remoção/troca de porta sem listeners órfãos.
-- [ ] `M10-04` Tornar erros de discovery diagnósticos tipados.
-- [ ] `M10-05` Testar lifecycle/concorrência de serviço, web server, supervisor,
-  firewall e executáveis auxiliares.
-- [ ] `M10-06` Definir/medir budgets de startup, reload, polling, memória e logs.
-- [ ] `M10-07` Revisar permissões de estado/auditoria e sanitização do bundle.
-- [ ] `M10-08` Atualizar toda a documentação removendo subpath/host LAN/DNS e a
-  topologia de dois Caddys, documentando mirrored networking, Caddy WSL único,
-  GUI web, portas, `devlan.localhost`, firewall Hyper-V e postura local/LAN.
-- [ ] `M10-09` Executar matriz real e anexar resultados à release.
-
-**Gate:** documentação descreve o implementado e todos os budgets passam.
-
-## Marco 11 — Desinstalação reversível e reinstalação limpa (P1)
-
-**Estado:** núcleo implementado: planner/dry-run, manifesto de proveniência,
-flags de retenção/purge, fingerprints, restauração conservadora de
-configurações WSL/Caddy, limpeza de pacotes registrados, trust store, PATH e
-helper externo para a autolimpeza do binário Windows. Os itens restantes
-dependem de capturar toda a proveniência de dependências/legados e fechar a
-matriz real antes do gate.
-
-- [x] `M11-01` Definir o contrato de propriedade e preservação de
-  `devlan uninstall`: remover tudo que o DevLAN instalou ou gerencia, preservar
-  projetos e nunca apagar silenciosamente recursos preexistentes ou alterados
-  depois da instalação. Detalhes em [UNINSTALL.md](../plans/UNINSTALL.md).
-- [x] `M11-02` Criar manifesto versionado de instalação/proveniência, gravado
-  pelo bootstrap, com recursos Windows e WSL, estado anterior, identidade da
-  distribuição e evidência de quais pacotes, certificados, regras, arquivos e
-  entradas de PATH foram efetivamente criados pelo DevLAN.
-- [ ] `M11-03` Fazer novas instalações capturarem backups e fingerprints antes
-  de alterar `.wslconfig`, `/etc/wsl.conf`, configuração/pool PHP-FPM,
-  Caddyfile, trust store, PATH e integrações de inicialização.
-- [x] `M11-04` Implementar plano de remoção inspecionável com
-  `devlan uninstall --dry-run`, classificação `remove|restore|preserve|conflict`
-  e saída humana/JSON antes de qualquer mutação.
-- [ ] `M11-05` Tornar `devlan uninstall` transacional e idempotente: parar
-  processos/serviços, remover firewall Windows/Hyper-V, confiança da CA,
-  serviço/startup/atalhos, artefatos WSL e binários; restaurar configurações
-  compartilhadas somente quando ainda correspondem ao estado aplicado pelo
-  DevLAN; por fim remover Caddy/PHP/Composer/Go apenas quando o manifesto provar
-  que foram instalados pelo bootstrap e não eram preexistentes.
-- [x] `M11-06` Preservar diretórios de projetos incondicionalmente e oferecer
-  flags explícitas `--keep-data` e `--keep-dependencies`; reservar `--purge`
-  com confirmação para resíduos de instalações legadas sem proveniência, sem
-  ampliar seu alcance para projetos ou para a distribuição WSL inteira.
-- [ ] `M11-07` Implementar remoção do executável/PATH no Windows por helper
-  externo e recuperável, porque o processo em execução não pode depender de
-  apagar a si próprio; reportar claramente qualquer etapa pendente de reboot ou
-  `wsl --shutdown`.
-- [ ] `M11-08` Migrar instalações existentes para proveniência conservadora:
-  detectar recursos por identidade forte, nunca inferir propriedade apenas por
-  nome/caminho e exigir confirmação para remover o que não puder ser atribuído.
-- [ ] `M11-09` Cobrir fault injection e matriz real Windows+WSL: interrupção em
-  cada etapa, segunda execução, Caddy/PHP preexistentes, arquivo compartilhado
-  alterado pelo usuário, distro ausente, firewall parcial, certificado trocado,
-  reboot e reinstalação limpa seguida de `doctor`.
-- [x] `M11-10` Atualizar ajuda, bootstrap e documentação para distinguir
-  uninstall, keep e purge; o comando deve encerrar com resumo verificável do
-  que foi removido, restaurado, preservado, ficou pendente ou entrou em conflito.
-
-**Gate:** após uma instalação nova, `devlan uninstall` deixa o host e a distro
-no estado anterior em tudo que foi criado ou modificado pelo DevLAN, preserva
-projetos e recursos preexistentes, pode ser repetido com segurança e permite que
-o bootstrap seguinte se comporte como uma instalação limpa. Instalações legadas
-degradam para preservação/confirmação, nunca para remoção especulativa.
+O restante foi migrado para o [roadmap vigente](../ROADMAP.md), sem duplicar
+caixas abertas neste histórico.
