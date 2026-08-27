@@ -445,7 +445,7 @@ func renderWSLUnifiedAt(cfg domain.Config, accessLogPath string, now time.Time) 
 		if cfg.IsExposureExpired(route.Project, now) {
 			b.WriteString("        respond \"Acesso expirado\" 403\n")
 		} else {
-			renderUnifiedProjectServing(&b, cfg, route, true)
+			renderUnifiedProjectServing(&b, cfg, route, true, true)
 		}
 		b.WriteString("    }\n")
 	}
@@ -483,14 +483,14 @@ func renderWSLUnifiedAt(cfg domain.Config, accessLogPath string, now time.Time) 
 		if cfg.IsExposureExpired(route.Project, now) {
 			b.WriteString("    respond \"Acesso expirado\" 403\n")
 		} else {
-			renderUnifiedProjectServing(&b, cfg, route, false)
+			renderUnifiedProjectServing(&b, cfg, route, false, secure)
 		}
 		b.WriteString("}\n")
 	}
 	return b.String(), nil
 }
 
-func renderUnifiedProjectServing(b *strings.Builder, cfg domain.Config, route Route, local bool) {
+func renderUnifiedProjectServing(b *strings.Builder, cfg domain.Config, route Route, local, secure bool) {
 	name := route.Project.Name
 	allowlist := cfg.EffectiveAllowlist(route.Project)
 	if len(allowlist) > 0 {
@@ -523,9 +523,14 @@ func renderUnifiedProjectServing(b *strings.Builder, cfg domain.Config, route Ro
 	case domain.ModePHP:
 		fmt.Fprintf(b, "    root * %s\n", quoteCaddy(cfg.PHPDocumentRoot(route.Project)))
 		fmt.Fprintf(b, "    php_fastcgi unix/%s {\n", cfg.PHPSocket(route.Project))
-		// The scheme is derived by this one edge; no internal identity header is
-		// necessary or trusted by the PHP runtime.
-		b.WriteString("        env HTTPS {http.request.scheme}\n")
+		// PHP treats any non-empty HTTPS value other than "off" as a secure
+		// request. Passing the literal HTTP scheme here would therefore make
+		// frameworks generate HTTPS redirects for an insecure LAN listener.
+		if secure {
+			b.WriteString("        env HTTPS on\n")
+		} else {
+			b.WriteString("        env HTTPS off\n")
+		}
 		b.WriteString("    }\n")
 		b.WriteString("    file_server\n")
 	case domain.ModeStatic:

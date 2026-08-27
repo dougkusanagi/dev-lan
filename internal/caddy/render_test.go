@@ -275,6 +275,26 @@ func TestRenderWSLAddsIsolatedLocalHostRoute(t *testing.T) {
 	}
 }
 
+func TestRenderWSLPropagatesPHPHTTPSStateWithoutTreatingHTTPAsSecure(t *testing.T) {
+	cfg := domain.NewConfig()
+	preset := domain.PHPPresetLaravel
+	cfg.Projects = []domain.Project{{Name: "spec-sheet", Path: "/home/dev/spec-sheet", PHPPreset: &preset}}
+
+	result, err := RenderWSLUnified(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, "env HTTPS on") {
+		t.Fatalf("rota HTTPS local deve informar HTTPS=on ao PHP:\n%s", result)
+	}
+	if !strings.Contains(result, "env HTTPS off") {
+		t.Fatalf("rota HTTP LAN deve informar HTTPS=off ao PHP:\n%s", result)
+	}
+	if strings.Contains(result, "env HTTPS {http.request.scheme}") {
+		t.Fatalf("scheme literal faz PHP interpretar HTTP como HTTPS:\n%s", result)
+	}
+}
+
 func TestRenderWSLUsesOneSocketPerPHPVersionAndProjectPool(t *testing.T) {
 	cfg := domain.NewConfig()
 	if _, err := cfg.AddPHPVersion("8.3", nil); err != nil {
