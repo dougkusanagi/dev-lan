@@ -1,0 +1,239 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Mapa do sistema DevLAN",
+    "output": "system-map.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/dougkusanagi/dev-lan.git",
+      "revision": "081d17dec09aa6c6f6ffa97bd7c4357471cc529f"
+    },
+    "viewBox": [1350, 780],
+    "views": [
+      {
+        "id": "control-plane",
+        "label": "Control plane Windows",
+        "focus": ["clients", "dashboard", "api", "app", "store", "security"],
+        "note": "A intenção e o estado autoritativo permanecem no Windows."
+      },
+      {
+        "id": "execution-plane",
+        "label": "Execution plane WSL",
+        "focus": ["app", "reconcile", "wsl", "caddy", "runtimes"],
+        "note": "O WSL executa a borda Caddy e os runtimes dos projetos."
+      },
+      {
+        "id": "request-and-state",
+        "label": "Requests e estado",
+        "focus": ["clients", "api", "app", "store", "caddy", "runtimes"],
+        "note": "O fluxo administrativo converge em estado persistido e recursos reconciliados."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "clients",
+      "type": "external",
+      "label": "Clientes administrativos",
+      "sublabel": "CLI · UI · Wails",
+      "tag": "loopback autenticado",
+      "pos": [30, 285],
+      "size": [180, 78],
+      "sources": [{ "path": "docs/ARCHITECTURE.md" }]
+    },
+    {
+      "id": "dashboard",
+      "type": "frontend",
+      "label": "Dashboard React",
+      "sublabel": "GUI canônica browser-first",
+      "tag": "frontend",
+      "pos": [240, 285],
+      "size": [180, 78],
+      "sources": [{ "path": "frontend/src/main.tsx" }, { "path": "docs/ARCHITECTURE.md" }]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "API HTTP",
+      "sublabel": "rotas · auth · DTOs · SSE",
+      "tag": "loopback-only",
+      "pos": [450, 285],
+      "size": [180, 78],
+      "sources": [{ "path": "internal/api/api.go" }, { "path": "docs/ARCHITECTURE.md" }]
+    },
+    {
+      "id": "app",
+      "type": "backend",
+      "label": "Aplicação DevLAN",
+      "sublabel": "casos de uso · coordenação",
+      "tag": "internal/app.App",
+      "pos": [660, 285],
+      "size": [180, 78],
+      "sources": [{ "path": "internal/app/app.go" }, { "path": "docs/ARCHITECTURE.md" }]
+    },
+    {
+      "id": "reconcile",
+      "type": "backend",
+      "label": "Reconciliador",
+      "sublabel": "plan → apply → verify",
+      "tag": "recuperação transacional",
+      "pos": [870, 285],
+      "size": [180, 78],
+      "sources": [{ "path": "docs/ARCHITECTURE.md" }, { "path": "internal/app/app.go" }, { "path": "internal/application/reconcile/reconcile.go" }]
+    },
+    {
+      "id": "caddy",
+      "type": "cloud",
+      "label": "Caddy único",
+      "sublabel": "WSL · .localhost + LAN",
+      "tag": "borda pública",
+      "pos": [1080, 285],
+      "size": [160, 78],
+      "sources": [{ "path": "internal/caddy/render.go" }, { "path": "docs/ARCHITECTURE.md" }]
+    },
+    {
+      "id": "security",
+      "type": "security",
+      "label": "Trust store e firewall",
+      "sublabel": "CA · regras LAN · self-remove",
+      "tag": "Windows",
+      "pos": [450, 490],
+      "size": [180, 78],
+      "sources": [{ "path": "internal/platform/firewall.go" }, { "path": "internal/platform/ca.go" }, { "path": "docs/ARCHITECTURE.md" }]
+    },
+    {
+      "id": "store",
+      "type": "database",
+      "label": "Estado autoritativo",
+      "sublabel": "%LOCALAPPDATA%/DevLAN",
+      "tag": "lock · journal · backup",
+      "pos": [660, 490],
+      "size": [180, 78],
+      "sources": [{ "path": "internal/config/store.go" }, { "path": "docs/ARCHITECTURE.md" }]
+    },
+    {
+      "id": "wsl",
+      "type": "backend",
+      "label": "Transporte WSL",
+      "sublabel": "systemd · rede espelhada",
+      "tag": "Windows → Linux",
+      "pos": [870, 490],
+      "size": [180, 78],
+      "sources": [{ "path": "internal/platform/wsl_plane.go" }, { "path": "docs/ARCHITECTURE.md" }]
+    },
+    {
+      "id": "runtimes",
+      "type": "backend",
+      "label": "Runtimes dos projetos",
+      "sublabel": "PHP · JS gateway · static",
+      "tag": "readiness · HMR · cold start",
+      "pos": [1080, 490],
+      "size": [160, 78],
+      "sources": [{ "path": "internal/php/render.go" }, { "path": "internal/platform/supervisor.go" }]
+    },
+    {
+      "id": "operations",
+      "type": "messagebus",
+      "label": "Operações assíncronas",
+      "sublabel": "IDs · status · eventos SSE",
+      "tag": "long-running work",
+      "pos": [240, 650],
+      "size": [180, 78],
+      "sources": [{ "path": "internal/api/async_operations.go" }, { "path": "docs/STATUS.md" }]
+    },
+    {
+      "id": "observability",
+      "type": "backend",
+      "label": "Overview e métricas",
+      "sublabel": "read model · atribuição Caddy",
+      "tag": "limitado · incremental",
+      "pos": [450, 650],
+      "size": [180, 78],
+      "sources": [{ "path": "internal/metrics/metrics.go" }, { "path": "internal/api/views.go" }, { "path": "docs/STATUS.md" }]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Windows · control plane e estado autoritativo",
+      "wraps": ["dashboard", "api", "app", "reconcile", "security", "store", "operations", "observability", "wsl"],
+      "pad": 34
+    },
+    {
+      "kind": "region",
+      "label": "WSL 2 · execution plane",
+      "wraps": ["caddy", "runtimes"],
+      "pad": 34
+    }
+  ],
+  "connections": [
+    { "id": "clients-dashboard", "from": "clients", "to": "dashboard", "label": "browser UI", "variant": "emphasis", "labelDy": 70 },
+    {
+      "id": "clients-api",
+      "from": "clients",
+      "to": "api",
+      "label": "CLI / Wails / WSL",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "via": [[120, 420], [540, 420]],
+      "labelDy": 28
+    },
+    { "id": "dashboard-api", "from": "dashboard", "to": "api", "label": "queries + mutations", "labelDy": 70 },
+    { "id": "api-app", "from": "api", "to": "app", "label": "commands + queries", "variant": "emphasis", "labelDy": -30 },
+    { "id": "app-store", "from": "app", "to": "store", "label": "persistir intenção", "labelDy": 35 },
+    { "id": "app-reconcile", "from": "app", "to": "reconcile", "label": "plan + validate", "variant": "emphasis", "labelDy": 70 },
+    { "id": "app-security", "from": "app", "to": "security", "label": "CA + firewall", "variant": "security" },
+    { "id": "reconcile-wsl", "from": "reconcile", "to": "wsl", "label": "apply + verify", "labelDy": 35 },
+    { "id": "wsl-caddy", "from": "wsl", "to": "caddy", "label": "Caddyfile + reload", "variant": "emphasis" },
+    { "id": "caddy-runtimes", "from": "caddy", "to": "runtimes", "label": "proxy por projeto", "variant": "emphasis", "labelDy": 35 },
+    {
+      "id": "api-operations",
+      "from": "api",
+      "to": "operations",
+      "label": "operation ID + eventos",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "via": [[540, 400], [205, 400], [205, 600], [330, 600]]
+    },
+    {
+      "id": "api-observability",
+      "from": "api",
+      "to": "observability",
+      "label": "overview + métricas",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "via": [[540, 400], [410, 400], [410, 600], [540, 600]]
+    },
+    { "id": "store-observability", "from": "store", "to": "observability", "label": "snapshot versionado", "variant": "dashed" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Contratos do produto",
+      "items": [
+        "Cada projeto expõe simultaneamente https://nome.localhost/ e uma porta LAN persistente.",
+        "A API administrativa e a UI permanecem limitadas ao loopback."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Reconciliation",
+      "items": [
+        "Mutação: plan → validate → stage → commit → reload → healthcheck.",
+        "Journal, backup e recuperação protegem estado e recursos derivados."
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Fronteira Windows / WSL",
+      "items": [
+        "Windows mantém o control plane e o estado autoritativo.",
+        "WSL 2 executa o único Caddy, PHP-FPM e processos dos projetos."
+      ]
+    }
+  ]
+}
