@@ -43,6 +43,18 @@ type DevManager interface {
 	Logs(ctx context.Context, project domain.Project, lines int) (string, error)
 }
 
+type DevStatusRequest struct {
+	Project domain.Project
+	Port    int
+}
+
+// DevStatusBatcher is optional so existing managers and test doubles remain
+// valid. The WSL implementation uses it to inspect all Linux PID files in a
+// single wsl.exe session.
+type DevStatusBatcher interface {
+	StatusBatch(ctx context.Context, requests []DevStatusRequest) ([]DevProcessStatus, error)
+}
+
 type WSLDevManager struct {
 	WSL WSLRunner
 }
@@ -148,10 +160,14 @@ func viteHostSpecified(command string) bool {
 func (m WSLDevManager) configureViteHotFile(ctx context.Context, project domain.Project) error {
 	hotFile := pathpkg.Join(project.Path, "public", "hot")
 	if m.usesWSL(project.Path) {
-		_, err := m.WSL.Run(ctx, "/bin/sh", "-c", `printf 'https://%s.localhost\n' "$1" > "$2"`, "devlan", project.Name, hotFile)
+		// An empty hot file keeps Laravel's Vite tags relative to the current
+		// project origin. The unified Caddy edge proxies those paths to Vite,
+		// which also avoids project-specific middleware rewriting the origin to
+		// https://localhost.
+		_, err := m.WSL.Run(ctx, "/bin/sh", "-c", `printf '\n' > "$1"`, "devlan", hotFile)
 		return err
 	}
-	return os.WriteFile(filepath.Join(filepath.FromSlash(project.Path), "public", "hot"), []byte("https://"+project.Name+".localhost\n"), 0o644)
+	return os.WriteFile(filepath.Join(filepath.FromSlash(project.Path), "public", "hot"), []byte("\n"), 0o644)
 }
 
 func devUnitName(projectName string) string {
@@ -181,42 +197,60 @@ func isPortListening(port int) bool {
 }
 
 func (m WSLDevManager) Status(ctx context.Context, project domain.Project, port int) (DevProcessStatus, error) {
-	status := DevProcessStatus{
-		ProjectName: project.Name,
-		Port:        port,
-		State:       StateStopped,
+	items, err := m.StatusBatch(ctx, []DevStatusRequest{{Project: project, Port: port}})
+	if err != nil {
+		return DevProcessStatus{}, err
 	}
-
-	if isPortListening(port) {
-		status.State = StateRunning
-		return status, nil
+	if len(items) == 0 {
+		return DevProcessStatus{ProjectName: project.Name, Port: port, State: StateStopped}, nil
 	}
+	return items[0], nil
+}
 
-	// Check pid file
-	if m.usesWSL(project.Path) {
-		out, err := m.WSL.Run(ctx, "/bin/sh", "-c", fmt.Sprintf(`if [ -f "/tmp/devlan-%s.pid" ]; then cat "/tmp/devlan-%s.pid"; fi`, project.Name, project.Name))
-		if err == nil && strings.TrimSpace(out) != "" {
-			if pid, err := strconv.Atoi(strings.TrimSpace(out)); err == nil && pid > 0 {
-				status.PID = pid
-				// check if running
-				_, err := m.WSL.Run(ctx, "/bin/kill", "-0", strconv.Itoa(pid))
-				if err == nil {
-					status.State = StateStarting
-				}
-			}
+func (m WSLDevManager) StatusBatch(ctx context.Context, requests []DevStatusRequest) ([]DevProcessStatus, error) {
+	result := make([]DevProcessStatus, len(requests))
+	wslRequests := make([]WSLDevStatusRequest, 0, len(requests))
+	wslIndexes := make(map[string]int, len(requests))
+	for index, request := range requests {
+		result[index] = DevProcessStatus{
+			ProjectName: request.Project.Name,
+			Port:        request.Port,
+			State:       StateStopped,
 		}
-	} else {
-		pidFile := m.devPIDPath(project)
-		data, err := os.ReadFile(pidFile)
+		if isPortListening(request.Port) {
+			result[index].State = StateRunning
+			continue
+		}
+		if m.usesWSL(request.Project.Path) {
+			wslIndexes[request.Project.Name] = index
+			wslRequests = append(wslRequests, WSLDevStatusRequest{
+				Name:    request.Project.Name,
+				PIDFile: m.devPIDPath(request.Project),
+			})
+			continue
+		}
+		data, err := os.ReadFile(m.devPIDPath(request.Project))
 		if err == nil {
-			if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pid > 0 {
-				status.PID = pid
-				status.State = StateStarting
+			if pid, parseErr := strconv.Atoi(strings.TrimSpace(string(data))); parseErr == nil && pid > 0 {
+				result[index].PID = pid
+				result[index].State = StateStarting
 			}
 		}
 	}
-
-	return status, nil
+	if len(wslRequests) == 0 {
+		return result, nil
+	}
+	items, err := m.WSL.DevStatuses(ctx, wslRequests...)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range items {
+		if index, ok := wslIndexes[item.Name]; ok {
+			result[index].PID = item.PID
+			result[index].State = item.State
+		}
+	}
+	return result, nil
 }
 
 func (m WSLDevManager) StartDev(ctx context.Context, project domain.Project, port int, command string) error {

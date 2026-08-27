@@ -18,7 +18,8 @@ import (
 // process only after the first request. The gateway remains alive during the
 // idle period, so a later request can cold-start the project again.
 type DevProxy struct {
-	manager DevManager
+	manager   DevManager
+	transport *http.Transport
 
 	mu      sync.Mutex
 	entries map[string]*devProxyEntry
@@ -39,10 +40,15 @@ type devProxyEntry struct {
 	running  bool
 	lastUse  time.Time
 	startErr error
+	proxy    *httputil.ReverseProxy
 }
 
 func NewDevProxy(manager DevManager) *DevProxy {
-	return &DevProxy{manager: manager, entries: make(map[string]*devProxyEntry)}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = 32
+	transport.MaxIdleConnsPerHost = 8
+	transport.IdleConnTimeout = 90 * time.Second
+	return &DevProxy{manager: manager, transport: transport, entries: make(map[string]*devProxyEntry)}
 }
 
 func (p *DevProxy) entryFor(name string) *devProxyEntry {
@@ -130,6 +136,14 @@ func (p *DevProxy) Status(name string) (running, starting bool) {
 	return entry.running, entry.starting
 }
 
+// Has reports whether this proxy owns the project's gateway. A missing entry
+// must be distinguishable from a known stopped gateway so callers can ask the
+// underlying manager for the status of projects discovered outside this
+// process.
+func (p *DevProxy) Has(name string) bool {
+	return p != nil && p.entryFor(name) != nil
+}
+
 // Close stops all backend processes and gateway listeners owned by this
 // supervisor. It is called by the service/UI lifecycle before shutdown.
 func (p *DevProxy) Close() error {
@@ -144,6 +158,33 @@ func (p *DevProxy) Close() error {
 	p.mu.Unlock()
 	var firstErr error
 	for _, entry := range entries {
+		if err := p.closeEntry(entry); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if p.transport != nil {
+		p.transport.CloseIdleConnections()
+	}
+	return firstErr
+}
+
+// Prune closes gateways no longer present in the effective configuration.
+// It is called after every successful reload so removals and mode changes do
+// not leave an orphan listener behind.
+func (p *DevProxy) Prune(keep map[string]struct{}) error {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	stale := make([]*devProxyEntry, 0)
+	for name, entry := range p.entries {
+		if _, ok := keep[name]; !ok {
+			stale = append(stale, entry)
+		}
+	}
+	p.mu.Unlock()
+	var firstErr error
+	for _, entry := range stale {
 		if err := p.closeEntry(entry); err != nil && firstErr == nil {
 			firstErr = err
 		}
@@ -168,6 +209,13 @@ func (p *DevProxy) Ensure(ctx context.Context, project domain.Project, listenPor
 
 	p.mu.Lock()
 	if existing := p.entries[project.Name]; existing != nil {
+		if existing.listen != listenPort {
+			p.mu.Unlock()
+			if err := p.closeEntry(existing); err != nil {
+				return err
+			}
+			return p.Ensure(ctx, project, listenPort, command, idle)
+		}
 		existing.command = command
 		existing.idle = idle
 		existing.project = project
@@ -183,6 +231,18 @@ func (p *DevProxy) Ensure(ctx context.Context, project domain.Project, listenPor
 		project: project, listen: listenPort, backend: backend, command: command,
 		idle: idle, listener: listener, lastUse: time.Now(),
 		done: make(chan struct{}),
+	}
+	target, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", backend))
+	entry.proxy = httputil.NewSingleHostReverseProxy(target)
+	entry.proxy.Transport = p.transport
+	entry.proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
+		w.Header().Set("Retry-After", "2")
+		http.Error(w, "servidor dev ainda não está pronto: "+err.Error(), http.StatusServiceUnavailable)
+	}
+	originalDirector := entry.proxy.Director
+	entry.proxy.Director = func(out *http.Request) {
+		originalDirector(out)
+		out.Host = out.Header.Get("X-Forwarded-Host")
 	}
 	entry.server = &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p.serve(entry, w, r)
@@ -236,19 +296,8 @@ func (p *DevProxy) serve(entry *devProxyEntry, writer http.ResponseWriter, reque
 		return
 	}
 
-	target, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", entry.backend))
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
-		w.Header().Set("Retry-After", "2")
-		http.Error(w, "servidor dev ainda não está pronto: "+err.Error(), http.StatusServiceUnavailable)
-	}
-	proxy.Director = func(out *http.Request) {
-		out.URL.Scheme = target.Scheme
-		out.URL.Host = target.Host
-		out.Host = request.Host
-		out.Header.Set("X-Forwarded-Host", request.Host)
-	}
-	proxy.ServeHTTP(writer, request)
+	request.Header.Set("X-Forwarded-Host", request.Host)
+	entry.proxy.ServeHTTP(writer, request)
 }
 
 func (p *DevProxy) start(entry *devProxyEntry) {
@@ -293,13 +342,19 @@ func (p *DevProxy) reap(ctx context.Context, entry *devProxyEntry) {
 
 func (p *DevProxy) closeEntry(entry *devProxyEntry) error {
 	p.mu.Lock()
-	if entry.running {
+	running := entry.running
+	project, backend := entry.project, entry.backend
+	server := entry.server
+	p.mu.Unlock()
+	if running {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		_ = p.manager.StopDev(ctx, entry.project, entry.backend)
+		_ = p.manager.StopDev(ctx, project, backend)
 		cancel()
 	}
-	delete(p.entries, entry.project.Name)
-	server := entry.server
+	p.mu.Lock()
+	if p.entries[entry.project.Name] == entry {
+		delete(p.entries, entry.project.Name)
+	}
 	p.mu.Unlock()
 	entry.closeOnce.Do(func() { close(entry.done) })
 	if server != nil {

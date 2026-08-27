@@ -59,7 +59,10 @@ func (d Detector) DetectJS(ctx context.Context, projectPath string) (JSResult, e
 	}
 
 	// Check package.json
-	hasPkg, _ := d.Inspector.Exists(ctx, projectPath, "package.json")
+	hasPkg, existsErr := d.Inspector.Exists(ctx, projectPath, "package.json")
+	if existsErr != nil {
+		return result, wrapDiscovery("markers", projectPath, existsErr)
+	}
 	result.HasPackageJSON = hasPkg
 
 	var pkg packageJSON
@@ -161,7 +164,7 @@ func (d Detector) DetectJS(ctx context.Context, projectPath string) (JSResult, e
 	}
 
 	if !hasPkg && !result.HasStaticBuild && !result.IsSPA {
-		return result, fmt.Errorf("projeto JavaScript ou estático não reconhecido")
+		return result, invalidDiscovery("javascript", projectPath, fmt.Errorf("projeto JavaScript ou estático não reconhecido"))
 	}
 
 	return result, nil
@@ -232,7 +235,7 @@ func (d Detector) DetectProject(ctx context.Context, projectPath string) (Detect
 		}, nil
 	}
 
-	return DetectedProject{ProjectPath: projectPath}, fmt.Errorf("tipo de projeto não identificado para: %s", projectPath)
+	return DetectedProject{ProjectPath: projectPath}, invalidDiscovery("project", projectPath, fmt.Errorf("tipo de projeto não identificado para: %s", projectPath))
 }
 
 type BatchAllInspector interface {
@@ -249,7 +252,7 @@ func (d Detector) BatchDiscoverProjects(ctx context.Context, parentPath string) 
 	}
 	children, err := d.Inspector.ListDirectories(ctx, parentPath)
 	if err != nil {
-		return nil, err
+		return nil, wrapDiscovery("list", parentPath, err)
 	}
 	results := make([]DetectedProject, 0, len(children))
 	for _, child := range children {
@@ -258,54 +261,4 @@ func (d Detector) BatchDiscoverProjects(ctx context.Context, parentPath string) 
 		}
 	}
 	return results, nil
-}
-
-type RouteRecommendation struct {
-	RecommendedMode domain.RouteMode
-	Reason          string
-}
-
-// RecommendRouteMode advises the best route mode based on project architecture, framework, and runtime.
-func RecommendRouteMode(detected DetectedProject) RouteRecommendation {
-	switch detected.Kind {
-	case ProjectKindDev:
-		switch detected.JS.Framework {
-		case "next", "nuxt", "remix", "sveltekit":
-			return RouteRecommendation{
-				RecommendedMode: domain.RouteModePort,
-				Reason:          fmt.Sprintf("Framework %s utiliza roteamento na raiz e assets absolutos; o modo 'port' ou 'host' evita conflitos de subpath", detected.JS.Framework),
-			}
-		case "vite":
-			return RouteRecommendation{
-				RecommendedMode: domain.RouteModePort,
-				Reason:          "Vite com HMR/WebSocket opera de forma mais transparente em modo 'port' ou 'host'",
-			}
-		default:
-			return RouteRecommendation{
-				RecommendedMode: domain.RouteModePort,
-				Reason:          "Servidores de desenvolvimento JavaScript operam de forma ideal com porta dedicada (raiz /)",
-			}
-		}
-	case ProjectKindStatic:
-		if detected.JS.IsSPA {
-			return RouteRecommendation{
-				RecommendedMode: domain.RouteModePath,
-				Reason:          "Projetos estáticos SPA funcionam bem em 'path' com fallback ou em 'host'",
-			}
-		}
-		return RouteRecommendation{
-			RecommendedMode: domain.RouteModePath,
-			Reason:          "Projetos estáticos são compatíveis com modo 'path'",
-		}
-	case ProjectKindPHP:
-		return RouteRecommendation{
-			RecommendedMode: domain.RouteModePath,
-			Reason:          "Aplicações PHP são suportadas nativamente no modo 'path' com regravação de base URL",
-		}
-	default:
-		return RouteRecommendation{
-			RecommendedMode: domain.RouteModePath,
-			Reason:          "Modo padrão 'path' para compatibilidade LAN sem DNS",
-		}
-	}
 }

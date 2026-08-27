@@ -77,7 +77,7 @@ func TestGUI_GetProjects(t *testing.T) {
 func TestGUI_GetMetricsReadsManagedAccessLog(t *testing.T) {
 	guiApp, tempDir := setupTestApp(t)
 	stamp := float64(time.Now().UnixNano()) / float64(time.Second)
-	line := fmt.Sprintf("{\"ts\":%f,\"duration\":0.084,\"status\":200,\"request\":{\"method\":\"GET\",\"uri\":\"/sample-project/orders/42?secret=value\"}}\n", stamp)
+	line := fmt.Sprintf("{\"ts\":%f,\"duration\":0.084,\"status\":200,\"devlan_project\":\"sample-project\",\"request\":{\"method\":\"GET\",\"uri\":\"/orders/42?secret=value\"}}\n", stamp)
 	if err := os.WriteFile(filepath.Join(tempDir, "logs", "access.jsonl"), []byte(line), 0o600); err != nil {
 		t.Fatal(err)
 	}

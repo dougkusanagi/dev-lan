@@ -1,14 +1,80 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dougkusanagi/dev-lan/internal/domain"
 )
+
+func TestStoreUsesOptimisticRevisionAndRecoversInterruptedPair(t *testing.T) {
+	store := NewStore(t.TempDir())
+	first := domain.NewConfig()
+	first.LANAddress = "192.168.1.10"
+	if err := store.Save(first); err != nil {
+		t.Fatal(err)
+	}
+	left, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	left.LANAddress = "192.168.1.11"
+	if err := store.Save(left); err != nil {
+		t.Fatal(err)
+	}
+	right.LANAddress = "192.168.1.12"
+	if err := store.Save(right); !errors.Is(err, ErrRevisionConflict) {
+		t.Fatalf("esperava conflito de revisão, obtido %v", err)
+	}
+
+	next, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	next.LANAddress = "192.168.1.20"
+	store.Fault = func(point string) error {
+		if point == "rename.state" {
+			return errors.New("falha simulada")
+		}
+		return nil
+	}
+	if err := store.Save(next); err == nil {
+		t.Fatal("falha de rename deveria interromper o commit")
+	}
+	store.Fault = nil
+	recovered, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.LANAddress != "192.168.1.11" {
+		t.Fatalf("par anterior não restaurado: %#v", recovered)
+	}
+}
+
+func TestStoreLockIsSharedAcrossProcesses(t *testing.T) {
+	store := NewStore(t.TempDir())
+	started := make(chan struct{})
+	release := make(chan struct{})
+	go func() {
+		_ = store.WithLock(context.Background(), func() error { close(started); <-release; return nil })
+	}()
+	<-started
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	if err := store.WithLock(ctx, func() error { return nil }); err == nil {
+		t.Fatal("segundo lock deveria aguardar e falhar por timeout")
+	}
+	close(release)
+}
 
 func TestStoreRoundTripAndTOML(t *testing.T) {
 	dir := t.TempDir()
@@ -32,6 +98,11 @@ func TestStoreRoundTripAndTOML(t *testing.T) {
 	if !strings.Contains(string(data), "tls_enabled = true") || !strings.Contains(string(data), "https_port = 443") {
 		t.Fatalf("TOML não contém configuração TLS: %s", data)
 	}
+	for _, legacyKey := range []string{"default_route_mode", "domain_suffix", "route_mode", "route_host"} {
+		if strings.Contains(string(data), legacyKey) {
+			t.Fatalf("TOML contém chave de roteamento removida %q: %s", legacyKey, data)
+		}
+	}
 	loaded, err := store.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -39,6 +110,29 @@ func TestStoreRoundTripAndTOML(t *testing.T) {
 	if !loaded.TLSEnabled || loaded.HTTPSPort != 443 || len(loaded.Projects) != 1 || loaded.Projects[0].Name != "financeiro" || len(loaded.Parks) != 1 {
 		t.Fatalf("round-trip incorreto: %#v", loaded)
 	}
+}
+
+func TestStoreRejectsStateAndConfigFromRemovedRoutingSchema(t *testing.T) {
+	t.Run("config TOML", func(t *testing.T) {
+		store := NewStore(t.TempDir())
+		if err := os.WriteFile(store.Paths().Config, []byte("default_route_mode = \"path\"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Load(); err == nil {
+			t.Fatal("configuração com default_route_mode removido deveria ser rejeitada")
+		}
+	})
+
+	t.Run("estado JSON", func(t *testing.T) {
+		store := NewStore(t.TempDir())
+		state := `{"version":1,"schema_version":1,"revision":1,"projects":[{"name":"portal","path":"/home/dev/portal","route_mode":"path"}],"parks":[]}`
+		if err := os.WriteFile(store.Paths().State, []byte(state), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Load(); err == nil {
+			t.Fatal("estado com route_mode removido deveria ser rejeitado")
+		}
+	})
 }
 
 func TestStoreRoundTripPHPVersionsPoolsAndProjectOverrides(t *testing.T) {
@@ -124,21 +218,15 @@ func TestRollbackPHPFilesRestoresLastGeneratedPools(t *testing.T) {
 func TestStoreRoundTripPhase4FieldsAndAudit(t *testing.T) {
 	store := NewStore(t.TempDir())
 	cfg := domain.NewConfig()
-	portMode := domain.RouteModePort
 	port := 8090
-	host := "app.local"
-	cfg.DefaultRouteMode = domain.RouteModePath
 	cfg.RouteBasePort = 8080
-	cfg.DomainSuffix = "lan"
 	cfg.Allowlist = []string{"192.168.1.0/24"}
 	cfg.AuthUsers = []domain.AuthUser{{Username: "admin", PasswordHash: "secret_hash"}}
 	cfg.Projects = []domain.Project{
 		{
 			Name:         "spa",
 			Path:         "/home/dev/spa",
-			RouteMode:    &portMode,
 			RoutePort:    &port,
-			RouteHost:    &host,
 			Allowlist:    []string{"10.0.0.0/8"},
 			ExposedUntil: func() *string { s := "2029-01-01T00:00:00Z"; return &s }(),
 		},
@@ -157,7 +245,7 @@ func TestStoreRoundTripPhase4FieldsAndAudit(t *testing.T) {
 		t.Fatalf("auth users globais não persistidos: %#v", loaded.AuthUsers)
 	}
 	p, found := loaded.Project("spa")
-	if !found || p.RouteMode == nil || *p.RouteMode != domain.RouteModePort || p.RoutePort == nil || *p.RoutePort != 8090 {
+	if !found || p.RoutePort == nil || *p.RoutePort != 8090 {
 		t.Fatalf("configuração de rota do projeto não persistida: %#v", p)
 	}
 	if len(p.Allowlist) != 1 || p.Allowlist[0] != "10.0.0.0/8" {

@@ -1,5 +1,7 @@
 .tools/
 frontend/node_modules/
+frontend/coverage/
+frontend/test-results/
 bin/
 dist/
 
@@ -11,3 +13,8 @@ dist/
 *.test
 *.out
 cmd/devlan/devlan_resource_windows_amd64.syso
+
+# Root-level output from local smoke tests and download probes.
+/err.log
+/out.log
+/wget-log*

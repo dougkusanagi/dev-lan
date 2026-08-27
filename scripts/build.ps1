@@ -41,6 +41,7 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Falha ao compilar DevLAN (código $LASTEXITCODE)."
     }
+    Copy-Item -LiteralPath $resolvedOutput -Destination (Join-Path $sourceRoot 'devlan.exe') -Force -ErrorAction SilentlyContinue
 }
 finally {
     if (Test-Path -LiteralPath $resourcePath) {

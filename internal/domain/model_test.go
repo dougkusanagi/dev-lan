@@ -85,18 +85,29 @@ func TestDirectChildParkOnlyMatchesOneLevel(t *testing.T) {
 }
 
 func TestResolvedProjectURLUsesTLSState(t *testing.T) {
-	project := ResolvedProject{Project: Project{Name: "financeiro"}}
-	if got := project.URL("192.168.10.77", 80, 443, false); got != "http://192.168.10.77/financeiro" {
+	project := ResolvedProject{Project: Project{Name: "financeiro"}, RoutePort: 8080}
+	if got := project.URL("192.168.10.77", 80, 443, false); got != "http://192.168.10.77:8080/" {
 		t.Fatalf("URL HTTP inesperada: %s", got)
 	}
-	if got := project.URL("192.168.10.77", 80, 443, true); got != "https://192.168.10.77/financeiro" {
+	if got := project.URL("192.168.10.77", 80, 443, true); got != "https://192.168.10.77:8080/" {
 		t.Fatalf("URL HTTPS inesperada: %s", got)
 	}
 }
 
 func TestLocalDevURLUsesProjectLocalhostOrigin(t *testing.T) {
-	if got, want := LocalDevURL("cj-spec-sheet"), "https://cj-spec-sheet.localhost"; got != want {
+	if got, want := LocalDevURL("cj-spec-sheet"), "https://cj-spec-sheet.localhost/"; got != want {
 		t.Fatalf("LocalDevURL() = %q, want %q", got, want)
+	}
+}
+
+func TestNormalizeNameRejectsReservedNames(t *testing.T) {
+	for _, name := range []string{"devlan", "localhost", "api"} {
+		if _, err := NormalizeName(name); err == nil {
+			t.Fatalf("NormalizeName(%q) deveria rejeitar nome reservado", name)
+		}
+	}
+	if normalized, err := NormalizeName("catalogo-app"); err != nil || normalized != "catalogo-app" {
+		t.Fatalf("NormalizeName(catalogo-app) falhou: %v", err)
 	}
 }
 
@@ -196,62 +207,38 @@ func TestStaticDocumentRootAndSPAFallback(t *testing.T) {
 	}
 }
 
-func TestRouteModeResolutionAndURL(t *testing.T) {
+func TestRoutePortResolutionAndURL(t *testing.T) {
 	cfg := NewConfig()
-	portMode := RouteModePort
-	hostMode := RouteModeHost
 	customPort := 8085
-	customHost := "painel.local"
 
 	cfg.Projects = []Project{
-		{Name: "subpath-app", Path: "/home/dev/subpath-app"},
-		{Name: "port-app", Path: "/home/dev/port-app", RouteMode: &portMode, RoutePort: &customPort},
-		{Name: "host-app", Path: "/home/dev/host-app", RouteMode: &hostMode, RouteHost: &customHost},
-		{Name: "auto-host", Path: "/home/dev/auto-host", RouteMode: &hostMode},
+		{Name: "automatic-app", Path: "/home/dev/automatic-app"},
+		{Name: "custom-app", Path: "/home/dev/custom-app", RoutePort: &customPort},
 	}
 	if err := cfg.Normalize(); err != nil {
 		t.Fatal(err)
 	}
 
-	p1, err := cfg.Resolve("subpath-app")
+	p1, err := cfg.Resolve("automatic-app")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p1.RouteMode != RouteModePath {
-		t.Fatalf("esperado route mode path: %s", p1.RouteMode)
+	if p1.RoutePort != 8080 {
+		t.Fatalf("porta LAN automática inesperada: %d", p1.RoutePort)
 	}
-	if got := p1.URL("192.168.1.50", 80, 443, false); got != "http://192.168.1.50/subpath-app" {
-		t.Fatalf("URL path inesperada: %s", got)
+	if got := p1.URL("192.168.1.50", 80, 443, false); got != "http://192.168.1.50:8080/" {
+		t.Fatalf("URL LAN automática inesperada: %s", got)
 	}
 
-	p2, err := cfg.Resolve("port-app")
+	p2, err := cfg.Resolve("custom-app")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p2.RouteMode != RouteModePort || p2.RoutePort != 8085 {
-		t.Fatalf("esperado route mode port 8085: %s, %d", p2.RouteMode, p2.RoutePort)
+	if p2.RoutePort != 8085 {
+		t.Fatalf("porta LAN customizada inesperada: %d", p2.RoutePort)
 	}
 	if got := p2.URL("192.168.1.50", 80, 443, false); got != "http://192.168.1.50:8085/" {
-		t.Fatalf("URL port inesperada: %s", got)
-	}
-
-	p3, err := cfg.Resolve("host-app")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p3.RouteMode != RouteModeHost || p3.RouteHost != "painel.local" {
-		t.Fatalf("esperado route mode host painel.local: %s, %s", p3.RouteMode, p3.RouteHost)
-	}
-	if got := p3.URL("192.168.1.50", 80, 443, false); got != "http://painel.local/" {
-		t.Fatalf("URL host inesperada: %s", got)
-	}
-
-	p4, err := cfg.Resolve("auto-host")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p4.RouteHost != "auto-host.lan" {
-		t.Fatalf("esperado route host auto-host.lan: %s", p4.RouteHost)
+		t.Fatalf("URL LAN customizada inesperada: %s", got)
 	}
 }
 

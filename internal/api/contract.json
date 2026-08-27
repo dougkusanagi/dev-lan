@@ -1,0 +1,229 @@
+{
+  "protocolVersion": 1,
+  "types": {
+    "ProjectInfo": {
+      "goType": "ProjectView",
+      "fields": {
+        "name": { "type": "string", "required": true },
+        "path": { "type": "string", "required": true },
+        "kind": { "type": "ProjectKind", "required": true },
+        "mode": { "type": "ProjectMode | ''", "required": true },
+        "effectiveMode": { "type": "ProjectMode", "required": true },
+        "framework": { "type": "ProjectFramework", "required": true },
+        "url": { "type": "string", "required": true },
+        "lanUrl": { "type": "string", "required": true },
+        "localDevUrl": { "type": "string", "required": true },
+        "localDevState": { "type": "LocalDevState", "required": true },
+        "lanPreviewState": { "type": "LanPreviewState", "required": true },
+        "tlsEnabled": { "type": "boolean", "required": true },
+        "port": { "type": "number", "required": false },
+        "routePortOverride": { "type": "number", "required": false },
+        "status": { "type": "ProjectStatus", "required": true },
+        "statusDetail": { "type": "string", "required": false },
+        "phpVersion": { "type": "string", "required": false },
+        "packageManager": { "type": "string", "required": false },
+        "staticDir": { "type": "string", "required": false },
+        "devRunning": { "type": "boolean", "required": true },
+        "devPid": { "type": "number", "required": false },
+        "devPort": { "type": "number", "required": false }
+        ,"revision": { "type": "number", "required": false }
+      }
+    },
+    "SystemStatus": {
+      "goType": "SystemStatusView",
+      "fields": {
+        "lanIp": { "type": "string", "required": true },
+        "windowsPort": { "type": "number", "required": true },
+        "httpsPort": { "type": "number", "required": true },
+        "routeBasePort": { "type": "number", "required": true },
+        "routePortCount": { "type": "number", "required": true },
+        "uiPort": { "type": "number", "required": true },
+        "tlsEnabled": { "type": "boolean", "required": true },
+        "defaultMode": { "type": "ProjectMode", "required": true },
+        "phpDefaultVersion": { "type": "string", "required": true },
+        "windowsCaddyRunning": { "type": "boolean", "required": true },
+        "wslCaddyRunning": { "type": "boolean", "required": true },
+        "caddyRunning": { "type": "boolean", "required": false },
+        "caddyTopology": { "type": "string", "required": false },
+        "caddySystemd": { "type": "boolean", "required": false },
+        "caddyLive": { "type": "boolean", "required": false },
+        "mirroredConfigured": { "type": "boolean", "required": false },
+        "mirroredNetworking": { "type": "boolean", "required": false },
+        "hypervFirewallOk": { "type": "boolean", "required": false },
+        "caRootValid": { "type": "boolean", "required": false },
+        "caRootTrusted": { "type": "boolean", "required": false },
+        "wslAvailable": { "type": "boolean", "required": true },
+        "firewallOk": { "type": "boolean", "required": true },
+        "phpVersions": { "type": "string[]", "required": true },
+        "totalProjects": { "type": "number", "required": true },
+        "protocolVersion": { "type": "number", "required": true },
+        "revision": { "type": "number", "required": false },
+        "observedAt": { "type": "string", "required": false }
+      }
+    },
+    "Overview": {
+      "goType": "OverviewView",
+      "fields": {
+        "projects": { "type": "ProjectInfo[]", "required": true },
+        "status": { "type": "SystemStatus", "required": true },
+        "phpVersions": { "type": "PHPVersion[]", "required": true }
+        ,"revision": { "type": "number", "required": false }
+        ,"observedAt": { "type": "string", "required": false }
+        ,"meta": { "type": "OverviewMeta", "required": false }
+      }
+    },
+    "OverviewMeta": {
+      "goType": "OverviewMeta",
+      "fields": {
+        "cache": { "type": "string", "required": true },
+        "hotAgeMs": { "type": "number", "required": true },
+        "coldAgeMs": { "type": "number", "required": true },
+        "durationMs": { "type": "number", "required": true },
+        "wslCalls": { "type": "number", "required": true },
+        "wslCallsDelta": { "type": "number", "required": true },
+        "wslDurationMs": { "type": "number", "required": true },
+        "wslDurationDeltaMs": { "type": "number", "required": true }
+      }
+    },
+    "MutationResult": {
+      "goType": "MutationResult",
+      "fields": {
+        "operationId": { "type": "string", "required": true },
+        "operation": { "type": "string", "required": true },
+        "phase": { "type": "string", "required": true },
+        "status": { "type": "string", "required": true },
+        "revision": { "type": "number", "required": false },
+        "projectState": { "type": "ProjectInfo", "required": false },
+        "warnings": { "type": "string[]", "required": false },
+        "error": { "type": "string", "required": false },
+        "observedAt": { "type": "string", "required": false },
+        "startedAt": { "type": "string", "required": false },
+        "updatedAt": { "type": "string", "required": false },
+        "durationMs": { "type": "number", "required": false },
+        "phaseMs": { "type": "Record<string, number>", "required": false }
+      }
+    },
+    "PHPVersion": {
+      "goType": "PHPVersionView",
+      "fields": {
+        "version": { "type": "string", "required": true },
+        "installed": { "type": "boolean", "required": true },
+        "configured": { "type": "boolean", "required": true },
+        "extensions": { "type": "string[]", "required": false }
+      }
+    },
+    "DoctorCheck": {
+      "goType": "DoctorCheckView",
+      "fields": {
+        "name": { "type": "string", "required": true },
+        "status": { "type": "'OK' | 'WARN' | 'FAIL'", "required": true },
+        "detail": { "type": "string", "required": true },
+        "fixable": { "type": "boolean", "required": true },
+        "fixAction": { "type": "string", "required": false }
+      }
+    },
+    "GlobalConfig": {
+      "goType": "GlobalConfigView",
+      "fields": {
+        "defaultMode": { "type": "ProjectMode", "required": true },
+        "windowsPort": { "type": "number", "required": true },
+        "httpsPort": { "type": "number", "required": true },
+        "tlsEnabled": { "type": "boolean", "required": true },
+        "phpDefaultVersion": { "type": "string", "required": true },
+        "allowlist": { "type": "string[]", "required": true }
+      }
+    },
+    "ProjectConfigUpdate": {
+      "goType": "ProjectConfigUpdate",
+      "fields": {
+        "name": { "type": "string", "required": true },
+        "operationId": { "type": "string", "required": false },
+        "mode": { "type": "ProjectMode", "required": false },
+        "phpVersion": { "type": "string", "required": false },
+        "phpPreset": { "type": "string", "required": false },
+        "tlsEnabled": { "type": "boolean", "required": false },
+        "routePort": { "type": "number", "required": false },
+        "routePortAuto": { "type": "boolean", "required": false },
+        "staticDir": { "type": "string", "required": false },
+        "devCommand": { "type": "string", "required": false },
+        "devPort": { "type": "number", "required": false }
+      }
+    },
+    "MetricsSnapshot": {
+      "goType": "metrics.Snapshot",
+      "fields": {
+        "project": { "type": "string", "required": true },
+        "range": { "type": "MetricsRange", "required": true },
+        "generatedAt": { "type": "string", "required": true },
+        "excludedColdStarts": { "type": "number", "required": true },
+        "requests": { "type": "number", "required": true },
+        "requestsPerMinute": { "type": "number", "required": true },
+        "errorCount": { "type": "number", "required": true },
+        "errorRate": { "type": "number", "required": true },
+        "p50Ms": { "type": "number | null", "required": true },
+        "p95Ms": { "type": "number | null", "required": true },
+        "latencyBuckets": { "type": "LatencyBucket[]", "required": true },
+        "traffic": { "type": "TrafficPoint[]", "required": true },
+        "routes": { "type": "RouteSnapshot[]", "required": true }
+      }
+    },
+    "LatencyBucket": {
+      "goType": "metrics.Bucket",
+      "fields": {
+        "upperBoundMs": { "type": "number | null", "required": true },
+        "count": { "type": "number", "required": true }
+      }
+    },
+    "TrafficPoint": {
+      "goType": "metrics.TrafficPoint",
+      "fields": {
+        "at": { "type": "string", "required": true },
+        "requestsPerMinute": { "type": "number", "required": true }
+      }
+    },
+    "RouteSnapshot": {
+      "goType": "metrics.RouteSnapshot",
+      "fields": {
+        "method": { "type": "string", "required": true },
+        "normalizedPath": { "type": "string", "required": true },
+        "p50Ms": { "type": "number | null", "required": true },
+        "p95Ms": { "type": "number | null", "required": true },
+        "requests": { "type": "number", "required": true },
+        "errors": { "type": "number", "required": true }
+      }
+    }
+  },
+  "operations": {
+    "getOverview": { "method": "GET", "path": "/api/v1/overview", "wails": "GetOverview", "response": "Overview" },
+    "getProjects": { "method": "GET", "path": "/api/v1/projects", "wails": "GetProjects", "response": "ProjectInfo[]" },
+    "getStatus": { "method": "GET", "path": "/api/v1/status", "wails": "GetStatus", "response": "SystemStatus" },
+    "getTopology": { "method": "GET", "path": "/api/v1/topology", "wails": "GetTopology", "response": "Record<string, unknown>" },
+    "getMetrics": { "method": "GET", "path": "/api/v1/metrics", "wails": "GetMetrics", "response": "MetricsSnapshot | null" },
+    "getGlobalConfig": { "method": "GET", "path": "/api/v1/config", "wails": "GetGlobalConfig", "response": "GlobalConfig" },
+    "getPHPVersions": { "method": "GET", "path": "/api/v1/php/versions", "wails": "GetPHPVersions", "response": "PHPVersion[]" },
+    "saveGlobalConfig": { "method": "POST", "path": "/api/v1/config", "wails": "SaveGlobalConfig", "response": "void" },
+    "saveProjectConfig": { "method": "POST", "path": "/api/v1/projects/config", "wails": "SaveProjectConfigResult", "response": "MutationResult" },
+    "linkProject": { "method": "POST", "path": "/api/v1/projects/link", "wails": "LinkProject", "response": "void" },
+    "unlinkProject": { "method": "POST", "path": "/api/v1/projects/unlink", "wails": "UnlinkProject", "response": "void" },
+    "hideProject": { "method": "POST", "path": "/api/v1/projects/hide", "wails": "HideProject", "response": "void" },
+    "parkDir": { "method": "POST", "path": "/api/v1/parks/park", "wails": "ParkDir", "response": "void" },
+    "unparkDir": { "method": "POST", "path": "/api/v1/parks/unpark", "wails": "UnparkDir", "response": "void" },
+    "startDev": { "method": "POST", "path": "/api/v1/projects/start", "wails": "StartDevOperation", "response": "MutationResult" },
+    "stopDev": { "method": "POST", "path": "/api/v1/projects/stop", "wails": "StopDevOperation", "response": "MutationResult" },
+    "restartDev": { "method": "POST", "path": "/api/v1/projects/restart", "wails": "RestartDevOperation", "response": "MutationResult" },
+    "getOperation": { "method": "GET", "path": "/api/v1/operations/{operationId}", "wails": "GetOperation", "response": "MutationResult" },
+    "events": { "method": "GET", "path": "/api/v1/events", "wails": "EventsOn", "response": "SSE" },
+    "buildProject": { "method": "POST", "path": "/api/v1/projects/build", "wails": "BuildProject", "response": "string" },
+    "installDeps": { "method": "POST", "path": "/api/v1/projects/deps", "wails": "InstallDeps", "response": "string" },
+    "getProjectLogs": { "method": "GET", "path": "/api/v1/projects/logs", "wails": "GetProjectLogs", "response": "string" },
+    "runDoctor": { "method": "GET", "path": "/api/v1/doctor", "wails": "RunDoctor", "response": "DoctorCheck[]" },
+    "applyDoctorFix": { "method": "POST", "path": "/api/v1/doctor/fix", "wails": "ApplyDoctorFix", "response": "void" },
+    "openURL": { "method": "LOCAL", "path": "browser", "wails": "OpenURL", "response": "void" },
+    "copyURL": { "method": "LOCAL", "path": "clipboard", "wails": "CopyURL", "response": "void" },
+    "reload": { "method": "POST", "path": "/api/v1/reload", "wails": "Reload", "response": "void" },
+    "exportConfigJSON": { "method": "POST", "path": "/api/v1/config/export", "wails": "ExportConfigJSON", "response": "string" },
+    "exportDiagnostic": { "method": "LOCAL", "path": "diagnostic", "wails": "ExportDiagnostic", "response": "string" },
+    "trustCA": { "method": "POST", "path": "/api/v1/security/trust", "wails": "TrustCA", "response": "void" },
+    "getSecurityAudit": { "method": "GET", "path": "/api/v1/security/audit", "wails": "GetSecurityAudit", "response": "string" }
+  }
+}

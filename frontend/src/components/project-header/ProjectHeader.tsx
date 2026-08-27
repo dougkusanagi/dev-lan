@@ -1,4 +1,4 @@
-import { Copy, ExternalLink, RefreshCw } from 'lucide-react';
+import { Copy, ExternalLink, LoaderCircle, RefreshCw } from 'lucide-react';
 import type { ProjectInfo } from '../../types';
 
 function stateLabel(project: ProjectInfo, local: boolean): string {
@@ -39,8 +39,16 @@ function Endpoint({
   onCopy: () => void;
   active: boolean;
 }) {
+  const cardTitle =
+    tone === 'lan'
+      ? 'Acesso pela LAN: porta dedicada. Nota: cookies HTTP não são isolados por porta no mesmo IP.'
+      : 'Acesso local (.localhost): cookies, storage e HMR isolados.';
+
   return (
-    <article className={`endpoint-card ${tone}${active ? ' active' : ' inactive'}`}>
+    <article
+      className={`endpoint-card ${tone}${active ? ' active' : ' inactive'}`}
+      title={cardTitle}
+    >
       <div className="endpoint-heading">
         <span>{label}</span>
         <small>{detail}</small>
@@ -75,6 +83,7 @@ export function ProjectHeader({
   onCopyLAN,
   onCopyPath,
   onReload,
+  reloadPending = false,
 }: {
   project: ProjectInfo;
   tab: 'overview' | 'logs';
@@ -86,6 +95,7 @@ export function ProjectHeader({
   onCopyPath: () => void;
   onToggleTLS?: () => void;
   onReload: () => void;
+  reloadPending?: boolean;
 }) {
   return (
     <header className="project-header">
@@ -102,9 +112,15 @@ export function ProjectHeader({
             type="button"
             title="Recarregar infraestrutura"
             aria-label="Recarregar infraestrutura"
+            disabled={reloadPending}
+            aria-busy={reloadPending}
             onClick={onReload}
           >
-            <RefreshCw size={15} />
+            {reloadPending ? (
+              <LoaderCircle className="spin" size={15} aria-hidden="true" />
+            ) : (
+              <RefreshCw size={15} aria-hidden="true" />
+            )}
           </button>
         </div>
       </div>
@@ -128,25 +144,27 @@ export function ProjectHeader({
           onCopy={onCopyLAN}
         />
       </div>
-      <div className="project-tabs" role="tablist" aria-label="Conteúdo do projeto">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === 'overview'}
-          className={tab === 'overview' ? 'active' : ''}
-          onClick={() => onTab('overview')}
-        >
-          Visão geral
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === 'logs'}
-          className={tab === 'logs' ? 'active' : ''}
-          onClick={() => onTab('logs')}
-        >
-          Logs
-        </button>
+      <div className="project-tabs">
+        <div className="project-tablist" role="tablist" aria-label="Conteúdo do projeto">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'overview'}
+            className={tab === 'overview' ? 'active' : ''}
+            onClick={() => onTab('overview')}
+          >
+            Visão geral
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'logs'}
+            className={tab === 'logs' ? 'active' : ''}
+            onClick={() => onTab('logs')}
+          >
+            Logs
+          </button>
+        </div>
         <div className="project-path">
           <code title={project.path}>{project.path}</code>
           <button

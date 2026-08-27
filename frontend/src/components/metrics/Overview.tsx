@@ -3,17 +3,22 @@ import {
   Box,
   CircleCheck,
   Code2,
+  LoaderCircle,
   Play,
   RotateCw,
   Square,
   Terminal,
   Trash2,
 } from 'lucide-react';
+import type { FormEvent } from 'react';
 import { useEffect, useMemo, useState } from 'react';
+import type { DevLANClient } from '../../api';
 import { api } from '../../api';
 import type {
   MetricsRange,
   MetricsSnapshot,
+  OperationKey,
+  PendingOperation,
   PHPVersion,
   ProjectInfo,
   SystemStatus,
@@ -42,19 +47,27 @@ function ServiceCard({ name, up, detail }: { name: string; up: boolean; detail: 
 export function Overview({
   project,
   system,
-  busy,
+  operations = [],
   phpVersions,
   onPHPVersion,
+  onRoutePort = () => undefined,
+  onTrustCA = () => undefined,
+  onRepairFirewall = () => undefined,
   onRemove,
   onAction,
+  client = api,
 }: {
   project: ProjectInfo;
   system: SystemStatus | null;
-  busy?: string;
+  operations?: PendingOperation[];
   phpVersions: PHPVersion[];
   onPHPVersion: (version: string) => void;
+  onRoutePort?: (port: number | null) => void;
+  onTrustCA?: () => void;
+  onRepairFirewall?: () => void;
   onRemove: () => void;
   onAction: (action: 'start' | 'stop' | 'restart' | 'build' | 'deps' | 'doctor') => void;
+  client?: DevLANClient;
 }) {
   const [range, setRange] = useState<MetricsRange>('1h');
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
@@ -62,13 +75,24 @@ export function Overview({
   const [metricsRefresh, setMetricsRefresh] = useState(0);
   const canRunDev = project.effectiveMode === 'dev' || project.framework === 'laravel';
   const installedPHP = phpVersions.filter((version) => version.installed);
+  const isBusy = (...keys: OperationKey[]) =>
+    operations.some(
+      (operation) =>
+        (operation.projectName === undefined || operation.projectName === project.name) &&
+        (keys.length === 0 || keys.includes(operation.key)),
+    );
+  const configurationBusy = isBusy('tls', 'php', 'route-port', 'reload', 'remove');
+  const hmrBusy = isBusy('start', 'stop', 'restart', 'build', 'remove', 'reload');
+  const buildBusy = isBusy('build', 'start', 'stop', 'restart', 'remove', 'reload');
+  const hmrStarting = isBusy('start', 'restart');
+  const hmrStopping = isBusy('stop');
   useEffect(() => {
     void metricsRefresh;
     let current = true;
     void Promise.resolve()
       .then(() => {
         if (current) setMetricsLoading(true);
-        return api.getMetrics(project.name, range);
+        return client.getMetrics(project.name, range);
       })
       .then((value) => {
         if (current) setMetrics(value);
@@ -82,7 +106,7 @@ export function Overview({
     return () => {
       current = false;
     };
-  }, [project.name, range, metricsRefresh]);
+  }, [client, project.name, range, metricsRefresh]);
   const removeLabel = project.kind === 'linked' ? 'Desvincular projeto' : 'Ocultar projeto';
   return (
     <div className="overview-content">
@@ -97,7 +121,7 @@ export function Overview({
                 aria-label="Versão do PHP"
                 value={project.phpVersion || ''}
                 onChange={(e) => onPHPVersion(e.target.value)}
-                disabled={!!busy || installedPHP.length === 0}
+                disabled={configurationBusy || installedPHP.length === 0}
               >
                 <option value="">
                   {installedPHP.length ? 'Selecionar versão' : 'Nenhuma instalada'}
@@ -124,6 +148,7 @@ export function Overview({
               </span>
             </div>
           )}
+          <RoutePortControl project={project} busy={configurationBusy} onChange={onRoutePort} />
           <span
             className={`process-pill ${canRunDev ? (project.devRunning ? 'active' : 'stopped') : project.status}`}
             role="status"
@@ -131,39 +156,85 @@ export function Overview({
             <i />{' '}
             {canRunDev
               ? project.devRunning
-                ? 'HMR local ativo'
-                : 'HMR local parado'
+                ? hmrStarting
+                  ? 'Iniciando HMR local'
+                  : 'HMR local ativo'
+                : hmrStopping
+                  ? 'Parando HMR local'
+                  : 'HMR local parado'
               : 'Em execução'}
           </span>
           <div className="quick-actions">
             {canRunDev &&
               (project.devRunning ? (
-                <button type="button" disabled={!!busy} onClick={() => onAction('stop')}>
-                  <Square size={14} aria-hidden="true" /> Parar HMR local
+                <button
+                  type="button"
+                  disabled={hmrBusy}
+                  aria-busy={hmrStarting || hmrStopping}
+                  onClick={() => onAction('stop')}
+                >
+                  {hmrStarting || hmrStopping ? (
+                    <LoaderCircle className="spin" size={14} aria-hidden="true" />
+                  ) : (
+                    <Square size={14} aria-hidden="true" />
+                  )}{' '}
+                  {hmrStarting
+                    ? 'Iniciando HMR…'
+                    : hmrStopping
+                      ? 'Parando HMR…'
+                      : 'Parar HMR local'}
                 </button>
               ) : (
-                <button type="button" disabled={!!busy} onClick={() => onAction('start')}>
-                  <Play size={14} aria-hidden="true" /> Iniciar HMR local
+                <button
+                  type="button"
+                  disabled={hmrBusy}
+                  aria-busy={hmrStarting || hmrStopping}
+                  onClick={() => onAction('start')}
+                >
+                  {hmrStarting || hmrStopping ? (
+                    <LoaderCircle className="spin" size={14} aria-hidden="true" />
+                  ) : (
+                    <Play size={14} aria-hidden="true" />
+                  )}{' '}
+                  {hmrStarting
+                    ? 'Iniciando HMR…'
+                    : hmrStopping
+                      ? 'Parando HMR…'
+                      : 'Iniciar HMR local'}
                 </button>
               ))}
             <button
               type="button"
-              disabled={!!busy}
+              disabled={buildBusy}
+              aria-busy={isBusy('build')}
               onClick={() => onAction('build')}
               title="Para o HMR local, gera o build e publica o preview na LAN"
             >
-              Publicar preview LAN
+              {isBusy('build') && <LoaderCircle className="spin" size={14} aria-hidden="true" />}
+              {isBusy('build') ? 'Publicando preview…' : 'Publicar preview LAN'}
             </button>
             <button
               type="button"
-              disabled={!!busy}
+              disabled={isBusy('deps', 'remove', 'reload')}
+              aria-busy={isBusy('deps')}
               onClick={() => onAction('deps')}
               title="Instala as dependências encontradas em package.json e composer.json"
             >
-              Instalar dependências
+              {isBusy('deps') && <LoaderCircle className="spin" size={14} aria-hidden="true" />}
+              {isBusy('deps') ? 'Instalando dependências…' : 'Instalar dependências'}
             </button>
-            <button type="button" className="danger-action" disabled={!!busy} onClick={onRemove}>
-              <Trash2 size={14} aria-hidden="true" /> {removeLabel}
+            <button
+              type="button"
+              className="danger-action"
+              disabled={isBusy('remove', 'reload')}
+              onClick={onRemove}
+            >
+              {isBusy('remove') ? (
+                <LoaderCircle className="spin" size={14} aria-hidden="true" />
+              ) : (
+                <Trash2 size={14} aria-hidden="true" />
+              )}{' '}
+              {isBusy('remove') ? `${removeLabel}…` : removeLabel}
             </button>
           </div>
         </div>
@@ -172,14 +243,23 @@ export function Overview({
         <h2 className="section-label">SERVIÇOS</h2>
         <div className="services-grid">
           <ServiceCard
-            name="Caddy Windows"
-            up={!!system?.windowsCaddyRunning}
-            detail="Borda e TLS local"
+            name="Caddy WSL único"
+            up={!!(system?.caddyRunning ?? system?.wslCaddyRunning)}
+            detail={
+              system?.caddySystemd === false
+                ? 'systemd indisponível'
+                : `Borda, TLS e rotas LAN${system?.caddyTopology ? ` · ${system.caddyTopology}` : ''}`
+            }
           />
           <ServiceCard
-            name="Caddy WSL"
-            up={!!system?.wslCaddyRunning}
-            detail="Proxy e aplicações Linux"
+            name="WSL mirrored"
+            up={system?.mirroredNetworking ?? false}
+            detail="Loopback Windows↔WSL e acesso direto à LAN"
+          />
+          <ServiceCard
+            name="Hyper-V Firewall"
+            up={system?.hypervFirewallOk ?? false}
+            detail="Private / LocalSubnet · portas gerenciadas"
           />
           {project.effectiveMode === 'php' && (
             <ServiceCard
@@ -205,6 +285,31 @@ export function Overview({
             }
           />
         </div>
+        <div className="infrastructure-actions">
+          {project.tlsEnabled && (
+            <button type="button" disabled={isBusy('ca', 'firewall', 'reload')} onClick={onTrustCA}>
+              Confiar na CA local
+            </button>
+          )}
+          {system && !system.firewallOk && (
+            <button
+              type="button"
+              disabled={isBusy('ca', 'firewall', 'reload')}
+              onClick={onRepairFirewall}
+            >
+              Corrigir firewall privado
+            </button>
+          )}
+          {system && (system.hypervFirewallOk === false || system.mirroredNetworking === false) && (
+            <button
+              type="button"
+              disabled={isBusy('ca', 'firewall', 'reload')}
+              onClick={onRepairFirewall}
+            >
+              Corrigir rede WSL espelhada
+            </button>
+          )}
+        </div>
       </section>
       {project.lanPreviewState === 'paused' && (
         <p className="endpoint-notice">
@@ -220,6 +325,73 @@ export function Overview({
         onRefresh={() => setMetricsRefresh((value) => value + 1)}
       />
     </div>
+  );
+}
+
+function RoutePortControl({
+  project,
+  busy,
+  onChange,
+}: {
+  project: ProjectInfo;
+  busy: boolean;
+  onChange: (port: number | null) => void;
+}) {
+  const [draft, setDraft] = useState(project.port ? String(project.port) : '');
+  const [invalid, setInvalid] = useState(false);
+  const hasOverride = project.routePortOverride !== undefined;
+
+  useEffect(() => {
+    setDraft(project.port ? String(project.port) : '');
+    setInvalid(false);
+  }, [project.port]);
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const port = Number(draft);
+    if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+      setInvalid(true);
+      return;
+    }
+    setInvalid(false);
+    onChange(port);
+  };
+
+  return (
+    <form className="route-port-control" aria-label="Configuração da porta LAN" onSubmit={submit}>
+      <label htmlFor="route-port">Porta LAN</label>
+      <input
+        id="route-port"
+        type="number"
+        min={1024}
+        max={65535}
+        inputMode="numeric"
+        value={draft}
+        onChange={(event) => {
+          setDraft(event.target.value);
+          setInvalid(false);
+        }}
+        aria-invalid={invalid}
+        aria-describedby={invalid ? 'route-port-help' : 'route-port-state'}
+        disabled={busy}
+      />
+      <span id="route-port-state" className="route-port-state">
+        {hasOverride ? 'override' : 'automática'}
+      </span>
+      <button type="submit" disabled={busy || !draft}>
+        Aplicar
+      </button>
+      {hasOverride && (
+        <button type="button" disabled={busy} onClick={() => onChange(null)}>
+          Automática
+        </button>
+      )}
+      {invalid && (
+        <small id="route-port-help" role="alert">
+          Use uma porta entre 1024 e 65535.
+        </small>
+      )}
+    </form>
   );
 }
 

@@ -1,235 +1,194 @@
-# Arquitetura
+# Arquitetura do DevLAN
 
-## Componentes
+Este documento distingue o sistema implementado da direção de refatoração. O
+primeiro descreve fatos verificáveis; o segundo é o desenho que usaríamos ao
+implementar o produto novamente, adotado incrementalmente e sem rewrite.
 
-### Núcleo e CLI no Windows
+## Arquitetura atual
 
-Um executável Go concentra regras de negócio e oferece a CLI. Ele será responsável por:
-
-- manter o registro de projetos;
-- gerar configurações;
-- executar comandos controlados no WSL por `wsl.exe`;
-- validar e recarregar os dois Caddys;
-- identificar o IP LAN;
-- criar a regra de firewall durante a instalação;
-- executar diagnósticos de ponta a ponta.
-
-Operações administrativas devem ser pequenas e explícitas. A execução normal de `link`, `status` e `open` não deve pedir elevação.
-
-### CLI no WSL
-
-O bootstrap instala também um binário Linux `devlan` no WSL. Ele é um cliente
-fino do núcleo controlador no Windows, não uma segunda implementação do
-domínio. Sua função é interpretar caminhos no namespace Linux e enviar
-comandos estruturados pelo endpoint loopback autenticado `/v1/command`.
-
-O estado continua autoritativo em `%LOCALAPPDATA%/DevLAN`. O cliente WSL não
-mantém configuração concorrente em `$HOME`; a distribuição usa um arquivo
-somente de configuração que aponta para o diretório montado do Windows. A API
-valida versão, token, origem loopback, operação e argumentos. O agente Linux
-para processos JavaScript continua sendo uma responsabilidade separada.
-
-### Caddy no Windows
-
-É a borda da rede. Escuta somente nos endereços e portas configurados, recebe
-requisições da LAN e as encaminha para o WSL. Com SSL desligado, atende HTTP.
-Com SSL ligado, mantém HTTP para redirect, termina TLS na porta 443 com a CA
-interna do Caddy e encaminha ao mesmo upstream WSL.
-
-Sua configuração deve mudar pouco. A lógica de PHP e de cada projeto permanece no WSL.
-
-### Caddy no WSL
-
-A API administrativa do Caddy no Windows usa `127.0.0.1:2019`, enquanto a do
-Caddy no WSL usa `127.0.0.1:2020`. Endereços distintos evitam que o
-encaminhamento de `localhost` do WSL entregue uma recarga ao processo errado.
-
-Conhece os projetos, seus document roots, modos de atendimento e sockets PHP-FPM. A CLI gera fragmentos a partir do registro de projetos e só recarrega o Caddy após `caddy validate` ter sucesso.
-
-### PHP-FPM
-
-Projetos registrados podem apontar para versões PHP diferentes. Cada versão
-gerenciada tem um mestre PHP-FPM independente e, por padrão, um pool
-compartilhado:
-
-```ini
-pm = ondemand
-pm.max_children = 10
-pm.process_idle_timeout = 10s
-pm.max_requests = 500
-```
-
-O processo mestre permanece ativo, mas workers ociosos são encerrados por
-`pm.process_idle_timeout`. Um projeto pode receber um pool isolado, com socket
-e logs próprios, sem compartilhar workers com os demais projetos da mesma
-versão. A resolução da versão é `projeto > global`; a configuração de pool é
-`projeto > versão > global`.
-
-Os sockets gerenciados seguem:
+O DevLAN é distribuído como um executável Go no Windows, um cliente Go fino no
+WSL e um frontend React. O Windows é o control plane e guarda o estado em
+`%LOCALAPPDATA%/DevLAN`; o WSL 2 com rede espelhada e systemd executa Caddy,
+PHP-FPM e processos dos projetos.
 
 ```text
-/run/devlan/php/8.3/shared.sock
-/run/devlan/php/8.3/financeiro.sock
-/run/devlan/php/8.5/shared.sock
+CLI / browser / Wails / cliente WSL
+                 │
+        API HTTP loopback autenticada
+                 │
+        internal/app.App + config.Store
+                 │
+   ┌─────────────┼──────────────┐
+ Windows      wsl.exe        geração
+ firewall/CA  processos       Caddy/PHP
+                 │
+      Caddy único + runtimes no WSL
 ```
 
-As configurações de mestres ficam em `generated/php/php-VERSAO.conf`. O
-gerenciador WSL cria os diretórios de runtime, inicia cada mestre com
-argumentos estruturados e recarrega um mestre existente pelo PID, tornando
-`reload` idempotente.
+Todo projeto tem simultaneamente:
 
-Composer é executado como `composer` no ambiente `system` ou como
-`phpVERSAO composer` no ambiente `per-version`. Os argumentos do projeto são
-encaminhados como argumentos separados; nenhum script do projeto é executado
-durante detecção ou instalação.
+- `https://nome.localhost/`, limitado ao host;
+- `http(s)://IP:porta/`, na raiz e em porta LAN persistente.
 
-### Presets e informações PHP
+Não existem modos selecionáveis, hostname LAN ou publicação por subpath. A API
+administrativa e a UI escutam loopback. O Caddy no WSL é a única borda pública;
+sua API administrativa também é loopback-only.
 
-O detector reconhece Laravel por `artisan` + `public/index.php`, Symfony por
-`bin/console` + `public/index.php` e o preset genérico por `public/index.php`
-ou `index.php` na raiz. A detecção usa somente markers e não executa Composer,
-CLI do framework ou código da aplicação.
+### Pacotes e responsabilidades atuais
 
-`php info` é renderizado por um template HTML com escape contextual e uma
-allowlist de campos. A página não é um `phpinfo()` e não inclui ambiente,
-headers, valores de request ou segredos.
+- `cmd/devlan`: bootstrap, parsing e execução da CLI;
+- `internal/app`: casos de uso e coordenação de configuração/adaptadores;
+- `internal/domain`: modelos e validações compartilhados;
+- `internal/config`: configuração/estado versionados, lock, transação e journal;
+- `internal/api`: servidor, autenticação, handlers, DTOs, cliente, read model,
+  cache, operações assíncronas e SSE;
+- `internal/platform`: processos, rede, WSL, firewall, CA e gateway JavaScript;
+- `internal/caddy`, `internal/php`, `internal/detect`, `internal/metrics`: geração
+  e capacidades especializadas;
+- `internal/gui`: bindings Wails;
+- `frontend`: dashboard React e cliente HTTP.
 
-### Runtime JavaScript
+O fluxo de mutação converge em persistir a intenção e reconciliar recursos por
+`plan → validate → stage → commit → reload → healthcheck`, com recuperação por
+journal/backup. Operações longas possuem IDs, estado consultável e eventos SSE.
+O overview agrega projetos, runtime, PHP e topologia para reduzir travessias WSL.
 
-O supervisor mantém um gateway estável para cada projeto JS e atua como reverse
-proxy para o processo backend. Ele:
-
-- detectar Bun, pnpm, Yarn ou npm pelo lockfile;
-- ler apenas scripts permitidos do `package.json`;
-- iniciar o servidor dev sob demanda após a primeira requisição;
-- reservar uma porta estável por projeto;
-- aguardar readiness antes de encaminhar;
-- suportar WebSocket/HMR;
-- encerrar processos após um idle timeout medido pela atividade do gateway;
-- nunca instalar dependências apenas porque ocorreu uma requisição HTTP.
-
-## Fluxo de uma requisição PHP no MVP
-
-```text
-GET http://IP/financeiro/clientes
-  1. Caddy/Windows recebe /financeiro/clientes
-  2. encaminha ao Caddy/WSL com os headers externos
-  3. Caddy/WSL seleciona financeiro e remove /financeiro
-  4. php_fastcgi executa public/index.php
-  5. Laravel responde ao cliente da LAN
-```
-
-Quando `tls_enabled = true`, a primeira etapa ocorre em
-`https://IP/financeiro/clientes`; uma requisição HTTP recebe redirect 308. TLS
-é global porque a negociação do certificado acontece antes de o Caddy conhecer
-o subpath do projeto. Ainda assim, `secure`/`unsecure` recebem o nome ou caminho
-do projeto e controlam os redirects e a URL anunciada para cada rota.
-
-O Caddy armazena a CA e a chave privada no perfil do usuário Windows. Somente o
-certificado raiz público pode ser copiado para clientes LAN. A chave privada e
-o diretório de armazenamento do Caddy não devem ser compartilhados.
-
-## Compatibilidade com Laravel em subpath
-
-Servir Laravel em `/nome` exige cuidado porque redirects, assets, cookies e URLs absolutas podem assumir `/`.
-
-No MVP, o adaptador Laravel deve:
-
-- exigir `public/index.php` como document root;
-- preservar headers `X-Forwarded-Host` e `X-Forwarded-Proto` do proxy;
-- reescrever o header `Location` de redirects relativos para preservar o
-  subpath externo;
-- orientar `APP_URL=http://IP/nome`;
-- verificar cache de configuração do Laravel;
-- testar uma rota, redirect e asset no `doctor`;
-- documentar quando `URL::forceRootUrl()` ou ajuste de proxy confiável for necessário.
-
-Não se deve prometer compatibilidade universal com subpath. O roadmap inclui porta dedicada e hostname interno como alternativas por projeto.
-
-## Estado e arquivos gerados
-
-Proposta:
+### Estado e artefatos
 
 ```text
 %LOCALAPPDATA%/DevLAN/
   config.toml
   state.json
+  installation-manifest.json
+  api-endpoint.json
   wsl-distribution
-  generated/Caddyfile.windows
-  generated/Caddyfile.wsl
-  generated/php/php-8-5.conf
-  generated/php/info/index.html
+  generated/
   logs/
 
+/etc/caddy/Caddyfile
 /etc/devlan/
-  generated/Caddyfile
   generated/php/
-  snippets/
   backups/
 ```
 
-- TOML guarda preferências editáveis.
-- O estado JSON contém registro, overrides de projeto e versões PHP; SQLite fica reservado
-  para quando processos, portas e migrações de schema entrarem no produto.
-- Arquivos em `generated` não devem ser editados manualmente.
-- Personalizações entram por snippets com pontos de extensão definidos.
+TOML contém preferências editáveis; JSON contém estado e manifesto versionados.
+Arquivos em `generated/` e a cópia viva do Caddy são derivados e não devem ser
+editados manualmente. Detalhes estão em
+[Persistência](reference/PERSISTENCE.md) e
+[Execution plane WSL](reference/WSL-EXECUTION-PLANE.md).
 
-No MVP, `generated/Caddyfile.windows` e `generated/Caddyfile.wsl` são arquivos
-gerados pelo núcleo. O caminho Windows é convertido para `/mnt/<drive>/...`
-quando o Caddy do WSL é validado ou recarregado, evitando concatenação de
-comandos shell.
+### Limitações estruturais atuais
 
-### Bootstrap da máquina
+Os fluxos funcionam, mas `app.App`, API e CLI concentram responsabilidades. Há
+acesso de transportes ao store, DTOs duplicados, valores `any`, caches globais
+e orquestração repetida no Wails. Isso dificulta testes de lifecycle e faz uma
+mudança atravessar arquivos grandes. A solução é evolução incremental orientada
+por testes, não uma troca de stack.
 
-`scripts/install.ps1` é um adaptador de instalação, separado do domínio. Ele
-baixa o código-fonte, instala Go e Caddy no Windows, chama
-`scripts/install-wsl.sh` com argumentos separados para instalar PHP-FPM,
-Composer, extensões Laravel e Caddy no WSL, compila `devlan.exe` e o cliente
-Linux do WSL e delega a configuração final para o comando `devlan install`. A
-seleção de versões é
-explícita; o script não instala dependências de projetos nem executa scripts
-encontrados nos diretórios registrados.
+## Arquitetura alvo
 
-O cliente Linux é instalado como `/usr/local/bin/devlan` na distribuição
-selecionada e usa o diretório montado do estado Windows.
-
-## Aplicação segura de configuração
-
-Toda mudança segue:
+Para uma implementação nova, manteríamos um **monólito modular** Go: uma unidade
+de deploy, limites internos claros, ports and adapters e CQRS leve apenas para
+distinguir comandos de consultas. Microserviços adicionariam falhas distribuídas
+sem resolver um problema real deste produto local.
 
 ```text
-registrar intenção
-  → gerar temporário
-  → validar
-  → substituir atomicamente
-  → reload
-  → health check
-  → confirmar ou rollback
+cmd/
+  devlan/                 composição e CLI
+  devlan-wsl/             cliente Linux fino
+internal/
+  domain/
+    project/              agregados, value objects e regras
+    topology/
+    runtime/
+    installation/
+  application/
+    command/              casos de uso de escrita
+    query/                overview/status/metrics
+    reconcile/            plano, aplicação, verificação e rollback
+    ports/                interfaces pequenas consumidas pela aplicação
+  adapters/
+    store/                arquivo hoje; SQLite se decidido por ADR
+    wsl/                  transporte estruturado por wsl.exe
+    caddy/                render, validate, publish e health
+    windows/              firewall, trust store, PATH e self-remove
+    process/              supervisor e gateway JavaScript
+  transport/
+    http/                 rotas, middleware e DTOs
+    cli/                  comandos e apresentação
+    wails/                shell fino sobre HTTP
+  observability/          slog, métricas e support bundle
+api/
+  openapi.yaml            contrato externo, quando R-07 for aceito
+frontend/src/
+  app/                    composição, router e providers
+  features/               projects, topology, php, metrics, settings
+  shared/                 cliente gerado, UI e utilitários sem regra de negócio
 ```
 
-Entradas do usuário nunca devem ser concatenadas em comandos shell. Caminhos e argumentos são enviados como argumentos separados e validados contra o registro de projetos.
+Pastas são consequência dos limites, não objetivo isolado. Durante a migração,
+podemos manter os pacotes existentes e chegar a esse desenho por fatias.
 
-Para projetos no filesystem Linux, o núcleo aplica ACLs restritas ao projeto:
-`caddy` recebe leitura e travessia; `www-data` recebe leitura/escrita para que
-PHP-FPM possa servir e gravar arquivos de runtime. ACLs padrão são aplicadas a
-subdiretórios para arquivos futuros. O DevLAN não altera permissões globais do
-home do usuário.
+### Regras de dependência
 
-## Operação da Fase 6
+1. `domain` usa apenas biblioteca padrão e não conhece transporte ou storage.
+2. `application` depende do domínio e de interfaces declaradas pelo consumidor.
+3. `adapters` e `transport` apontam para dentro; nunca um para o outro por
+   acesso concreto.
+4. Somente `cmd` compõe implementações e controla startup/shutdown.
+5. CLI, HTTP e Wails executam os mesmos casos de uso.
+6. Eventos de domínio/aplicação não carregam objetos HTTP nem detalhes WSL.
 
-O serviço Windows opcional é um cliente de controle, não uma segunda
-implementação do domínio. O SCM inicia o mesmo executável com `service run`; o
-processo cria uma API HTTP em `127.0.0.1`, carrega o mesmo `config.toml`/
-`state.json`, aplica a configuração e encerra de forma controlada em
-`SERVICE_STOP` ou `SERVICE_SHUTDOWN`. A UI Wails e a CLI podem continuar usando
-o `app.App` diretamente ou o transporte versionado da API.
+### Interfaces e DTOs
 
-O token da API é criado com aleatoriedade criptográfica e armazenado fora do
-estado exportável. O endpoint é escolhido em porta loopback efêmera e fica em
-um arquivo de estado de processo; nenhuma porta de controle é aberta na LAN.
+Interfaces devem representar uma necessidade pequena, por exemplo
+`ProjectRepository`, `PlanPublisher`, `CommandRunner`, `TrustStore`, `Firewall`,
+`Clock` e `OperationSink`. Elas ficam próximas do caso de uso, não em um pacote
+genérico de interfaces.
 
-Exportações passam por uma cópia profunda sanitizada antes da serialização.
-Diagnósticos recebem apenas uma allowlist explícita de arquivos gerenciados e
-aplicam redação específica a blocos `basicauth`. Telemetria tem consentimento
-persistido separado, fila local e envio manual; não participa do fluxo normal
-de reload.
+Os contratos se dividem em:
+
+- **commands**: intenção validada e identificador idempotente;
+- **queries/views**: snapshots imutáveis para CLI/UI;
+- **events**: progresso e invalidação com versão/generation;
+- **transport DTOs**: JSON e códigos de erro estáveis;
+- **persistence records**: schema versionado, convertido para o domínio.
+
+Isso evita serializar agregados diretamente e remove `map[string]any` das
+fronteiras. Uma especificação OpenAPI pode gerar servidor/tipos Go e cliente
+TypeScript, mas sua adoção exige ADR e migração do contrato verificado atual.
+
+### Escolhas de implementação
+
+- `net/http` e o ServeMux moderno são suficientes; não usaríamos framework web;
+- injeção manual no composition root evita container e dependências mágicas;
+- `log/slog` fornece logging estruturado;
+- bcrypt continua sendo a primitiva de senha, sempre fail-closed;
+- Cobra é apropriado quando a CLI for dividida, por help, subcomandos e
+  completion, mas deve substituir parsing manual em uma fase isolada;
+- OpenAPI com `oapi-codegen`, `openapi-typescript` e `openapi-fetch` reduz a
+  duplicação de DTOs se adotado como única fonte;
+- para um produto novo, SQLite puro Go seria uma boa base para estado
+  operacional, mantendo TOML para preferências e arquivos para artefatos. No
+  produto atual, essa troca só ocorre após medição e ADR;
+- TanStack Query é candidato para server state do frontend, após prova de que
+  simplifica SSE, invalidação e operações sem criar duas fontes de verdade.
+
+### Fluxo alvo de uma mutação
+
+```text
+transport → parse/validate DTO → command handler → domínio
+          → plano persistível → adapters.apply → verify
+          → commit/recovery → event + view invalidation
+```
+
+Todos os passos recebem `context.Context`, deadline e operation ID. Rollback e
+reexecução são explícitos. Leituras usam snapshots versionados e não iniciam
+efeitos colaterais inesperados.
+
+## Evolução
+
+A sequência e os gates estão no
+[plano de refatoração](plans/GO-REFACTORING.md). Decisões que mudem topologia,
+persistência ou fonte dos contratos recebem ADR. O roadmap permanece a única
+tasklist; este documento descreve direção, não progresso.

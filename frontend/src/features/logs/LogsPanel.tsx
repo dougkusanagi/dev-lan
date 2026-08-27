@@ -1,11 +1,11 @@
 import { RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
-
+import type { DevLANClient } from '../../api';
 import { api } from '../../api';
 
 type LoadSignal = { active: boolean };
 
-export function LogsPanel({ project }: { project: string }) {
+export function LogsPanel({ project, client = api }: { project: string; client?: DevLANClient }) {
   const [logs, setLogs] = useState('');
   const [loading, setLoading] = useState(true);
 
@@ -13,7 +13,7 @@ export function LogsPanel({ project }: { project: string }) {
     async (signal?: LoadSignal) => {
       setLoading(true);
       try {
-        const value = await api.getProjectLogs(project, 160);
+        const value = await client.getProjectLogs(project, 160);
         if (!signal || signal.active) setLogs(value);
       } catch (error) {
         if (!signal || signal.active) {
@@ -23,7 +23,7 @@ export function LogsPanel({ project }: { project: string }) {
         if (!signal || signal.active) setLoading(false);
       }
     },
-    [project],
+    [client, project],
   );
 
   useEffect(() => {

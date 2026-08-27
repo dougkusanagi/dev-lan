@@ -1,4 +1,4 @@
-import { CirclePlus, Lock, Search, Square } from 'lucide-react';
+import { CirclePlus, LoaderCircle, Lock, Search, Square } from 'lucide-react';
 import type { RefObject } from 'react';
 import type { ProjectInfo } from '../../types';
 
@@ -12,6 +12,7 @@ export function ProjectSidebar({
   onAdd,
   searchRef,
   open,
+  pendingTLS = {},
 }: {
   projects: ProjectInfo[];
   selected?: string;
@@ -22,6 +23,7 @@ export function ProjectSidebar({
   onAdd: () => void;
   searchRef?: RefObject<HTMLInputElement>;
   open?: boolean;
+  pendingTLS?: Record<string, boolean>;
 }) {
   const groups = [
     ['VINCULADOS', projects.filter((p) => p.kind === 'linked')],
@@ -59,39 +61,63 @@ export function ProjectSidebar({
                   {name}
                   <span>{list.length}</span>
                 </h2>
-                {list.map((project) => (
-                  <div
-                    key={project.name}
-                    className={selected === project.name ? 'project-row selected' : 'project-row'}
-                  >
-                    <button
-                      type="button"
-                      className="project-select"
-                      onClick={() => onSelect(project)}
-                    >
-                      <span
-                        className={`status-dot ${project.status}`}
-                        role="img"
-                        aria-label={project.status === 'ready' ? 'Ativo' : project.status}
-                      />
-                      <span className="project-main">
-                        <strong>{project.name}</strong>
-                        <small>{project.framework || project.effectiveMode}</small>
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      className={project.tlsEnabled ? 'tls-toggle tls' : 'tls-toggle tls-off'}
-                      onClick={() => onToggleTLS(project)}
-                      aria-label={project.tlsEnabled ? 'Desativar TLS' : 'Ativar TLS'}
-                      title={
-                        project.tlsEnabled ? 'TLS ativo — desativar' : 'TLS desativado — ativar'
-                      }
-                    >
-                      <Lock size={14} />
-                    </button>
-                  </div>
-                ))}
+                {list.map((project) =>
+                  (() => {
+                    const tlsTarget = pendingTLS[project.name];
+                    const tlsPending = tlsTarget !== undefined;
+                    return (
+                      <div
+                        key={project.name}
+                        className={
+                          selected === project.name ? 'project-row selected' : 'project-row'
+                        }
+                      >
+                        <button
+                          type="button"
+                          className="project-select"
+                          onClick={() => onSelect(project)}
+                        >
+                          <span
+                            className={`status-dot ${project.status}`}
+                            role="img"
+                            aria-label={project.status === 'ready' ? 'Ativo' : project.status}
+                          />
+                          <span className="project-main">
+                            <strong>{project.name}</strong>
+                            <small>{project.framework || project.effectiveMode}</small>
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`${project.tlsEnabled ? 'tls-toggle tls' : 'tls-toggle tls-off'}${tlsPending ? ' loading' : ''}`}
+                          disabled={tlsPending}
+                          onClick={() => onToggleTLS(project)}
+                          aria-busy={tlsPending}
+                          aria-label={
+                            tlsPending
+                              ? `${tlsTarget ? 'Ativando' : 'Desativando'} TLS`
+                              : project.tlsEnabled
+                                ? 'Desativar TLS'
+                                : 'Ativar TLS'
+                          }
+                          title={
+                            tlsPending
+                              ? `${tlsTarget ? 'Ativando' : 'Desativando'} TLS…`
+                              : project.tlsEnabled
+                                ? 'TLS ativo — desativar'
+                                : 'TLS desativado — ativar'
+                          }
+                        >
+                          {tlsPending ? (
+                            <LoaderCircle className="spin" size={14} aria-hidden="true" />
+                          ) : (
+                            <Lock size={14} aria-hidden="true" />
+                          )}
+                        </button>
+                      </div>
+                    );
+                  })(),
+                )}
               </section>
             ),
         )}

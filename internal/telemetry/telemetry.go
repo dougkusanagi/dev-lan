@@ -39,14 +39,17 @@ var keyPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
 var eventPattern = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,63}$`)
 
 var allowedAttributeKeys = map[string]struct{}{
-	"channel":   {},
-	"component": {},
-	"framework": {},
-	"mode":      {},
-	"operation": {},
-	"result":    {},
-	"status":    {},
-	"version":   {},
+	"channel":      {},
+	"component":    {},
+	"duration_ms":  {},
+	"framework":    {},
+	"mode":         {},
+	"operation":    {},
+	"result":       {},
+	"status":       {},
+	"transport":    {},
+	"operation_id": {},
+	"version":      {},
 }
 
 func NewStore(dir string) Store { return Store{Dir: dir} }

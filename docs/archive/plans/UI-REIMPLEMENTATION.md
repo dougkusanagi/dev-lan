@@ -1,8 +1,7 @@
 # Plano de reimplementação da interface web
 
-> A execução deste plano é acompanhada principalmente pelas tarefas `M5-*` e
-> `M6-*` em [ROADMAP.md](ROADMAP.md). Este documento detalha o desenho; o
-> roadmap é a tasklist canônica.
+> Plano histórico dos marcos M5/M6 concluídos. Consulte o
+> [roadmap vigente](../../ROADMAP.md) para trabalho aberto.
 
 ## Objetivo
 
@@ -150,7 +149,7 @@ O corpo deve seguir exatamente a ordem visual percebida nas referências.
 
 - grid de até três cartões por linha;
 - ícone, nome e estado em duas linhas;
-- mostrar Caddy Windows, Caddy WSL, PHP-FPM ou servidor dev, pois já são
+- mostrar Caddy WSL único, estado de rede espelhada, PHP-FPM ou servidor dev, pois já são
   observáveis pelo DevLAN;
 - serviços externos só entram quando houver contrato real de detecção/status.
 

@@ -15,12 +15,13 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"errors"
+
 	localapi "github.com/dougkusanagi/dev-lan/internal/api"
 	"github.com/dougkusanagi/dev-lan/internal/app"
 	"github.com/dougkusanagi/dev-lan/internal/config"
-	"github.com/dougkusanagi/dev-lan/internal/detect"
+	"github.com/dougkusanagi/dev-lan/internal/desktop"
 	"github.com/dougkusanagi/dev-lan/internal/domain"
-	"github.com/dougkusanagi/dev-lan/internal/gui"
 	"github.com/dougkusanagi/dev-lan/internal/platform"
 	backgroundservice "github.com/dougkusanagi/dev-lan/internal/service"
 	"github.com/dougkusanagi/dev-lan/internal/startup"
@@ -64,16 +65,22 @@ func run(args []string) error {
 	// never opens a second store or runs a second controller; it forwards the
 	// supported operational commands to the authenticated Windows API.
 	if runtime.GOOS == "linux" {
+		if command == "topology" && len(args) > 0 && args[0] == "migrate" {
+			return fmt.Errorf("a migração da topologia deve ser iniciada pelo controlador Windows")
+		}
 		return runWSLClient(context.Background(), dataDir, command, args)
 	}
 	service := app.New(dataDir)
 	var ctx context.Context
 	var cancel context.CancelFunc
-	if (command == "api" && len(args) > 0 && args[0] == "serve") ||
-		(command == "service" && len(args) > 0 && args[0] == "run") {
+	if command == "gui" && len(args) > 0 && (args[0] == "--foreground" || args[0] == "-f") {
 		ctx, cancel = signal.NotifyContext(context.Background(), os.Interrupt)
+	} else if (command == "api" && (len(args) == 0 || args[0] == "serve")) ||
+		(command == "service" && len(args) > 0 && args[0] == "run") {
+		ctx = context.Background()
+		cancel = func() {}
 	} else {
-		ctx, cancel = context.WithTimeout(context.Background(), 45*time.Second)
+		ctx, cancel = context.WithTimeout(context.Background(), cliCommandTimeout(command, args))
 	}
 	defer cancel()
 
@@ -108,10 +115,30 @@ func run(args []string) error {
 		return nil
 
 	case "uninstall":
-		if len(args) != 0 {
-			return fmt.Errorf("uso: devlan uninstall")
+		uninstallOptions := app.UninstallOptions{}
+		asJSON := false
+		for _, argument := range args {
+			switch argument {
+			case "--dry-run":
+				uninstallOptions.DryRun = true
+			case "--keep-data":
+				uninstallOptions.KeepData = true
+			case "--keep-dependencies":
+				uninstallOptions.KeepDependencies = true
+			case "--purge":
+				uninstallOptions.Purge = true
+			case "--yes":
+				uninstallOptions.Yes = true
+			case "--json":
+				asJSON = true
+			default:
+				return fmt.Errorf("uso: devlan uninstall [--dry-run] [--keep-data] [--keep-dependencies] [--purge --yes] [--json]")
+			}
 		}
-		if runtime.GOOS == "windows" {
+		if err := uninstallOptions.Validate(); err != nil {
+			return err
+		}
+		if !uninstallOptions.DryRun && runtime.GOOS == "windows" {
 			manager := backgroundservice.NewManager()
 			if status, statusErr := manager.Status(ctx); statusErr == nil && status.Installed {
 				if removeErr := manager.Remove(ctx); removeErr != nil {
@@ -122,12 +149,27 @@ func run(args []string) error {
 				fmt.Fprintf(os.Stderr, "[aviso] não foi possível remover a inicialização automática: %v\n", startupErr)
 			}
 		}
-		result, err := service.Uninstall(ctx)
+		if !uninstallOptions.DryRun && runtime.GOOS == "windows" {
+			if desktopErr := desktop.Uninstall(ctx, dataDir); desktopErr != nil {
+				fmt.Fprintf(os.Stderr, "[aviso] não foi possível remover a integração desktop: %v\n", desktopErr)
+			}
+		}
+		result, err := service.UninstallWithOptions(ctx, uninstallOptions)
 		printWarnings(result.Warnings)
 		if err != nil {
 			return err
 		}
-		fmt.Println("Arquivos gerenciados removidos; diretórios dos projetos foram preservados.")
+		if asJSON {
+			return json.NewEncoder(os.Stdout).Encode(result)
+		}
+		printUninstallPlan(result.Plan, uninstallOptions.DryRun)
+		if result.Completed {
+			fmt.Println("DevLAN removido; diretórios dos projetos foram preservados.")
+		} else if result.Plan.Pending && len(result.Plan.Warnings) > 0 {
+			fmt.Println("DevLAN removido; a aplicação de configurações WSL ainda está pendente (consulte os avisos).")
+		} else {
+			fmt.Println("DevLAN removido parcialmente; consulte os avisos e execute novamente após corrigir as etapas pendentes.")
+		}
 		return nil
 
 	case "link":
@@ -241,6 +283,9 @@ func run(args []string) error {
 			return fmt.Errorf("uso: devlan status")
 		}
 		return printStatus(ctx, service, dataDir)
+
+	case "topology":
+		return runTopology(ctx, service, args)
 
 	case "reload":
 		if len(args) != 0 {
@@ -425,11 +470,11 @@ func run(args []string) error {
 	case "ca":
 		return runCA(ctx, service, args)
 
-	case "dns":
-		return runDNS(ctx, service, args)
-
 	case "gui":
-		return gui.Launch(service)
+		return runGUI(ctx, service, dataDir, args)
+
+	case "desktop":
+		return runDesktop(ctx, dataDir, args)
 
 	case "security":
 		return runSecurity(ctx, service, args)
@@ -470,6 +515,23 @@ func run(args []string) error {
 	default:
 		return fmt.Errorf("comando desconhecido %q; use `devlan help`", command)
 	}
+}
+
+func cliCommandTimeout(command string, args []string) time.Duration {
+	// A topology migration deliberately performs wsl --shutdown and then boots
+	// the VM, systemd and Caddy again. A cold WSL start can consume most of the
+	// normal command budget on otherwise healthy machines.
+	if command == "topology" {
+		for _, arg := range args {
+			if arg == "migrate" {
+				return 3 * time.Minute
+			}
+		}
+	}
+	if command == "uninstall" {
+		return 5 * time.Minute
+	}
+	return 45 * time.Second
 }
 
 func runConfig(ctx context.Context, service *app.App, args []string) error {
@@ -517,11 +579,97 @@ func runConfig(ctx context.Context, service *app.App, args []string) error {
 	}
 }
 
+func runTopology(ctx context.Context, service *app.App, args []string) error {
+	subcommand := "status"
+	asJSON := false
+	confirmed := false
+	for _, arg := range args {
+		switch arg {
+		case "status", "check", "migrate", "repair":
+			if subcommand != "status" {
+				return fmt.Errorf("uso: devlan topology status|check|repair|migrate [--yes]")
+			}
+			subcommand = arg
+		case "--json":
+			asJSON = true
+		case "--yes", "--confirm-wsl-shutdown":
+			confirmed = true
+		default:
+			return fmt.Errorf("uso: devlan topology status|check|repair|migrate [--yes]")
+		}
+	}
+
+	encode := func(value any) error {
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(value)
+	}
+
+	switch subcommand {
+	case "check":
+		report := service.WSLCompatibility(ctx)
+		if asJSON {
+			return encode(report)
+		}
+		fmt.Printf("Windows: %s (build %d)\n", report.WindowsVersion, report.WindowsBuild)
+		fmt.Printf("WSL: %s | WSL2: %t | mirrored: %t | systemd: %t | loopback: %t | LAN: %t\n", report.WSLVersion, report.WSL2, report.MirroredNetworking, report.Systemd, report.LoopbackBidirectional, report.LANReachable)
+		for _, check := range report.Checks {
+			fmt.Printf("[%s] %-28s %s\n", check.Status, check.Name, check.Detail)
+		}
+		return nil
+	case "repair":
+		result, err := service.RepairM8(ctx)
+		printWarnings(result.Warnings)
+		if err != nil {
+			return err
+		}
+		if asJSON {
+			return encode(result)
+		}
+		fmt.Println("Topologia Caddy WSL único reconciliada (sem wsl --shutdown).")
+		return nil
+	case "migrate":
+		if !confirmed {
+			fmt.Fprintln(os.Stderr, "A migração reinicia o WSL inteiro e encerra todas as distribuições em execução.")
+			fmt.Fprintln(os.Stderr, "Repita com `devlan topology migrate --yes` somente após salvar o trabalho em todas as distribuições.")
+			return platform.ErrWSLShutdownConfirmation
+		}
+		result, err := service.MigrateToSingleCaddy(ctx, true)
+		if asJSON {
+			_ = encode(result)
+		}
+		if err != nil {
+			return err
+		}
+		if !asJSON {
+			fmt.Printf("Migração concluída: %s\nBackup: %s\nEtapas: %s\n", result.Topology, result.BackupDir, strings.Join(stringMigrationSteps(result.Steps), ", "))
+		}
+		return nil
+	default:
+		snapshot := service.CaddyTopologyStatus(ctx)
+		status := service.CaddyStatus(ctx)
+		if asJSON {
+			return encode(map[string]any{"topology": snapshot, "caddy": status})
+		}
+		fmt.Printf("Topologia: %s\n", snapshot.Topology)
+		fmt.Printf("Caddy WSL único: disponível=%t ativo=%t systemd=%t live=%t (%s)\n", status.Available, status.Running, status.Systemd, status.Live, status.Detail)
+		if snapshot.WindowsConfig || snapshot.WSLConfig {
+			fmt.Printf("Artefatos legados: Windows=%t WSL=%t; use `devlan topology migrate --yes`\n", snapshot.WindowsConfig, snapshot.WSLConfig)
+		}
+		return nil
+	}
+}
+
+func stringMigrationSteps(steps []platform.MigrationStep) []string {
+	result := make([]string, 0, len(steps))
+	for _, step := range steps {
+		result = append(result, string(step))
+	}
+	return result
+}
+
 func runAPI(ctx context.Context, service *app.App, args []string) error {
 	if len(args) == 0 || args[0] == "serve" {
-		if len(args) > 1 {
-			return fmt.Errorf("uso: devlan api serve")
-		}
 		server := localapi.New(service)
 		endpoint, err := server.Start()
 		if err != nil {
@@ -549,6 +697,140 @@ func runAPI(ctx context.Context, service *app.App, args []string) error {
 		return nil
 	}
 	return fmt.Errorf("uso: devlan api serve | devlan api status")
+}
+
+func runGUI(ctx context.Context, service *app.App, dataDir string, args []string) error {
+	foreground := false
+	for _, arg := range args {
+		if arg == "--foreground" || arg == "-f" {
+			foreground = true
+		} else {
+			return fmt.Errorf("uso: devlan gui [--foreground]")
+		}
+	}
+
+	cfg, err := service.Store.Load()
+	if err != nil {
+		return err
+	}
+	uiPort := cfg.UIPort
+	if uiPort == 0 {
+		uiPort = 3210
+	}
+
+	targetURL := "https://devlan.localhost/"
+	if !service.CaddyStatus(ctx).Live {
+		targetURL = fmt.Sprintf("http://127.0.0.1:%d/", uiPort)
+	}
+
+	if foreground {
+		fmt.Printf("DevLAN GUI Web Server ativo em %s (porta %d)\n", targetURL, uiPort)
+		fmt.Println("Pressione Ctrl+C para encerrar.")
+		server := localapi.New(service)
+		endpoint, err := server.Start()
+		if err != nil && !errors.Is(err, localapi.ErrAlreadyRunning) {
+			return err
+		}
+		_ = platform.OpenURL(targetURL)
+		if endpoint.Address != "" {
+			fmt.Printf("Servidor escutando em %s\n", endpoint.Address)
+		}
+		<-ctx.Done()
+		return server.Close(context.Background())
+	}
+
+	// 1. Check if the server is already responsive
+	client := localapi.Client{Store: service.Store}
+	checkCtx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	res, checkErr := client.Do(checkCtx, http.MethodGet, "/v1/health", nil)
+	cancel()
+	isRunning := checkErr == nil && res != nil && res.StatusCode == http.StatusOK
+	if res != nil {
+		_ = res.Body.Close()
+	}
+
+	// 2. If not running, spawn detached background process
+	if !isRunning {
+		executable, execErr := os.Executable()
+		if execErr != nil {
+			return fmt.Errorf("obter caminho do executável: %w", execErr)
+		}
+		cmdArgs := []string{"api", "serve"}
+		if dataDir != "" && dataDir != defaultDataDir() {
+			cmdArgs = []string{"--data-dir", dataDir, "api", "serve"}
+		}
+		if err := platform.SpawnBackgroundDaemon(executable, cmdArgs); err != nil {
+			return fmt.Errorf("iniciar servidor web em segundo plano: %w", err)
+		}
+
+		// Wait for server to become responsive
+		started := false
+		for i := 0; i < 30; i++ {
+			time.Sleep(100 * time.Millisecond)
+			waitCtx, waitCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			waitRes, waitErr := client.Do(waitCtx, http.MethodGet, "/v1/health", nil)
+			waitCancel()
+			if waitErr == nil && waitRes != nil && waitRes.StatusCode == http.StatusOK {
+				_ = waitRes.Body.Close()
+				started = true
+				break
+			}
+			if waitRes != nil {
+				_ = waitRes.Body.Close()
+			}
+		}
+		if !started {
+			return fmt.Errorf("servidor web em segundo plano não respondeu na porta %d", uiPort)
+		}
+	}
+
+	fmt.Printf("Servidor Web DevLAN ativo em 127.0.0.1:%d\n", uiPort)
+
+	if err := platform.OpenURL(targetURL); err != nil {
+		fmt.Printf("Interface disponível em: %s (porta alternativa: http://127.0.0.1:%d/)\n", targetURL, uiPort)
+	} else {
+		fmt.Printf("Interface aberta no navegador: %s (porta alternativa: http://127.0.0.1:%d/)\n", targetURL, uiPort)
+	}
+	return nil
+}
+
+func runDesktop(ctx context.Context, dataDir string, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("uso: devlan desktop install | status | uninstall")
+	}
+	switch args[0] {
+	case "install":
+		if len(args) != 1 {
+			return fmt.Errorf("uso: devlan desktop install")
+		}
+		if err := desktop.Install(ctx, dataDir); err != nil {
+			return err
+		}
+		fmt.Println("Integração desktop instalada com sucesso (atalhos criados).")
+		return nil
+	case "uninstall":
+		if len(args) != 1 {
+			return fmt.Errorf("uso: devlan desktop uninstall")
+		}
+		if err := desktop.Uninstall(ctx, dataDir); err != nil {
+			return err
+		}
+		fmt.Println("Integração desktop removida.")
+		return nil
+	case "status":
+		if len(args) != 1 {
+			return fmt.Errorf("uso: devlan desktop status")
+		}
+		st, err := desktop.CurrentState(ctx, dataDir)
+		if err != nil {
+			return err
+		}
+		data, _ := json.MarshalIndent(st, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	default:
+		return fmt.Errorf("subcomando desktop desconhecido: %s (use install, status, uninstall)", args[0])
+	}
 }
 
 func runBackgroundService(ctx context.Context, dataDir string, args []string) error {
@@ -824,7 +1106,8 @@ func defaultDataDir() string {
 func runWSLClient(ctx context.Context, dataDir, command string, args []string) error {
 	allowed := map[string]bool{
 		"link": true, "unlink": true, "park": true, "unpark": true,
-		"links": true, "status": true, "reload": true, "doctor": true, "open": true,
+		"links": true, "status": true, "reload": true, "doctor": true, "open": true, "route": true,
+		"topology": true,
 	}
 	if !allowed[command] {
 		return fmt.Errorf("comando %q ainda não está disponível no cliente WSL; use o controlador Windows", command)
@@ -839,7 +1122,7 @@ func runWSLClient(ctx context.Context, dataDir, command string, args []string) e
 	if message, ok := payload["message"].(string); ok && message != "" {
 		fmt.Println(message)
 	}
-	if command == "links" || command == "status" || command == "doctor" {
+	if command == "links" || command == "status" || command == "doctor" || command == "route" || command == "topology" {
 		if command == "links" {
 			if projects, ok := payload["projects"]; ok {
 				data, _ := json.MarshalIndent(projects, "", "  ")
@@ -850,8 +1133,19 @@ func runWSLClient(ctx context.Context, dataDir, command string, args []string) e
 				data, _ := json.MarshalIndent(status, "", "  ")
 				fmt.Println(string(data))
 			}
-		} else if checks, ok := payload["checks"]; ok {
-			data, _ := json.MarshalIndent(checks, "", "  ")
+		} else if command == "doctor" {
+			if checks, ok := payload["checks"]; ok {
+				data, _ := json.MarshalIndent(checks, "", "  ")
+				fmt.Println(string(data))
+			}
+		} else if command == "topology" {
+			data, _ := json.MarshalIndent(payload, "", "  ")
+			fmt.Println(string(data))
+		} else if allocations, ok := payload["allocations"]; ok {
+			data, _ := json.MarshalIndent(allocations, "", "  ")
+			fmt.Println(string(data))
+		} else if paths, ok := payload["paths"]; ok {
+			data, _ := json.MarshalIndent(paths, "", "  ")
 			fmt.Println(string(data))
 		}
 	}
@@ -906,7 +1200,7 @@ func runPHP(ctx context.Context, service *app.App, args []string) error {
 		if len(args) > 1 {
 			return fmt.Errorf("uso: devlan php list")
 		}
-		versions, err := service.PHPVersions(ctx)
+		versions, err := service.PHPVersions(platform.WithWSLOperation(ctx, platform.WSLOperationStatus))
 		if err != nil {
 			return err
 		}
@@ -1264,7 +1558,9 @@ func printProjects(service *app.App, filter string, asJSON bool) error {
 	if err != nil {
 		return err
 	}
-	effective, err := service.EffectiveConfig(context.Background(), cfg)
+	effective, err := service.EffectiveConfig(
+		platform.WithWSLOperation(context.Background(), platform.WSLOperationDiscovery), cfg,
+	)
 	if err != nil {
 		return err
 	}
@@ -1293,7 +1589,8 @@ func printProjects(service *app.App, filter string, asJSON bool) error {
 		if err != nil {
 			return err
 		}
-		url := resolved.URL(host, cfg.WindowsPort, cfg.HTTPSPort, effective.SecureProject(project))
+		localURL := domain.LocalDevURL(project.Name)
+		lanURL := resolved.URL(host, cfg.WindowsPort, cfg.HTTPSPort, effective.SecureProject(project))
 
 		runtimeStr := "-"
 		typeStr := string(resolved.Mode)
@@ -1320,14 +1617,16 @@ func printProjects(service *app.App, filter string, asJSON bool) error {
 		}
 
 		rows = append(rows, projectRow{
-			Name:    project.Name,
-			Mode:    string(resolved.Mode),
-			Runtime: runtimeStr,
-			Type:    typeStr,
-			Source:  string(resolved.Source),
-			SSL:     sslState(cfg.SecureProject(project)),
-			URL:     url,
-			Path:    project.Path,
+			Name:     project.Name,
+			Mode:     string(resolved.Mode),
+			Runtime:  runtimeStr,
+			Type:     typeStr,
+			Source:   string(resolved.Source),
+			SSL:      sslState(cfg.SecureProject(project)),
+			URL:      lanURL,
+			LocalURL: localURL,
+			LANURL:   lanURL,
+			Path:     project.Path,
 		})
 	}
 	if asJSON {
@@ -1342,31 +1641,33 @@ func printProjects(service *app.App, filter string, asJSON bool) error {
 	if err := writeProjectTable(os.Stdout, rows); err != nil {
 		return err
 	}
-	fmt.Printf("\n💡 Dica: execute `devlan open %s` para abrir no navegador ou `devlan secure %s` para ativar HTTPS.\n", rows[0].Name, rows[0].Name)
+	fmt.Printf("\n💡 Dica: execute `devlan open %s` para abrir no navegador local. Na LAN, cookies HTTP não são isolados por porta.\n", rows[0].Name)
 	return nil
 }
 
 type projectRow struct {
-	Name    string `json:"name"`
-	Mode    string `json:"mode"`
-	Runtime string `json:"runtime"`
-	Type    string `json:"type"`
-	Source  string `json:"source"`
-	SSL     string `json:"ssl"`
-	URL     string `json:"url"`
-	Path    string `json:"path"`
+	Name     string `json:"name"`
+	Mode     string `json:"mode"`
+	Runtime  string `json:"runtime"`
+	Type     string `json:"type"`
+	Source   string `json:"source"`
+	SSL      string `json:"ssl"`
+	URL      string `json:"url"`
+	LocalURL string `json:"local_url"`
+	LANURL   string `json:"lan_url"`
+	Path     string `json:"path"`
 }
 
 func writeProjectTable(output io.Writer, rows []projectRow) error {
 	writer := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(writer, "PROJETO\tMODO\tRUNTIME\tTIPO\tORIGEM\tSSL\tURL\tCAMINHO"); err != nil {
+	if _, err := fmt.Fprintln(writer, "PROJETO\tMODO\tRUNTIME\tTIPO\tSSL\tURL LOCAL\tURL LAN\tCAMINHO"); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(writer, "-------\t----\t-------\t----\t------\t---\t---\t-------"); err != nil {
+	if _, err := fmt.Fprintln(writer, "-------\t----\t-------\t----\t---\t---------\t-------\t-------"); err != nil {
 		return err
 	}
 	for _, row := range rows {
-		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", row.Name, row.Mode, row.Runtime, row.Type, row.Source, row.SSL, row.URL, row.Path); err != nil {
+		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", row.Name, row.Mode, row.Runtime, row.Type, row.SSL, row.LocalURL, row.LANURL, row.Path); err != nil {
 			return err
 		}
 	}
@@ -1381,6 +1682,7 @@ func sslState(enabled bool) string {
 }
 
 func printStatus(ctx context.Context, service *app.App, dataDir string) error {
+	ctx = platform.WithWSLOperation(ctx, platform.WSLOperationStatus)
 	cfg, err := service.Store.Load()
 	if err != nil {
 		return err
@@ -1390,17 +1692,10 @@ func printStatus(ctx context.Context, service *app.App, dataDir string) error {
 	}
 	fmt.Printf("DevLAN %s (%s)\n", version, app.RuntimeDescription())
 	fmt.Printf("Dados: %s\n", dataDir)
-	fmt.Printf("Padrão: %s | HTTP: %d | HTTPS: %d | SSL: %s | porta WSL: %d\n", cfg.DefaultMode, cfg.WindowsPort, cfg.HTTPSPort, sslState(cfg.TLSEnabled), cfg.WSLPort)
-	if err := service.WindowsCaddy.Available(ctx); err == nil {
-		fmt.Println("Caddy Windows: disponível")
-	} else {
-		fmt.Println("Caddy Windows: ausente")
-	}
-	if err := service.WSLCaddy.Available(ctx); err == nil {
-		fmt.Println("Caddy WSL: disponível")
-	} else {
-		fmt.Println("Caddy WSL: ausente")
-	}
+	fmt.Printf("Padrão: %s | LAN HTTP: %d | LAN HTTPS: %d | SSL: %s | pool: %d-%d\n", cfg.DefaultMode, cfg.WindowsPort, cfg.HTTPSPort, sslState(cfg.TLSEnabled), cfg.RouteBasePort, cfg.RouteBasePort+cfg.RoutePortCount-1)
+	caddyStatus := service.CaddyStatus(ctx)
+	topology := service.CaddyTopologyStatus(ctx)
+	fmt.Printf("Caddy WSL único: disponível=%t ativo=%t systemd=%t live=%t | topologia=%s\n", caddyStatus.Available, caddyStatus.Running, caddyStatus.Systemd, caddyStatus.Live, topology.Topology)
 	if versions, versionErr := service.PHPVersions(ctx); versionErr == nil {
 		labels := make([]string, 0, len(versions))
 		for _, version := range versions {
@@ -1427,6 +1722,24 @@ func printWarnings(warnings []string) {
 	}
 }
 
+func printUninstallPlan(plan app.UninstallPlan, dryRun bool) {
+	if dryRun {
+		fmt.Println("Plano de desinstalação (nenhuma alteração foi feita):")
+	} else {
+		fmt.Println("Resultado da desinstalação:")
+	}
+	counts := map[app.UninstallAction]int{}
+	for _, item := range plan.Items {
+		counts[item.Action]++
+		fmt.Printf("  %-9s %-24s %s\n", item.Action, item.ID, item.Detail)
+	}
+	fmt.Printf("Resumo: remover=%d restaurar=%d preservar=%d conflito=%d pendente=%d falha=%d\n",
+		counts[app.UninstallRemove], counts[app.UninstallRestore], counts[app.UninstallPreserve], counts[app.UninstallConflict], counts[app.UninstallPending], counts[app.UninstallFailed])
+	if plan.ProjectCount > 0 {
+		fmt.Printf("Projetos preservados: %d\n", plan.ProjectCount)
+	}
+}
+
 func printUsage() {
 	fmt.Print(`DevLAN — publicar projetos PHP, JavaScript e estáticos do WSL na rede local
 
@@ -1436,7 +1749,7 @@ Uso:
 Fundação e registro:
   install [--no-firewall] [--windows-port PORT]
                               inicializa arquivos gerenciados (Administrador*)
-  uninstall                  remove arquivos gerenciados, preserva projetos (Administrador*)
+  uninstall [OPÇÕES]         remove o DevLAN, restaura configurações e preserva projetos (Administrador*)
   link NAME PATH             registra um projeto (PHP, Vite, Next, estático)
   unlink NAME                remove registro e rota
   links [FILTRO] [--json]    lista projetos registrados e descobertos
@@ -1456,8 +1769,12 @@ Servidores Dev e Estáticos:
   dev NAME [OPÇÕES]          configura ou gerencia servidor dev
 
 Operação:
-  gui                        inicia a interface gráfica desktop (Wails)
+  gui [--foreground]         inicia o dashboard web no navegador (devlan.localhost)
+  desktop install|...        instala/gerencia atalhos e integração de desktop
   status                     mostra componentes, projetos e URLs
+  topology status|check      mostra topologia Caddy e compatibilidade WSL
+  topology repair            reconcilia Caddy, firewall e .wslconfig sem shutdown
+  topology migrate --yes     migra com backup para o Caddy único no WSL
   reload                     valida/aplica configurações e recarrega Caddy
   trust                      instala e confia na CA interna do Caddy (Administrador*)
   secure NAME|PATH           ativa HTTPS para um projeto (Administrador*)
@@ -1477,9 +1794,12 @@ Operação:
   update check|download       consulta/prepara artefato com SHA-256
 
 Rotas e Segurança:
-  route [default|NAME] [MODE] [--port N] [--host DOMAIN]
-                             gerencia modo de rota (path, port, host)
-  expose NAME [--duration D] [--mode MODE]
+  route [NAME] [--port auto|N]
+                             inspeciona ou sobrescreve a porta LAN
+  route allocations          lista alocações persistidas
+  route allocations prune [--dry-run]
+                             remove órfãos de forma explícita
+  expose NAME [--duration D]
                              expõe projeto temporariamente
   unexpose NAME              revoga exposição de projeto
   allowlist [default|NAME] [set|add|remove|clear CIDR...]
@@ -1487,7 +1807,6 @@ Rotas e Segurança:
   auth enable|disable [default|NAME] [USER PASS]
                              configura autenticação HTTP básica
   ca info|export|rotate      gerencia CA interna e certificados
-  dns entries|sync           gerencia mapeamentos do arquivo hosts
   security posture|audit     auditoria e postura de segurança
 
 PHP:
@@ -1533,14 +1852,17 @@ func printCommandUsage(command string) {
 
 	usages := map[string]string{
 		"install":    "uso: devlan install [--no-firewall] [--windows-port PORT]",
-		"uninstall":  "uso: devlan uninstall",
+		"uninstall":  "uso: devlan uninstall [--dry-run] [--keep-data] [--keep-dependencies] [--purge --yes] [--json]",
 		"link":       "uso: devlan link NAME PATH",
 		"unlink":     "uso: devlan unlink NAME",
 		"links":      "uso: devlan links [FILTRO] [--json]",
 		"park":       "uso: devlan park PATH | devlan park ignore NAME|PATH | devlan park unignore PATH",
 		"unpark":     "uso: devlan unpark PATH",
 		"parked":     "uso: devlan parked",
+		"gui":        "uso: devlan gui [--foreground]",
+		"desktop":    "uso: devlan desktop install | status | uninstall",
 		"status":     "uso: devlan status",
+		"topology":   "uso: devlan topology status|check|repair|migrate [--yes]",
 		"reload":     "uso: devlan reload",
 		"trust":      "uso: devlan trust",
 		"secure":     "uso: devlan secure NAME|PATH",
@@ -1549,13 +1871,12 @@ func printCommandUsage(command string) {
 		"logs":       "uso: devlan logs [COMPONENT]",
 		"open":       "uso: devlan open [NAME]",
 		"mode":       "uso: devlan mode default MODE | devlan mode NAME MODE|inherit",
-		"route":      "uso: devlan route [default|NAME] [path|port|host|inherit] [--port PORT] [--host HOST]",
-		"expose":     "uso: devlan expose NAME [--duration 30m|1h|2h] [--mode path|port|host]",
+		"route":      "uso: devlan route [NAME] [--port auto|PORT] | devlan route allocations [prune [--dry-run]]",
+		"expose":     "uso: devlan expose NAME [--duration 30m|1h|2h]",
 		"unexpose":   "uso: devlan unexpose NAME",
 		"allowlist":  "uso: devlan allowlist [default|NAME] [set|add|remove|clear CIDR...]",
 		"auth":       "uso: devlan auth enable default|NAME USERNAME PASSWORD | devlan auth disable default|NAME",
 		"ca":         "uso: devlan ca info | devlan ca export [PATH] | devlan ca rotate",
-		"dns":        "uso: devlan dns entries | devlan dns sync",
 		"security":   "uso: devlan security posture | devlan security audit [--lines N]",
 		"config":     "uso: devlan config export [PATH] | devlan config import PATH",
 		"diagnostic": "uso: devlan diagnostic [PATH]",
@@ -1569,7 +1890,7 @@ func printCommandUsage(command string) {
 		fmt.Printf("%s\n\nOpções:\n  -h, --help    mostra esta ajuda\n", usage)
 		switch command {
 		case "install", "uninstall":
-			fmt.Println("\nAdministrador: necessário para criar ou remover a regra de firewall.")
+			fmt.Println("\nAdministrador: necessário para criar/remover a regra de firewall e limpar integrações do sistema.")
 		case "secure":
 			fmt.Println("\nAdministrador: necessário na primeira ativação para liberar a porta HTTPS no firewall e confiar na CA interna.")
 		case "trust":
@@ -1687,6 +2008,9 @@ Ajuda:
 }
 
 func runRoute(ctx context.Context, service *app.App, args []string) error {
+	if len(args) > 0 && args[0] == "allocations" {
+		return runRouteAllocations(ctx, service, args[1:])
+	}
 	if len(args) == 0 {
 		cfg, err := service.Store.Load()
 		if err != nil {
@@ -1696,32 +2020,21 @@ func runRoute(ctx context.Context, service *app.App, args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Modo de rota padrão global: %s (base port: %d, domain suffix: .%s)\n\n", cfg.DefaultRouteMode, cfg.RouteBasePort, cfg.DomainSuffix)
+		fmt.Printf("Portas LAN: automáticas a partir de %d\n\n", cfg.RouteBasePort)
 		writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(writer, "PROJETO\tROTA\tPORTA\tHOST\tFONTE")
+		fmt.Fprintln(writer, "PROJETO\tPORTA LAN\tURL LOCAL\tURL LAN\tOVERRIDE")
 		for _, p := range eff.Projects {
-			source := "herdado"
-			if p.RouteMode != nil {
-				source = "projeto"
+			port := eff.EffectiveRoutePort(p)
+			override := "auto"
+			if p.RoutePort != nil {
+				override = "customizada"
 			}
-			fmt.Fprintf(writer, "%s\t%s\t%d\t%s\t%s\n", p.Name, eff.EffectiveRouteMode(p), eff.EffectiveRoutePort(p), eff.EffectiveRouteHost(p), source)
+			fmt.Fprintf(writer, "%s\t%d\t%s\t%s\t%s\n", p.Name, port, domain.LocalDevURL(p.Name), routeURL(cfg, p, port), override)
 		}
-		return writer.Flush()
-	}
-	if args[0] == "default" {
-		if len(args) != 2 {
-			return fmt.Errorf("uso: devlan route default path|port|host")
-		}
-		m, err := domain.ParseRouteMode(args[1])
-		if err != nil {
+		if err := writer.Flush(); err != nil {
 			return err
 		}
-		res, err := service.SetDefaultRouteMode(ctx, m)
-		printWarnings(res.Warnings)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("Modo de rota padrão global alterado para %s.\n", m)
+		fmt.Println("\n💡 Nota: Na rede local (LAN), cookies HTTP não são isolados por porta no mesmo IP.")
 		return nil
 	}
 	name := args[0]
@@ -1738,56 +2051,103 @@ func runRoute(ctx context.Context, service *app.App, args []string) error {
 		if !found {
 			return fmt.Errorf("projeto não encontrado: %s", name)
 		}
-		detected, detErr := service.Detector.DetectProject(ctx, p.Path)
-		if detErr == nil {
-			rec := detect.RecommendRouteMode(detected)
-			fmt.Printf("Recomendação para %s: modo '%s' (%s)\n", name, rec.RecommendedMode, rec.Reason)
+		override := "automática"
+		if p.RoutePort != nil {
+			override = "customizada"
 		}
-		fmt.Printf("Configuração atual: modo=%s, porta=%d, host=%s\n", eff.EffectiveRouteMode(p), eff.EffectiveRoutePort(p), eff.EffectiveRouteHost(p))
+		fmt.Printf("Projeto %s: porta LAN %d (%s)\n", name, eff.EffectiveRoutePort(p), override)
+		fmt.Printf("Local: %s\nLAN: %s\n", domain.LocalDevURL(p.Name), routeURL(cfg, p, eff.EffectiveRoutePort(p)))
+		fmt.Println("\n💡 Nota: Na rede local (LAN), cookies HTTP não são isolados por porta no mesmo IP.")
 		return nil
 	}
-	var mode *domain.RouteMode
-	var port *int
-	var host *string
-	for i := 1; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--port" && i+1 < len(args) {
-			i++
-			p, err := strconv.Atoi(args[i])
-			if err != nil || p < 1 || p > 65535 {
-				return fmt.Errorf("porta inválida: %s", args[i])
-			}
-			port = &p
-		} else if arg == "--host" && i+1 < len(args) {
-			i++
-			h := args[i]
-			host = &h
-		} else if arg == "inherit" {
-			mode = nil
-		} else {
-			m, err := domain.ParseRouteMode(arg)
-			if err != nil {
-				return err
-			}
-			mode = &m
-		}
+	if len(args) != 3 || args[1] != "--port" {
+		return fmt.Errorf("uso: devlan route NAME --port auto|PORT")
 	}
-	res, err := service.SetRouteMode(ctx, name, mode, port, host)
+	var port *int
+	if args[2] != "auto" {
+		parsed, err := strconv.Atoi(args[2])
+		if err != nil || parsed < 1024 || parsed > 65535 {
+			return fmt.Errorf("porta inválida: %s", args[2])
+		}
+		port = &parsed
+	}
+	res, err := service.SetRoutePort(ctx, name, port)
 	printWarnings(res.Warnings)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Rota do projeto %s atualizada.\n", name)
+	fmt.Printf("Porta LAN do projeto %s atualizada.\n", name)
 	return nil
+}
+
+func runRouteAllocations(ctx context.Context, service *app.App, args []string) error {
+	if len(args) == 0 {
+		allocations, err := service.RouteAllocations(ctx)
+		if err != nil {
+			return err
+		}
+		if len(allocations) == 0 {
+			fmt.Println("Nenhuma alocação automática persistida.")
+			return nil
+		}
+		writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(writer, "CAMINHO\tPORTA\tSTATUS")
+		for _, allocation := range allocations {
+			status := "ativa"
+			if allocation.Orphan {
+				status = "órfã (prune explícito)"
+			}
+			fmt.Fprintf(writer, "%s\t%d\t%s\n", allocation.Path, allocation.Port, status)
+		}
+		return writer.Flush()
+	}
+	if args[0] != "prune" {
+		return fmt.Errorf("uso: devlan route allocations | devlan route allocations prune [--dry-run]")
+	}
+	dryRun := false
+	if len(args) == 2 && args[1] == "--dry-run" {
+		dryRun = true
+	} else if len(args) != 1 {
+		return fmt.Errorf("uso: devlan route allocations prune [--dry-run]")
+	}
+	paths, result, err := service.PruneRouteAllocations(ctx, dryRun)
+	printWarnings(result.Warnings)
+	if err != nil {
+		return err
+	}
+	if len(paths) == 0 {
+		fmt.Println("Nenhuma alocação órfã encontrada.")
+		return nil
+	}
+	if dryRun {
+		fmt.Printf("%d alocação(ões) seriam removidas:\n", len(paths))
+	} else {
+		fmt.Printf("%d alocação(ões) órfãs removidas:\n", len(paths))
+	}
+	for _, path := range paths {
+		fmt.Printf("- %s\n", path)
+	}
+	return nil
+}
+
+func routeURL(cfg domain.Config, project domain.Project, port int) string {
+	host := cfg.LANAddress
+	if host == "" || host == "auto" {
+		host, _ = platform.LANAddress()
+		if host == "" {
+			host = "localhost"
+		}
+	}
+	resolved := domain.ResolvedProject{Project: project, RoutePort: port}
+	return resolved.URL(host, cfg.WindowsPort, cfg.HTTPSPort, cfg.SecureProject(project))
 }
 
 func runExpose(ctx context.Context, service *app.App, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("uso: devlan expose NAME [--duration 30m|1h|2h] [--mode path|port|host]")
+		return fmt.Errorf("uso: devlan expose NAME [--duration 30m|1h|2h]")
 	}
 	name := args[0]
 	var duration time.Duration
-	var mode *domain.RouteMode
 	for i := 1; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--duration" && i+1 < len(args) {
@@ -1797,18 +2157,11 @@ func runExpose(ctx context.Context, service *app.App, args []string) error {
 				return fmt.Errorf("duração inválida: %s", args[i])
 			}
 			duration = d
-		} else if arg == "--mode" && i+1 < len(args) {
-			i++
-			m, err := domain.ParseRouteMode(args[i])
-			if err != nil {
-				return err
-			}
-			mode = &m
 		} else {
 			return fmt.Errorf("opção desconhecida %s", arg)
 		}
 	}
-	res, projName, err := service.ExposeProject(ctx, name, duration, mode)
+	res, projName, err := service.ExposeProject(ctx, name, duration)
 	printWarnings(res.Warnings)
 	if err != nil {
 		return err
@@ -1966,7 +2319,7 @@ func runCA(ctx context.Context, service *app.App, args []string) error {
 		}
 		fmt.Println("\nPara instalar no Android/iOS/outro computador:")
 		fmt.Println("1. Exporte o arquivo: devlan ca export")
-		fmt.Println("2. Ou baixe direto pelo navegador na LAN: http://<LAN_IP>/__devlan/ca.crt")
+		fmt.Println("2. Copie somente esse arquivo .crt para os outros dispositivos; a chave privada nunca é exportada.")
 		return nil
 	}
 	switch args[0] {
@@ -1992,32 +2345,6 @@ func runCA(ctx context.Context, service *app.App, args []string) error {
 	default:
 		return fmt.Errorf("subcomando de ca desconhecido: %s (use info, export, rotate)", args[0])
 	}
-}
-
-func runDNS(ctx context.Context, service *app.App, args []string) error {
-	if len(args) == 0 || args[0] == "entries" || args[0] == "show" {
-		entries, err := service.HostsEntries(ctx)
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(entries) == "" {
-			fmt.Println("Nenhum projeto registrado no modo 'host'.")
-			return nil
-		}
-		fmt.Println(entries)
-		fmt.Println("# Adicione as linhas acima ao arquivo hosts das máquinas clientes ou execute `devlan dns sync` como Administrador.")
-		return nil
-	}
-	if args[0] == "sync" {
-		res, err := service.SyncHosts(ctx)
-		printWarnings(res.Warnings)
-		if err != nil {
-			return err
-		}
-		fmt.Println("Arquivo hosts do sistema sincronizado com sucesso.")
-		return nil
-	}
-	return fmt.Errorf("subcomando dns desconhecido: %s (use entries, show, sync)", args[0])
 }
 
 func runSecurity(ctx context.Context, service *app.App, args []string) error {

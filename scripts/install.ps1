@@ -17,7 +17,8 @@ param(
     [switch]$SkipWSL,
     [switch]$SkipCaddy,
     [switch]$NoFirewall,
-    [switch]$NoPath
+    [switch]$NoPath,
+    [switch]$ConfirmWSLShutdown
 )
 
 $ErrorActionPreference = 'Stop'
@@ -100,55 +101,6 @@ function Add-UserPath {
         [Environment]::SetEnvironmentVariable('Path', (($parts + $resolved) -join ';'), 'User')
     }
     $env:Path = "$resolved;$env:Path"
-}
-
-function Test-TcpPortAvailable {
-    param([Parameter(Mandatory = $true)][int]$Port)
-    $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Any, $Port)
-    try {
-        $listener.Start()
-        return $true
-    } catch {
-        return $false
-    } finally {
-        $listener.Stop()
-    }
-}
-
-function Test-TcpEndpoint {
-    param([Parameter(Mandatory = $true)][string]$Address, [Parameter(Mandatory = $true)][int]$Port)
-    $client = [Net.Sockets.TcpClient]::new()
-    try {
-        return $client.ConnectAsync($Address, $Port).Wait(500)
-    } catch {
-        return $false
-    } finally {
-        $client.Dispose()
-    }
-}
-
-function Select-WindowsPort {
-    if ($WindowsPort -gt 0) {
-        return $WindowsPort
-    }
-    $configured = 80
-    $configPath = Join-Path $InstallRoot 'config.toml'
-    if (Test-Path -LiteralPath $configPath) {
-        $line = Get-Content -LiteralPath $configPath | Where-Object { $_ -match '^windows_port\s*=\s*\d+' } | Select-Object -First 1
-        if ($line -and $line -match '(\d+)') {
-            $configured = [int]$Matches[1]
-        }
-    }
-    if ((Test-TcpPortAvailable $configured) -or (Test-TcpEndpoint '127.0.0.1' 2019)) {
-        return $configured
-    }
-    foreach ($candidate in @(8080, 8081, 8888)) {
-        if (Test-TcpPortAvailable $candidate) {
-            Write-Warning "A porta $configured já está ocupada; o DevLAN usará a porta $candidate."
-            return $candidate
-        }
-    }
-    throw 'Nenhuma porta HTTP disponível entre 80, 8080, 8081 e 8888.'
 }
 
 function Require-Administrator {
@@ -258,90 +210,14 @@ function Install-Go {
             Remove-Item -LiteralPath $goRoot -Recurse -Force
         }
         Expand-Archive -LiteralPath $archive -DestinationPath $toolchainRoot -Force
+        # This marker is the provenance proof used by uninstall. A Go
+        # installation already present under the user's chosen root is not
+        # removed unless this installer created it.
+        New-Item -ItemType File -LiteralPath (Join-Path $goRoot '.devlan-managed') -Force | Out-Null
     }
     Add-UserPath (Split-Path -Parent $goExe)
     & $goExe version | Write-Host
     return $goExe
-}
-
-function Find-InstalledCaddy {
-    $command = Get-Executable 'caddy.exe'
-    if ($command) {
-        return $command
-    }
-    $roots = @(
-        (Join-Path $InstallRoot 'bin'),
-        (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'),
-        (Join-Path $env:ProgramFiles 'Caddy')
-    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
-    foreach ($root in $roots) {
-        $found = Get-ChildItem -LiteralPath $root -Filter 'caddy.exe' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($found) {
-            return $found.FullName
-        }
-    }
-    return $null
-}
-
-function Install-WindowsCaddy {
-    if ($SkipCaddy) {
-        return $null
-    }
-    Write-Step 'Instalando Caddy no Windows'
-    $existing = Find-InstalledCaddy
-    if ($existing) {
-        Add-UserPath (Split-Path -Parent $existing)
-        return $existing
-    }
-
-    $winget = Get-Executable 'winget.exe'
-    if ($winget) {
-        try {
-            Invoke-Native $winget @(
-                'install', '--id', 'CaddyServer.Caddy', '--exact',
-                '--accept-source-agreements', '--accept-package-agreements', '--silent'
-            ) | Write-Host
-        } catch {
-            Write-Warning "winget não instalou Caddy; tentando o binário oficial: $($_.Exception.Message)"
-        }
-    }
-    $existing = Find-InstalledCaddy
-    if (-not $existing) {
-        $headers = Get-GitHubHeaders
-        $headers['Accept'] = 'application/vnd.github+json'
-        $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/caddyserver/caddy/releases/latest' -Headers $headers
-        $asset = @($release.assets | Where-Object { $_.name -match 'windows_amd64\.zip$' }) | Select-Object -First 1
-        $checksums = @($release.assets | Where-Object { $_.name -match 'checksums' }) | Select-Object -First 1
-        if ($null -eq $asset -or $null -eq $checksums) {
-            throw 'A release oficial do Caddy não contém o binário ou checksums esperados.'
-        }
-        $zip = Join-Path $script:TempWork $asset.name
-        $checksumFile = Join-Path $script:TempWork $checksums.name
-        Invoke-WebRequest -Uri $asset.browser_download_url -Headers $headers -OutFile $zip
-        Invoke-WebRequest -Uri $checksums.browser_download_url -Headers $headers -OutFile $checksumFile
-        $line = Get-Content -LiteralPath $checksumFile | Where-Object { $_ -match "\s$([Regex]::Escape($asset.name))$" } | Select-Object -First 1
-        if (-not $line) {
-            throw "Checksum não encontrado para $($asset.name)."
-        }
-        if ($line -notmatch '^([0-9a-fA-F]{64})\s+') {
-            throw "Checksum inválido para $($asset.name)."
-        }
-        $expected = $Matches[1].ToLowerInvariant()
-        $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($expected -ne $actual) {
-            throw "Checksum inválido para o Caddy: esperado $expected, obtido $actual"
-        }
-        $bin = Join-Path $InstallRoot 'bin'
-        New-Item -ItemType Directory -Path $bin -Force | Out-Null
-        Expand-Archive -LiteralPath $zip -DestinationPath $bin -Force
-        $existing = Join-Path $bin 'caddy.exe'
-    }
-    if (-not (Test-Path -LiteralPath $existing)) {
-        throw 'Caddy não foi encontrado após a instalação.'
-    }
-    Add-UserPath (Split-Path -Parent $existing)
-    & $existing version | Select-Object -First 1 | Write-Host
-    return $existing
 }
 
 function Install-WslDependencies {
@@ -355,41 +231,6 @@ function Install-WslDependencies {
     # Provision through WSL's root user. Calling sudo from a captured native
     # process can hide its password prompt and eventually fail with a timeout.
     Invoke-Native 'wsl.exe' @('--distribution', $WslDistribution, '--user', 'root', '--exec', 'bash', $wslPath, $PhpVersion, $caddyFlag) | Write-Host
-}
-
-function Sync-WslCaddy {
-    param([Parameter(Mandatory = $true)][string]$WslDistribution, [Parameter(Mandatory = $true)][string]$ConfigPath)
-    Write-Step "Sincronizando Caddy no WSL ($WslDistribution)"
-    $wslConfig = ConvertTo-WslPath $ConfigPath
-    Invoke-Native 'wsl.exe' @('--distribution', $WslDistribution, '--user', 'root', '--exec', '/bin/mkdir', '-p', '/etc/caddy') | Write-Host
-    Invoke-Native 'wsl.exe' @('--distribution', $WslDistribution, '--user', 'root', '--exec', '/bin/cp', $wslConfig, '/etc/caddy/Caddyfile') | Write-Host
-    try {
-        Invoke-Native 'wsl.exe' @('--distribution', $WslDistribution, '--user', 'root', '--exec', '/usr/bin/systemctl', 'restart', 'caddy') | Write-Host
-    } catch {
-        Invoke-Native 'wsl.exe' @('--distribution', $WslDistribution, '--user', 'root', '--exec', '/usr/sbin/service', 'caddy', 'restart') | Write-Host
-    }
-}
-
-function Start-WindowsCaddy {
-    param([Parameter(Mandatory = $true)][string]$CaddyPath, [Parameter(Mandatory = $true)][string]$ConfigPath)
-    Write-Step 'Iniciando ou recarregando Caddy no Windows'
-    try {
-        Invoke-Native $CaddyPath @('reload', '--address', '127.0.0.1:2019', '--config', $ConfigPath, '--adapter', 'caddyfile') | Write-Host
-    } catch {
-        # `caddy start` launches a background child that inherits stdout/stderr.
-        # Capturing those pipes makes Windows PowerShell wait forever for EOF.
-        $previousErrorAction = $ErrorActionPreference
-        try {
-            $ErrorActionPreference = 'Continue'
-            & $CaddyPath start --config $ConfigPath --adapter caddyfile
-            $exitCode = $LASTEXITCODE
-        } finally {
-            $ErrorActionPreference = $previousErrorAction
-        }
-        if ($exitCode -ne 0) {
-            throw "Caddy não iniciou (código $exitCode). Verifique se a porta HTTP configurada está disponível."
-        }
-    }
 }
 
 function Build-Devlan {
@@ -472,7 +313,6 @@ try {
     }
 
     $goPath = Install-Go
-    $caddyPath = Install-WindowsCaddy
     $distribution = Get-WslDistribution
     if ($distribution) {
         Install-WslDependencies $distribution (Join-Path $sourceRoot 'scripts\install-wsl.sh')
@@ -486,21 +326,23 @@ try {
         Install-WslClient $distribution $wslClientPath $dataDir
         Set-Content -LiteralPath (Join-Path $dataDir 'wsl-distribution') -Value $distribution -Encoding utf8
     }
-    $selectedWindowsPort = Select-WindowsPort
-    $installArgs = @('--data-dir', $dataDir, 'install', '--windows-port', [string]$selectedWindowsPort)
+    if ($WindowsPort -gt 0) {
+        Write-Warning '-WindowsPort é mantido apenas por compatibilidade; a borda M8 usa 80/443 e as portas LAN atribuídas no WSL.'
+    }
+    $installArgs = @('--data-dir', $dataDir, 'install')
     if ($NoFirewall) {
         $installArgs += '--no-firewall'
     }
     Invoke-Native $devlanPath $installArgs | Write-Host
 
     if ($distribution -and -not $SkipCaddy) {
-        Sync-WslCaddy $distribution (Join-Path $dataDir 'generated\Caddyfile.wsl')
-    }
-    if ($caddyPath) {
-        Start-WindowsCaddy $caddyPath (Join-Path $dataDir 'generated\Caddyfile.windows')
-    }
-    if ($caddyPath -or $distribution) {
-        Invoke-Native $devlanPath @('--data-dir', $dataDir, 'reload') | Write-Host
+        Invoke-Native $devlanPath @('--data-dir', $dataDir, 'topology', 'repair') | Write-Host
+        if ($ConfirmWSLShutdown) {
+            Write-Warning 'A migração vai encerrar todas as distribuições WSL em execução.'
+            Invoke-Native $devlanPath @('--data-dir', $dataDir, 'topology', 'migrate', '--yes') | Write-Host
+        } else {
+            Write-Host 'networkingMode=mirrored foi preparado. Execute `devlan topology migrate --yes` após salvar o trabalho em todas as distribuições.' -ForegroundColor Yellow
+        }
     }
 
     Write-Host "`nDevLAN instalado em $InstallRoot" -ForegroundColor Green

@@ -2,14 +2,17 @@ package platform
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os/exec"
-	pathpkg "path"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
+	"unicode/utf16"
 )
 
 var ErrUnavailable = errors.New("dependência não disponível")
@@ -36,71 +39,194 @@ func (r ExecRunner) Run(ctx context.Context, args ...string) (string, error) {
 		if errors.Is(err, exec.ErrNotFound) {
 			return "", fmt.Errorf("%w: %s", ErrUnavailable, r.Program)
 		}
-		message := strings.TrimSpace(string(output))
+		message := strings.TrimSpace(normalizeCommandOutput(output))
 		if message != "" {
 			return "", fmt.Errorf("%s %v: %w: %s", r.Program, commandArgs, err, message)
 		}
 		return "", fmt.Errorf("%s %v: %w", r.Program, commandArgs, err)
 	}
-	return string(output), nil
+	return normalizeCommandOutput(output), nil
+}
+
+// normalizeCommandOutput handles native Windows utilities that write UTF-16
+// to a redirected pipe. wsl.exe uses that encoding for several informational
+// commands (including --version and --list) and, on some builds, omits the
+// BOM. The rest of the runner contract is UTF-8/text, so decode only when the
+// byte pattern is unambiguously UTF-16 and leave ordinary command output
+// untouched.
+func normalizeCommandOutput(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+
+	offset := 0
+	var order binary.ByteOrder = binary.LittleEndian
+	if len(data) >= 2 && data[0] == 0xff && data[1] == 0xfe {
+		offset = 2
+	} else if len(data) >= 2 && data[0] == 0xfe && data[1] == 0xff {
+		order = binary.BigEndian
+		offset = 2
+	} else if !looksLikeUTF16(data) {
+		return string(data)
+	}
+
+	available := len(data) - offset
+	units := make([]uint16, available/2)
+	for index := range units {
+		units[index] = order.Uint16(data[offset+index*2:])
+	}
+	decoded := string(utf16.Decode(units))
+	if available%2 != 0 {
+		decoded += string(data[len(data)-1])
+	}
+	return decoded
+}
+
+func looksLikeUTF16(data []byte) bool {
+	if len(data) < 4 || len(data)%2 != 0 {
+		return false
+	}
+	pairs := len(data) / 2
+	zeroOdd, zeroEven := 0, 0
+	for index := 0; index < len(data); index += 2 {
+		if data[index] == 0 {
+			zeroEven++
+		}
+		if data[index+1] == 0 {
+			zeroOdd++
+		}
+	}
+	return zeroOdd >= 2 && zeroOdd*3 >= pairs && zeroOdd > zeroEven*2
 }
 
 type WSLRunner struct {
 	Binary       string
 	Distribution string
+	// Invoker is injectable for deterministic tests and benchmarks. Production
+	// leaves it nil, which invokes the configured wsl.exe binary.
+	Invoker   Runner
+	Stats     *WSLStats
+	Execution *WSLExecutionCache
 }
 
 func NewWSLRunner(binary, distribution string) WSLRunner {
 	if binary == "" {
 		binary = "wsl.exe"
 	}
-	return WSLRunner{Binary: binary, Distribution: distribution}
+	return WSLRunner{
+		Binary:       binary,
+		Distribution: distribution,
+		Stats:        NewWSLStats(),
+		Execution:    NewWSLExecutionCache(),
+	}
+}
+
+// Shutdown stops the WSL VM, not merely the selected distribution. It is kept
+// explicit because the operation terminates every running distribution and is
+// therefore never called by a normal reload.
+func (r WSLRunner) Shutdown(ctx context.Context) error {
+	invoker := r.Invoker
+	if invoker == nil {
+		binary := r.Binary
+		if binary == "" {
+			binary = "wsl.exe"
+		}
+		invoker = NewExecRunner(binary)
+	}
+	_, err := invoker.Run(ctx, "--shutdown")
+	if err != nil {
+		return fmt.Errorf("executar wsl --shutdown: %w", err)
+	}
+	return nil
 }
 
 func (r WSLRunner) Run(ctx context.Context, args ...string) (string, error) {
+	operation := WSLOperation(ctx)
+	if operation == "" {
+		operation = WSLPlaneOperationUnclassified
+	}
+	return r.runWithOperation(ctx, operation, false, args...)
+}
+
+// RunOperation is the explicit form used by grouped operations. It keeps the
+// inventory useful even when the caller's context came from another layer.
+func (r WSLRunner) RunOperation(ctx context.Context, operation string, args ...string) (string, error) {
+	return r.runWithOperation(ctx, operation, false, args...)
+}
+
+func (r WSLRunner) RunAsRoot(ctx context.Context, args ...string) (string, error) {
+	operation := WSLOperation(ctx)
+	if operation == "" {
+		operation = WSLPlaneOperationUnclassified
+	}
+	return r.runWithOperation(ctx, operation, true, args...)
+}
+
+func (r WSLRunner) RunAsRootOperation(ctx context.Context, operation string, args ...string) (string, error) {
+	return r.runWithOperation(ctx, operation, true, args...)
+}
+
+func (r WSLRunner) runWithOperation(ctx context.Context, operation string, asRoot bool, args ...string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	commandArgs := make([]string, 0, len(args)+4)
 	if r.Distribution != "" {
 		commandArgs = append(commandArgs, "--distribution", r.Distribution)
 	}
+	if asRoot {
+		commandArgs = append(commandArgs, "--user", "root")
+	}
 	commandArgs = append(commandArgs, "--exec")
 	commandArgs = append(commandArgs, args...)
-	return NewExecRunner(r.Binary).Run(ctx, commandArgs...)
+	invoker := r.Invoker
+	if invoker == nil {
+		invoker = NewExecRunner(r.Binary)
+	}
+	started := time.Now()
+	output, err := invoker.Run(ctx, commandArgs...)
+	if err != nil {
+		wrapped := wrapWSLError(operation, ctx, err)
+		r.Stats.record(operation, started, ctx, wrapped)
+		return "", wrapped
+	}
+	r.Stats.record(operation, started, ctx, nil)
+	return output, nil
 }
 
 // GrantProjectAccess gives only the Caddy and PHP-FPM service accounts access
 // to a registered WSL project. It avoids relaxing home-directory permissions.
 func (r WSLRunner) GrantProjectAccess(ctx context.Context, projectPath string) error {
-	if !strings.HasPrefix(projectPath, "/") {
+	return r.GrantProjectsAccess(ctx, projectPath)
+}
+
+// GrantProjectsAccess applies ACLs for all WSL projects in one root WSL
+// invocation. Paths remain positional shell arguments; none is interpolated
+// into the shell program.
+func (r WSLRunner) GrantProjectsAccess(ctx context.Context, projectPaths ...string) error {
+	paths := make([]string, 0, len(projectPaths))
+	for _, projectPath := range projectPaths {
+		if strings.HasPrefix(projectPath, "/") {
+			paths = append(paths, projectPath)
+		}
+	}
+	if len(paths) == 0 {
 		return nil
 	}
-	ancestors := []string{}
-	for parent := pathpkg.Dir(projectPath); parent != "/" && parent != "."; parent = pathpkg.Dir(parent) {
-		ancestors = append(ancestors, parent)
-	}
-	args := []string{}
-	if r.Distribution != "" {
-		args = append(args, "--distribution", r.Distribution)
-	}
-	args = append(args, "--user", "root", "--exec", "/usr/bin/setfacl", "-m", "u:caddy:--x,u:www-data:--x")
-	args = append(args, ancestors...)
-	if _, err := NewExecRunner(r.Binary).Run(ctx, args...); err != nil {
-		return fmt.Errorf("permitir travessia até %s: %w", projectPath, err)
-	}
-	args = args[:0]
-	if r.Distribution != "" {
-		args = append(args, "--distribution", r.Distribution)
-	}
-	args = append(args, "--user", "root", "--exec", "/usr/bin/setfacl", "-R", "-m", "u:caddy:rX,u:www-data:rwX", projectPath)
-	if _, err := NewExecRunner(r.Binary).Run(ctx, args...); err != nil {
-		return fmt.Errorf("conceder acesso aos serviços para %s: %w", projectPath, err)
-	}
-	args = args[:0]
-	if r.Distribution != "" {
-		args = append(args, "--distribution", r.Distribution)
-	}
-	args = append(args, "--user", "root", "--exec", "/usr/bin/find", projectPath, "-type", "d", "-exec", "/usr/bin/setfacl", "-m", "d:u:caddy:rX,d:u:www-data:rwX", "{}", "+")
-	if _, err := NewExecRunner(r.Binary).Run(ctx, args...); err != nil {
-		return fmt.Errorf("definir ACL padrão para %s: %w", projectPath, err)
+	script := `set -e
+for project in "$@"; do
+    parent=$(/usr/bin/dirname -- "$project")
+    while [ "$parent" != "/" ] && [ "$parent" != "." ]; do
+        /usr/bin/setfacl -m 'u:caddy:--x,u:www-data:--x' -- "$parent"
+        parent=$(/usr/bin/dirname -- "$parent")
+    done
+    /usr/bin/setfacl -R -m 'u:caddy:rX,u:www-data:rwX' -- "$project"
+    /usr/bin/find "$project" -type d -exec /usr/bin/setfacl -m 'd:u:caddy:rX,d:u:www-data:rwX' -- {} +
+done`
+	args := []string{"/bin/sh", "-c", script, "devlan"}
+	args = append(args, paths...)
+	if _, err := r.RunAsRootOperation(ctx, WSLOperationAccess, args...); err != nil {
+		return fmt.Errorf("conceder acesso aos serviços para projetos WSL: %w", err)
 	}
 	return nil
 }
@@ -128,7 +254,7 @@ func (r WSLRunner) ReadFile(ctx context.Context, path string) ([]byte, error) {
 // wsl.exe is comparatively expensive, so callers that discover many projects
 // should prefer this over two individual Exists calls.
 func (r WSLRunner) LaravelMarkers(ctx context.Context, projectPath string) (bool, bool, error) {
-	output, err := r.Run(ctx, "/bin/sh", "-c", `if [ -f "$1/artisan" ]; then printf 1; else printf 0; fi; if [ -f "$1/public/index.php" ]; then printf 1; else printf 0; fi`, "devlan", projectPath)
+	output, err := r.RunOperation(ctx, WSLOperationDiscovery, "/bin/sh", "-c", `if [ -f "$1/artisan" ]; then printf 1; else printf 0; fi; if [ -f "$1/public/index.php" ]; then printf 1; else printf 0; fi`, "devlan", projectPath)
 	if err != nil {
 		return false, false, err
 	}
@@ -158,8 +284,145 @@ func (r WSLRunner) HasCommand(ctx context.Context, command string) (bool, error)
 	return false, nil
 }
 
+// HasCommands checks all binaries in one Linux shell. It is used by status,
+// doctor and PHP discovery so the number of wsl.exe starts does not grow with
+// the number of candidates.
+func (r WSLRunner) HasCommands(ctx context.Context, commands ...string) (map[string]bool, error) {
+	result := make(map[string]bool, len(commands))
+	if len(commands) == 0 {
+		return result, nil
+	}
+	for _, command := range commands {
+		if strings.TrimSpace(command) == "" || strings.ContainsAny(command, "\r\n\t") {
+			return nil, fmt.Errorf("comando WSL inválido: %q", command)
+		}
+	}
+	script := `for command in "$@"; do
+    if command -v "$command" >/dev/null 2>&1; then printf '1\n'; else printf '0\n'; fi
+done`
+	args := []string{"/bin/sh", "-c", script, "devlan"}
+	args = append(args, commands...)
+	output, err := r.RunOperation(ctx, wslOperationOr(ctx, WSLOperationStatus), args...)
+	if err != nil {
+		return nil, err
+	}
+	values := strings.Split(strings.TrimSpace(strings.ReplaceAll(output, "\r\n", "\n")), "\n")
+	if len(values) != len(commands) {
+		return nil, fmt.Errorf("resposta de disponibilidade WSL inválida: esperadas %d linhas, recebidas %d", len(commands), len(values))
+	}
+	for index, command := range commands {
+		result[command] = values[index] == "1"
+	}
+	return result, nil
+}
+
+// IsSockets checks a set of PHP-FPM sockets in one invocation.
+func (r WSLRunner) IsSockets(ctx context.Context, sockets ...string) (map[string]bool, error) {
+	result := make(map[string]bool, len(sockets))
+	if len(sockets) == 0 {
+		return result, nil
+	}
+	for _, socket := range sockets {
+		if strings.TrimSpace(socket) == "" || strings.ContainsAny(socket, "\r\n\t") {
+			return nil, fmt.Errorf("socket WSL inválido: %q", socket)
+		}
+	}
+	script := `for socket in "$@"; do
+    if /usr/bin/test -S "$socket"; then printf '1\n'; else printf '0\n'; fi
+done`
+	args := []string{"/bin/sh", "-c", script, "devlan"}
+	args = append(args, sockets...)
+	output, err := r.RunOperation(ctx, wslOperationOr(ctx, WSLOperationStatus), args...)
+	if err != nil {
+		return nil, err
+	}
+	values := strings.Split(strings.TrimSpace(strings.ReplaceAll(output, "\r\n", "\n")), "\n")
+	if len(values) != len(sockets) {
+		return nil, fmt.Errorf("resposta de sockets WSL inválida: esperadas %d linhas, recebidas %d", len(sockets), len(values))
+	}
+	for index, socket := range sockets {
+		result[socket] = values[index] == "1"
+	}
+	return result, nil
+}
+
+type WSLDevStatusRequest struct {
+	Name    string
+	PIDFile string
+}
+
+type WSLDevStatus struct {
+	Name  string
+	PID   int
+	State DevProcessState
+}
+
+// DevStatuses reads all requested PID files in one WSL session. Whether the
+// public port is accepting connections is checked by the Windows caller; WSL
+// only supplies the process state that cannot be inferred from that socket.
+func (r WSLRunner) DevStatuses(ctx context.Context, requests ...WSLDevStatusRequest) ([]WSLDevStatus, error) {
+	result := make([]WSLDevStatus, 0, len(requests))
+	if len(requests) == 0 {
+		return result, nil
+	}
+	for _, request := range requests {
+		if strings.TrimSpace(request.Name) == "" || strings.ContainsAny(request.Name, "\r\n\t") {
+			return nil, fmt.Errorf("nome de projeto WSL inválido: %q", request.Name)
+		}
+		if !strings.HasPrefix(request.PIDFile, "/") || strings.ContainsAny(request.PIDFile, "\r\n\t") {
+			return nil, fmt.Errorf("arquivo PID WSL inválido: %q", request.PIDFile)
+		}
+	}
+	script := `while [ "$#" -ge 2 ]; do
+    name="$1"
+    pid_file="$2"
+    shift 2
+    pid=0
+    state=stopped
+    if [ -f "$pid_file" ]; then
+        value=$(/bin/cat -- "$pid_file" 2>/dev/null || true)
+        case "$value" in
+            ''|*[!0-9]*) pid=0 ;;
+            *) pid="$value" ;;
+        esac
+        if [ "$pid" -gt 0 ] && /bin/kill -0 "$pid" 2>/dev/null; then
+            state=starting
+        fi
+    fi
+    printf '%s\t%s\t%s\n' "$name" "$pid" "$state"
+done`
+	args := []string{"/bin/sh", "-c", script, "devlan"}
+	for _, request := range requests {
+		args = append(args, request.Name, request.PIDFile)
+	}
+	output, err := r.RunOperation(ctx, wslOperationOr(ctx, WSLOperationStatus), args...)
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(strings.TrimSpace(strings.ReplaceAll(output, "\r\n", "\n")), "\n")
+	if len(lines) != len(requests) {
+		return nil, fmt.Errorf("resposta de status dev WSL inválida: esperadas %d linhas, recebidas %d", len(requests), len(lines))
+	}
+	for index, line := range lines {
+		parts := strings.Split(line, "\t")
+		if len(parts) != 3 || parts[0] != requests[index].Name {
+			return nil, fmt.Errorf("linha de status dev WSL inválida: %q", line)
+		}
+		pid := 0
+		if parsed, parseErr := strconv.Atoi(parts[1]); parseErr == nil && parsed > 0 {
+			pid = parsed
+		}
+		state := DevProcessState(parts[2])
+		if state != StateStarting && state != StateStopped {
+			return nil, fmt.Errorf("estado de processo dev WSL inválido: %q", parts[2])
+		}
+		result = append(result, WSLDevStatus{Name: parts[0], PID: pid, State: state})
+	}
+	return result, nil
+}
+
 func (r WSLRunner) ListDirectories(ctx context.Context, parent string) ([]string, error) {
-	output, err := r.Run(ctx, "/usr/bin/find", parent, "-mindepth", "1", "-maxdepth", "1", "-type", "d", "-print")
+	output, err := r.RunOperation(ctx, WSLOperationDiscovery, "/usr/bin/find", parent, "-mindepth", "1", "-maxdepth", "1", "-type", "d", "-print")
 	if err != nil {
 		if errors.Is(err, ErrUnavailable) {
 			return nil, err
@@ -231,7 +494,7 @@ func (r WSLRunner) DiscoverAllProjects(ctx context.Context, parent string) ([]Di
 				"$d" "$a" "$p" "$r" "$c" "$pkg" "$pnpm" "$yarn" "$bun" "$npm" "$vite" "$next" "$nuxt" "$astro" "$svelte" "$dist_h" "$dist_d" "$root_h"
 		fi
 	done`
-	output, err := r.Run(ctx, "/bin/sh", "-c", script, "devlan", parent)
+	output, err := r.RunOperation(ctx, WSLOperationDiscovery, "/bin/sh", "-c", script, "devlan", parent)
 	if err != nil {
 		if errors.Is(err, ErrUnavailable) {
 			return nil, err

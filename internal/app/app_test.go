@@ -273,12 +273,25 @@ func TestAppDoctorIncludesPortAndIPChecks(t *testing.T) {
 	service := New(t.TempDir())
 	service.WindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
 	service.WSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
+	service.Detector = detect.Detector{Inspector: detect.StaticInspector{
+		Directories: map[string]bool{"/home/dev/financeiro": true},
+		Files: map[string]bool{
+			"/home/dev/financeiro/artisan":          true,
+			"/home/dev/financeiro/public/index.php": true,
+		},
+	}}
+	if _, _, err := service.Link(context.Background(), "financeiro", "/home/dev/financeiro"); err != nil {
+		t.Fatal(err)
+	}
 	checks, err := service.Doctor(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	foundPortHTTP := false
 	foundIP := false
+	foundCA := false
+	foundLocalName := false
+	foundLANPort := false
 	for _, check := range checks {
 		if strings.HasPrefix(check.Name, "Porta HTTP") {
 			foundPortHTTP = true
@@ -286,12 +299,30 @@ func TestAppDoctorIncludesPortAndIPChecks(t *testing.T) {
 		if check.Name == "IP LAN" {
 			foundIP = true
 		}
+		if check.Name == "CA Local" {
+			foundCA = true
+		}
+		if check.Name == "Projeto financeiro (Nome Local)" {
+			foundLocalName = true
+		}
+		if check.Name == "Projeto financeiro (Porta LAN)" {
+			foundLANPort = true
+		}
 	}
 	if !foundPortHTTP {
 		t.Fatalf("Doctor deveria incluir checagem de porta HTTP: %#v", checks)
 	}
 	if !foundIP {
 		t.Fatalf("Doctor deveria incluir checagem de IP LAN: %#v", checks)
+	}
+	if !foundCA {
+		t.Fatalf("Doctor deveria incluir checagem de CA Local: %#v", checks)
+	}
+	if !foundLocalName {
+		t.Fatalf("Doctor deveria incluir checagem de Nome Local do projeto: %#v", checks)
+	}
+	if !foundLANPort {
+		t.Fatalf("Doctor deveria incluir checagem de Porta LAN do projeto: %#v", checks)
 	}
 }
 
@@ -394,11 +425,10 @@ func TestPhase4AppMethods(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Test Route Mode
-	portMode := domain.RouteModePort
+	// Test LAN port override
 	port := 8088
-	if _, err := service.SetRouteMode(ctx, "app", &portMode, &port, nil); err != nil {
-		t.Fatalf("SetRouteMode: %v", err)
+	if _, err := service.SetRoutePort(ctx, "app", &port); err != nil {
+		t.Fatalf("SetRoutePort: %v", err)
 	}
 
 	// Test Allowlist
@@ -413,7 +443,7 @@ func TestPhase4AppMethods(t *testing.T) {
 	}
 
 	// Test Expose and Unexpose
-	if _, _, err := service.ExposeProject(ctx, "app", 10*time.Minute, nil); err != nil {
+	if _, _, err := service.ExposeProject(ctx, "app", 10*time.Minute); err != nil {
 		t.Fatalf("ExposeProject: %v", err)
 	}
 	if _, _, err := service.UnexposeProject(ctx, "app"); err != nil {
@@ -437,21 +467,91 @@ func TestPhase4AppMethods(t *testing.T) {
 		t.Fatalf("caInfo missing exists key: %#v", caInfo)
 	}
 
-	// Test Hosts Entries
-	hosts, err := service.HostsEntries(ctx)
-	if err != nil {
-		t.Fatalf("HostsEntries: %v", err)
-	}
-	if !strings.Contains(hosts, "DevLAN internal DNS") {
-		t.Fatalf("Hosts block missing marker: %s", hosts)
-	}
-
 	// Test Security Audit
 	logs, err := service.SecurityAuditLogs(ctx, 10)
 	if err != nil {
 		t.Fatalf("SecurityAuditLogs: %v", err)
 	}
-	if !strings.Contains(logs, "ROUTE_MODE_CHANGE") {
+	if !strings.Contains(logs, "ROUTE_PORT_CHANGE") {
 		t.Fatalf("Audit log missing event: %s", logs)
 	}
 }
+
+func TestRouteAllocationsPersistByPathAndPruneExplicitly(t *testing.T) {
+	t.Setenv("DEVLAN_TEST_MOCK", "1")
+	ctx := context.Background()
+	service := New(t.TempDir())
+	service.Detector = detect.Detector{Inspector: detect.StaticInspector{}}
+	service.ExternalListeners = func(context.Context) ([]int, error) { return nil, nil }
+	service.WindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
+	service.WSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
+	staticMode := domain.ModeStatic
+	cfg := domain.NewConfig()
+	cfg.RoutePortCount = 2
+	cfg.Projects = []domain.Project{
+		{Name: "zeta", Path: "/home/dev/zeta", Mode: &staticMode, StaticDir: stringPtr("dist")},
+		{Name: "alpha", Path: "/home/dev/alpha", Mode: &staticMode, StaticDir: stringPtr("dist")},
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.SaveConfigAndApply(ctx, cfg, false); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := service.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.RoutePortAllocations["/home/dev/alpha"] != 8080 || loaded.RoutePortAllocations["/home/dev/zeta"] != 8081 {
+		t.Fatalf("alocações iniciais inesperadas: %#v", loaded.RoutePortAllocations)
+	}
+
+	// Reordering the input cannot move an existing path allocation.
+	loaded.Projects[0], loaded.Projects[1] = loaded.Projects[1], loaded.Projects[0]
+	if _, err := service.SaveConfigAndApply(ctx, loaded, false); err != nil {
+		t.Fatal(err)
+	}
+	reordered, err := service.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reordered.RoutePortAllocations["/home/dev/alpha"] != 8080 || reordered.RoutePortAllocations["/home/dev/zeta"] != 8081 {
+		t.Fatalf("reordenação alterou a alocação: %#v", reordered.RoutePortAllocations)
+	}
+
+	// Removing a project keeps its allocation as an orphan until explicit prune.
+	reordered.Projects = reordered.Projects[:1]
+	if _, err := service.SaveConfigAndApply(ctx, reordered, false); err != nil {
+		t.Fatal(err)
+	}
+	allocations, err := service.RouteAllocations(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(allocations) != 2 || allocations[0].Orphan || !allocations[1].Orphan || allocations[1].Path != "/home/dev/zeta" {
+		t.Fatalf("órfão deveria ser apenas reportado: %#v", allocations)
+	}
+	preview, _, err := service.PruneRouteAllocations(ctx, true)
+	if err != nil || len(preview) != 1 {
+		t.Fatalf("dry-run inesperado: paths=%v err=%v", preview, err)
+	}
+	stillPresent, err := service.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stillPresent.RoutePortAllocations) != 2 {
+		t.Fatalf("dry-run alterou o estado: %#v", stillPresent.RoutePortAllocations)
+	}
+	if _, _, err := service.PruneRouteAllocations(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	pruned, err := service.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pruned.RoutePortAllocations) != 1 {
+		t.Fatalf("prune não removeu somente o órfão: %#v", pruned.RoutePortAllocations)
+	}
+}
+
+func stringPtr(value string) *string { return &value }
