@@ -155,7 +155,10 @@ func (a *App) SaveGlobalConfig(view GlobalConfigView) error {
 }
 
 func (a *App) SaveProjectConfig(update ProjectConfigUpdate) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	// A project TLS change can validate/reload Caddy and reconcile host
+	// integration. Keep the UI request bounded, but leave enough headroom for a
+	// cold WSL start instead of reporting an ambiguous timeout after commit.
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
 	if update.Mode != "" {

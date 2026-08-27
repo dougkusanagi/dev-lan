@@ -24,6 +24,9 @@ button {
   color: inherit;
   cursor: pointer;
 }
+button:disabled {
+  cursor: default;
+}
 button:focus-visible,
 input:focus-visible {
   outline: 2px solid var(--accent);
@@ -406,7 +409,15 @@ input:focus-visible {
 }
 .quick-actions button:disabled {
   opacity: 0.5;
-  cursor: wait;
+  cursor: default;
+}
+.tls-toggle:disabled,
+.address-tls:disabled,
+.project-select:disabled {
+  cursor: default;
+}
+.spin {
+  animation: spin 0.8s linear infinite;
 }
 .services-grid {
   display: grid;

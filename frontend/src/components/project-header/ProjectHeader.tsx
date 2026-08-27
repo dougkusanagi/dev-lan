@@ -1,4 +1,4 @@
-import { Copy, ExternalLink, RefreshCw } from 'lucide-react';
+import { Copy, ExternalLink, LoaderCircle, RefreshCw } from 'lucide-react';
 import type { ProjectInfo } from '../../types';
 
 function stateLabel(project: ProjectInfo, local: boolean): string {
@@ -83,6 +83,7 @@ export function ProjectHeader({
   onCopyLAN,
   onCopyPath,
   onReload,
+  reloadPending = false,
 }: {
   project: ProjectInfo;
   tab: 'overview' | 'logs';
@@ -94,6 +95,7 @@ export function ProjectHeader({
   onCopyPath: () => void;
   onToggleTLS?: () => void;
   onReload: () => void;
+  reloadPending?: boolean;
 }) {
   return (
     <header className="project-header">
@@ -110,9 +112,15 @@ export function ProjectHeader({
             type="button"
             title="Recarregar infraestrutura"
             aria-label="Recarregar infraestrutura"
+            disabled={reloadPending}
+            aria-busy={reloadPending}
             onClick={onReload}
           >
-            <RefreshCw size={15} />
+            {reloadPending ? (
+              <LoaderCircle className="spin" size={15} aria-hidden="true" />
+            ) : (
+              <RefreshCw size={15} aria-hidden="true" />
+            )}
           </button>
         </div>
       </div>

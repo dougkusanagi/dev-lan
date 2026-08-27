@@ -10,7 +10,14 @@ import { ProjectHeader } from '../components/project-header/ProjectHeader';
 import { ActivityRail } from '../components/rail/ActivityRail';
 import { ProjectSidebar } from '../components/sidebar/ProjectSidebar';
 import { LogsPanel } from '../features/logs/LogsPanel';
-import type { DoctorCheck, PHPVersion, ProjectInfo, SystemStatus } from '../types';
+import type {
+  DoctorCheck,
+  OperationKey,
+  PendingOperation,
+  PHPVersion,
+  ProjectInfo,
+  SystemStatus,
+} from '../types';
 
 type View = 'sites' | 'doctor' | 'settings';
 export interface AppShellProps {
@@ -32,7 +39,9 @@ export default function AppShell({ client = api, pollIntervalMs = 5000 }: AppShe
   const [view, setView] = useState<View>('sites');
   const [dark, setDark] = useState(() => localStorage.getItem('devlan_theme') !== 'light');
   const [toast, setToast] = useState('');
-  const [busy, setBusy] = useState<string>();
+  const [operations, setOperations] = useState<PendingOperation[]>([]);
+  const operationsRef = useRef<PendingOperation[]>([]);
+  const operationSequence = useRef(0);
   const [addOpen, setAddOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [newProject, setNewProject] = useState({ name: '', path: '', park: false });
@@ -42,44 +51,137 @@ export default function AppShell({ client = api, pollIntervalMs = 5000 }: AppShe
   const searchRef = useRef<HTMLInputElement>(null);
   const refreshVersion = useRef(0);
   const initialLoad = useRef(true);
+  const mutationVersion = useRef(0);
+  const refreshInFlight = useRef<Promise<void> | null>(null);
+  const refreshQueued = useRef(false);
+  const optimisticProjects = useRef<Record<string, Partial<ProjectInfo>>>({});
   const notify = useCallback((m: string) => {
     setToast(m);
     window.setTimeout(() => setToast((current) => (current === m ? '' : current)), 3800);
   }, []);
-  const refresh = useCallback(async () => {
-    const version = ++refreshVersion.current;
-    if (initialLoad.current) setLoading(true);
-    try {
-      const overview = client.getOverview
-        ? await client.getOverview()
-        : await Promise.all([
-            client.getProjects(),
-            client.getStatus(),
-            client.getPHPVersions(),
-          ]).then(([projects, status, phpVersions]) => ({ projects, status, phpVersions }));
-      if (version !== refreshVersion.current) return;
-      setProjects(overview.projects);
-      setSystem(overview.status);
-      setPHPVersions(overview.phpVersions);
-      setLoadError('');
-      setSelected((current) =>
-        overview.projects.some((x) => x.name === current)
-          ? current
-          : overview.projects[0]?.name || '',
-      );
-    } catch (e) {
-      if (version === refreshVersion.current) {
-        const message = e instanceof APIError && e.status === 0 ? 'API indisponível.' : String(e);
-        setLoadError(message);
-        notify(`Erro ao carregar dados: ${message}`);
+  const refresh = useCallback(
+    async (priority = false) => {
+      if (refreshInFlight.current) {
+        if (priority) refreshQueued.current = true;
+        const current = refreshInFlight.current;
+        await current;
+        // A priority refresh requested during an existing poll is included by
+        // the current run. This await also makes mutation handlers deterministic.
+        return;
       }
-    } finally {
-      if (version === refreshVersion.current) {
-        setLoading(false);
-        initialLoad.current = false;
+
+      const run = async () => {
+        const version = ++refreshVersion.current;
+        const mutationAtStart = mutationVersion.current;
+        if (initialLoad.current) setLoading(true);
+        try {
+          const overview = client.getOverview
+            ? await client.getOverview()
+            : await Promise.all([
+                client.getProjects(),
+                client.getStatus(),
+                client.getPHPVersions(),
+              ]).then(([projects, status, phpVersions]) => ({ projects, status, phpVersions }));
+          // A poll that started before a mutation must never put the old
+          // snapshot back over the optimistic/current state.
+          if (version !== refreshVersion.current || mutationAtStart !== mutationVersion.current)
+            return;
+          const mergedProjects = overview.projects.map((item) => ({
+            ...item,
+            ...(optimisticProjects.current[item.name] ?? {}),
+          }));
+          setProjects(mergedProjects);
+          setSystem(overview.status);
+          setPHPVersions(overview.phpVersions);
+          setLoadError('');
+          setSelected((current) =>
+            mergedProjects.some((x) => x.name === current)
+              ? current
+              : mergedProjects[0]?.name || '',
+          );
+        } catch (e) {
+          if (version === refreshVersion.current && mutationAtStart === mutationVersion.current) {
+            const message =
+              e instanceof APIError && e.status === 0 ? 'API indisponível.' : String(e);
+            setLoadError(message);
+            notify(`Erro ao carregar dados: ${message}`);
+          }
+        } finally {
+          if (version === refreshVersion.current) {
+            setLoading(false);
+            initialLoad.current = false;
+          }
+        }
+      };
+
+      const promise = run();
+      refreshInFlight.current = promise;
+      try {
+        await promise;
+      } finally {
+        refreshInFlight.current = null;
+        // A mutation can arrive during the request. Run exactly one fresh read
+        // before releasing its loading state instead of starting a request per
+        // event/poll tick.
+        if (refreshQueued.current) {
+          refreshQueued.current = false;
+          await refresh();
+        }
       }
-    }
-  }, [client, notify]);
+    },
+    [client, notify],
+  );
+  const beginOperation = useCallback(
+    (key: OperationKey, projectName?: string, targetState?: boolean) => {
+      const current = operationsRef.current;
+      const conflicts = current.some((operation) => {
+        if (!operation.projectName || !projectName) return true;
+        return operation.projectName === projectName;
+      });
+      if (conflicts) return undefined;
+      const operation: PendingOperation = {
+        id: ++operationSequence.current,
+        key,
+        projectName,
+        targetState,
+      };
+      operationsRef.current = [...current, operation];
+      setOperations(operationsRef.current);
+      mutationVersion.current += 1;
+      refreshVersion.current += 1;
+      return operation;
+    },
+    [],
+  );
+  const endOperation = useCallback((operation: PendingOperation) => {
+    operationsRef.current = operationsRef.current.filter((item) => item.id !== operation.id);
+    setOperations(operationsRef.current);
+  }, []);
+  const patchProject = useCallback((name: string, patch: Partial<ProjectInfo>) => {
+    optimisticProjects.current[name] = { ...(optimisticProjects.current[name] ?? {}), ...patch };
+    setProjects((current) =>
+      current.map((item) => (item.name === name ? { ...item, ...patch } : item)),
+    );
+  }, []);
+  const setProjectFields = useCallback((name: string, patch: Partial<ProjectInfo>) => {
+    setProjects((current) =>
+      current.map((item) => (item.name === name ? { ...item, ...patch } : item)),
+    );
+  }, []);
+  const clearProjectPatch = useCallback((name: string) => {
+    delete optimisticProjects.current[name];
+  }, []);
+  const reconcileProject = useCallback(
+    async (name: string, finalPatch: Partial<ProjectInfo> = {}) => {
+      await refresh(true);
+      // Keep the optimistic fields in place until the priority read has
+      // completed. An older poll may still be finishing when the mutation
+      // response arrives.
+      clearProjectPatch(name);
+      if (Object.keys(finalPatch).length) setProjectFields(name, finalPatch);
+    },
+    [clearProjectPatch, refresh, setProjectFields],
+  );
   useEffect(() => {
     let running = false;
     const tick = () => {
@@ -127,8 +229,44 @@ export default function AppShell({ client = api, pollIntervalMs = 5000 }: AppShe
   );
   const project = projects.find((p) => p.name === selected);
   const operate = async (action: 'start' | 'stop' | 'restart' | 'build' | 'deps' | 'doctor') => {
-    if (!project || busy) return;
-    setBusy(action);
+    if (!project) return;
+    const operation = beginOperation(action, project.name);
+    if (!operation) return;
+    const healthyStatus = project.status === 'degraded' ? 'degraded' : 'ready';
+    const devStoppedStatus = project.effectiveMode === 'dev' ? 'stopped' : healthyStatus;
+    const expectedPatch: Partial<ProjectInfo> =
+      action === 'start' || action === 'restart'
+        ? {
+            devRunning: true,
+            localDevState: 'starting',
+            status: project.status === 'degraded' ? 'degraded' : 'starting',
+            lanPreviewState: 'paused',
+          }
+        : action === 'stop'
+          ? {
+              devRunning: false,
+              localDevState: 'stopped',
+              status: devStoppedStatus,
+              lanPreviewState: 'ready',
+            }
+          : {};
+    const successPatch: Partial<ProjectInfo> =
+      action === 'start' || action === 'restart'
+        ? {
+            devRunning: true,
+            localDevState: 'active',
+            status: healthyStatus,
+            lanPreviewState: 'paused',
+          }
+        : action === 'stop'
+          ? {
+              devRunning: false,
+              localDevState: 'stopped',
+              status: devStoppedStatus,
+              lanPreviewState: 'ready',
+            }
+          : {};
+    if (Object.keys(expectedPatch).length) patchProject(project.name, expectedPatch);
     try {
       if (action === 'start') await client.startDev(project.name);
       else if (action === 'stop') await client.stopDev(project.name);
@@ -139,42 +277,67 @@ export default function AppShell({ client = api, pollIntervalMs = 5000 }: AppShe
         setView('doctor');
         setDoctor(await client.runDoctor(project.name));
       }
+      if (Object.keys(successPatch).length) setProjectFields(project.name, successPatch);
+      void reconcileProject(project.name, successPatch);
       notify(action === 'doctor' ? 'Diagnóstico concluído.' : 'Operação concluída.');
-      await refresh();
     } catch (e) {
+      clearProjectPatch(project.name);
+      // A timeout can happen after the backend committed. Revalidate once in
+      // the background so an ambiguous result does not require F5.
+      void refresh(true);
       notify(`Falha na operação: ${String(e)}`);
     } finally {
-      setBusy(undefined);
+      endOperation(operation);
     }
   };
   const changePHPVersion = async (version: string) => {
-    if (!project || busy || !version || version === project.phpVersion) return;
-    setBusy('php');
+    if (!project || !version || version === project.phpVersion) return;
+    const operation = beginOperation('php', project.name);
+    if (!operation) return;
     try {
       await client.saveProjectConfig({ name: project.name, phpVersion: version });
-      await refresh();
+      await refresh(true);
       notify(`PHP ${version} selecionado.`);
     } catch (e) {
+      void refresh(true);
       notify(`Não foi possível selecionar o PHP: ${String(e)}`);
     } finally {
-      setBusy(undefined);
+      endOperation(operation);
     }
   };
   const toggleTLS = async (target: ProjectInfo) => {
-    if (busy) return;
-    setBusy(`tls:${target.name}`);
+    const tlsEnabled = !target.tlsEnabled;
+    const operation = beginOperation('tls', target.name, tlsEnabled);
+    if (!operation) return;
+    const protocol = tlsEnabled ? 'https:' : 'http:';
+    patchProject(target.name, {
+      tlsEnabled,
+      url: target.url.replace(/^https?:/, protocol),
+      lanUrl: target.lanUrl.replace(/^https?:/, protocol),
+    });
     try {
-      await client.saveProjectConfig({ name: target.name, tlsEnabled: !target.tlsEnabled });
-      await refresh();
-      notify(`TLS ${target.tlsEnabled ? 'desativado' : 'ativado'} em ${target.name}.`);
+      await client.saveProjectConfig({ name: target.name, tlsEnabled });
+      setProjectFields(target.name, {
+        tlsEnabled,
+        url: target.url.replace(/^https?:/, protocol),
+        lanUrl: target.lanUrl.replace(/^https?:/, protocol),
+      });
+      void reconcileProject(target.name, {
+        tlsEnabled,
+        url: target.url.replace(/^https?:/, protocol),
+        lanUrl: target.lanUrl.replace(/^https?:/, protocol),
+      });
+      notify(`TLS ${tlsEnabled ? 'ativado' : 'desativado'} em ${target.name}.`);
     } catch (e) {
+      clearProjectPatch(target.name);
+      void refresh(true);
       notify(`Não foi possível alterar o TLS: ${String(e)}`);
     } finally {
-      setBusy(undefined);
+      endOperation(operation);
     }
   };
   const changeRoutePort = async (port: number | null) => {
-    if (!project || busy) return;
+    if (!project) return;
     const description =
       port === null ? 'restaurar a alocação automática' : `usar a porta LAN ${port}`;
     if (
@@ -183,13 +346,14 @@ export default function AppShell({ client = api, pollIntervalMs = 5000 }: AppShe
       )
     )
       return;
-    setBusy('route-port');
+    const operation = beginOperation('route-port', project.name);
+    if (!operation) return;
     try {
       await client.saveProjectConfig({
         name: project.name,
         ...(port === null ? { routePortAuto: true } : { routePort: port }),
       });
-      await refresh();
+      await refresh(true);
       notify(port === null ? 'Porta LAN automática restaurada.' : `Porta LAN ${port} aplicada.`);
     } catch (e) {
       const message = String(e);
@@ -205,7 +369,7 @@ export default function AppShell({ client = api, pollIntervalMs = 5000 }: AppShe
           : `Não foi possível alterar a porta LAN: ${message}`,
       );
     } finally {
-      setBusy(undefined);
+      endOperation(operation);
     }
   };
   const retry = () => {
@@ -215,28 +379,31 @@ export default function AppShell({ client = api, pollIntervalMs = 5000 }: AppShe
     void refresh();
   };
   const trustCA = async () => {
-    if (busy) return;
-    setBusy('ca');
+    const operation = beginOperation('ca');
+    if (!operation) return;
     try {
       await client.trustCA();
+      await refresh(true);
       notify('CA local confiada neste computador.');
     } catch (e) {
+      void refresh(true);
       notify(`Não foi possível confiar na CA: ${String(e)}`);
     } finally {
-      setBusy(undefined);
+      endOperation(operation);
     }
   };
   const repairFirewall = async () => {
-    if (busy) return;
-    setBusy('firewall');
+    const operation = beginOperation('firewall');
+    if (!operation) return;
     try {
       await client.applyDoctorFix('firewall', '');
-      await refresh();
+      await refresh(true);
       notify('Firewall reconciliado.');
     } catch (e) {
+      void refresh(true);
       notify(`Não foi possível reconciliar o firewall: ${String(e)}`);
     } finally {
-      setBusy(undefined);
+      endOperation(operation);
     }
   };
   const removeProject = async (target: ProjectInfo) => {
@@ -247,16 +414,17 @@ export default function AppShell({ client = api, pollIntervalMs = 5000 }: AppShe
       )
     )
       return;
-    setBusy(`remove:${target.name}`);
+    const operation = beginOperation('remove', target.name);
+    if (!operation) return;
     try {
       if (target.kind === 'linked') await client.unlinkProject(target.name);
       else await client.hideProject(target.name);
-      await refresh();
+      await refresh(true);
       notify(`Projeto ${target.name} ${action === 'ocultar' ? 'ocultado' : 'desvinculado'}.`);
     } catch (e) {
       notify(`Não foi possível ${action} o projeto: ${String(e)}`);
     } finally {
-      setBusy(undefined);
+      endOperation(operation);
     }
   };
   const add = async () => {
@@ -282,6 +450,20 @@ export default function AppShell({ client = api, pollIntervalMs = 5000 }: AppShe
       } catch (e) {
         notify(`Erro no diagnóstico: ${String(e)}`);
       }
+  };
+  const reloadInfrastructure = async () => {
+    const operation = beginOperation('reload');
+    if (!operation) return;
+    try {
+      await client.reload();
+      await refresh(true);
+      notify('Infraestrutura recarregada.');
+    } catch (e) {
+      void refresh(true);
+      notify(String(e));
+    } finally {
+      endOperation(operation);
+    }
   };
   return (
     <main className="app-shell">
@@ -309,6 +491,11 @@ export default function AppShell({ client = api, pollIntervalMs = 5000 }: AppShe
           )
             void toggleTLS(target);
         }}
+        pendingTLS={Object.fromEntries(
+          operations
+            .filter((operation) => operation.key === 'tls' && operation.projectName !== undefined)
+            .map((operation) => [operation.projectName, operation.targetState ?? false]),
+        )}
         onAdd={() => {
           setAddOpen(true);
           setSidebarOpen(false);
@@ -352,20 +539,8 @@ export default function AppShell({ client = api, pollIntervalMs = 5000 }: AppShe
                   .then(() => notify('Caminho copiado.'))
                   .catch((e) => notify(String(e)))
               }
-              onToggleTLS={() => {
-                if (
-                  window.confirm(
-                    `${project.tlsEnabled ? 'Desativar' : 'Ativar'} TLS para ${project.name}?`,
-                  )
-                )
-                  void toggleTLS(project);
-              }}
-              onReload={() =>
-                void client
-                  .reload()
-                  .then(() => notify('Infraestrutura recarregada.'))
-                  .catch((e) => notify(String(e)))
-              }
+              onReload={() => void reloadInfrastructure()}
+              reloadPending={operations.some((operation) => operation.key === 'reload')}
             />
             <div className="tab-body">
               {tab === 'overview' ? (
@@ -374,7 +549,7 @@ export default function AppShell({ client = api, pollIntervalMs = 5000 }: AppShe
                   client={client}
                   system={system}
                   phpVersions={phpVersions}
-                  busy={busy}
+                  operations={operations}
                   onPHPVersion={changePHPVersion}
                   onRoutePort={changeRoutePort}
                   onTrustCA={trustCA}

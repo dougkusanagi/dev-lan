@@ -3,6 +3,7 @@ import {
   Box,
   CircleCheck,
   Code2,
+  LoaderCircle,
   Play,
   RotateCw,
   Square,
@@ -16,6 +17,8 @@ import { api } from '../../api';
 import type {
   MetricsRange,
   MetricsSnapshot,
+  OperationKey,
+  PendingOperation,
   PHPVersion,
   ProjectInfo,
   SystemStatus,
@@ -44,7 +47,7 @@ function ServiceCard({ name, up, detail }: { name: string; up: boolean; detail: 
 export function Overview({
   project,
   system,
-  busy,
+  operations = [],
   phpVersions,
   onPHPVersion,
   onRoutePort = () => undefined,
@@ -56,7 +59,7 @@ export function Overview({
 }: {
   project: ProjectInfo;
   system: SystemStatus | null;
-  busy?: string;
+  operations?: PendingOperation[];
   phpVersions: PHPVersion[];
   onPHPVersion: (version: string) => void;
   onRoutePort?: (port: number | null) => void;
@@ -72,6 +75,18 @@ export function Overview({
   const [metricsRefresh, setMetricsRefresh] = useState(0);
   const canRunDev = project.effectiveMode === 'dev' || project.framework === 'laravel';
   const installedPHP = phpVersions.filter((version) => version.installed);
+  const projectOperations = operations.filter(
+    (operation) => operation.projectName === project.name,
+  );
+  const projectBusy = projectOperations.length > 0;
+  const isBusy = (...keys: OperationKey[]) =>
+    operations.some(
+      (operation) =>
+        (operation.projectName === undefined || operation.projectName === project.name) &&
+        (keys.length === 0 || keys.includes(operation.key)),
+    );
+  const hmrStarting = isBusy('start', 'restart');
+  const hmrStopping = isBusy('stop');
   useEffect(() => {
     void metricsRefresh;
     let current = true;
@@ -107,7 +122,7 @@ export function Overview({
                 aria-label="Versão do PHP"
                 value={project.phpVersion || ''}
                 onChange={(e) => onPHPVersion(e.target.value)}
-                disabled={!!busy || installedPHP.length === 0}
+                disabled={projectBusy || installedPHP.length === 0}
               >
                 <option value="">
                   {installedPHP.length ? 'Selecionar versão' : 'Nenhuma instalada'}
@@ -134,7 +149,7 @@ export function Overview({
               </span>
             </div>
           )}
-          <RoutePortControl project={project} busy={!!busy} onChange={onRoutePort} />
+          <RoutePortControl project={project} busy={projectBusy} onChange={onRoutePort} />
           <span
             className={`process-pill ${canRunDev ? (project.devRunning ? 'active' : 'stopped') : project.status}`}
             role="status"
@@ -142,39 +157,85 @@ export function Overview({
             <i />{' '}
             {canRunDev
               ? project.devRunning
-                ? 'HMR local ativo'
-                : 'HMR local parado'
+                ? hmrStarting
+                  ? 'Iniciando HMR local'
+                  : 'HMR local ativo'
+                : hmrStopping
+                  ? 'Parando HMR local'
+                  : 'HMR local parado'
               : 'Em execução'}
           </span>
           <div className="quick-actions">
             {canRunDev &&
               (project.devRunning ? (
-                <button type="button" disabled={!!busy} onClick={() => onAction('stop')}>
-                  <Square size={14} aria-hidden="true" /> Parar HMR local
+                <button
+                  type="button"
+                  disabled={projectBusy}
+                  aria-busy={hmrStarting || hmrStopping}
+                  onClick={() => onAction('stop')}
+                >
+                  {hmrStarting || hmrStopping ? (
+                    <LoaderCircle className="spin" size={14} aria-hidden="true" />
+                  ) : (
+                    <Square size={14} aria-hidden="true" />
+                  )}{' '}
+                  {hmrStarting
+                    ? 'Iniciando HMR…'
+                    : hmrStopping
+                      ? 'Parando HMR…'
+                      : 'Parar HMR local'}
                 </button>
               ) : (
-                <button type="button" disabled={!!busy} onClick={() => onAction('start')}>
-                  <Play size={14} aria-hidden="true" /> Iniciar HMR local
+                <button
+                  type="button"
+                  disabled={projectBusy}
+                  aria-busy={hmrStarting || hmrStopping}
+                  onClick={() => onAction('start')}
+                >
+                  {hmrStarting || hmrStopping ? (
+                    <LoaderCircle className="spin" size={14} aria-hidden="true" />
+                  ) : (
+                    <Play size={14} aria-hidden="true" />
+                  )}{' '}
+                  {hmrStarting
+                    ? 'Iniciando HMR…'
+                    : hmrStopping
+                      ? 'Parando HMR…'
+                      : 'Iniciar HMR local'}
                 </button>
               ))}
             <button
               type="button"
-              disabled={!!busy}
+              disabled={projectBusy}
+              aria-busy={isBusy('build')}
               onClick={() => onAction('build')}
               title="Para o HMR local, gera o build e publica o preview na LAN"
             >
-              Publicar preview LAN
+              {isBusy('build') && <LoaderCircle className="spin" size={14} aria-hidden="true" />}
+              {isBusy('build') ? 'Publicando preview…' : 'Publicar preview LAN'}
             </button>
             <button
               type="button"
-              disabled={!!busy}
+              disabled={projectBusy}
+              aria-busy={isBusy('deps')}
               onClick={() => onAction('deps')}
               title="Instala as dependências encontradas em package.json e composer.json"
             >
-              Instalar dependências
+              {isBusy('deps') && <LoaderCircle className="spin" size={14} aria-hidden="true" />}
+              {isBusy('deps') ? 'Instalando dependências…' : 'Instalar dependências'}
             </button>
-            <button type="button" className="danger-action" disabled={!!busy} onClick={onRemove}>
-              <Trash2 size={14} aria-hidden="true" /> {removeLabel}
+            <button
+              type="button"
+              className="danger-action"
+              disabled={projectBusy}
+              onClick={onRemove}
+            >
+              {projectBusy ? (
+                <LoaderCircle className="spin" size={14} aria-hidden="true" />
+              ) : (
+                <Trash2 size={14} aria-hidden="true" />
+              )}{' '}
+              {isBusy('remove') ? `${removeLabel}…` : removeLabel}
             </button>
           </div>
         </div>
@@ -227,17 +288,25 @@ export function Overview({
         </div>
         <div className="infrastructure-actions">
           {project.tlsEnabled && (
-            <button type="button" disabled={!!busy} onClick={onTrustCA}>
+            <button type="button" disabled={isBusy('ca', 'firewall', 'reload')} onClick={onTrustCA}>
               Confiar na CA local
             </button>
           )}
           {system && !system.firewallOk && (
-            <button type="button" disabled={!!busy} onClick={onRepairFirewall}>
+            <button
+              type="button"
+              disabled={isBusy('ca', 'firewall', 'reload')}
+              onClick={onRepairFirewall}
+            >
               Corrigir firewall privado
             </button>
           )}
           {system && (system.hypervFirewallOk === false || system.mirroredNetworking === false) && (
-            <button type="button" disabled={!!busy} onClick={onRepairFirewall}>
+            <button
+              type="button"
+              disabled={isBusy('ca', 'firewall', 'reload')}
+              onClick={onRepairFirewall}
+            >
               Corrigir rede WSL espelhada
             </button>
           )}

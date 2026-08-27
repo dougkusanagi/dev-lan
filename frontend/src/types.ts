@@ -21,3 +21,25 @@ export type {
   SystemStatus,
   TrafficPoint,
 } from './generated/api-contract';
+
+export type OperationKey =
+  | 'tls'
+  | 'start'
+  | 'stop'
+  | 'restart'
+  | 'build'
+  | 'deps'
+  | 'doctor'
+  | 'php'
+  | 'route-port'
+  | 'ca'
+  | 'firewall'
+  | 'remove'
+  | 'reload';
+
+export interface PendingOperation {
+  id: number;
+  key: OperationKey;
+  projectName?: string;
+  targetState?: boolean;
+}

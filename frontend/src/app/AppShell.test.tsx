@@ -139,4 +139,58 @@ describe('AppShell states and keyboard behavior', () => {
     await waitFor(() => expect(client.calls).toContain('saveProjectConfig'));
     expect(await screen.findByText('Porta LAN 8123 aplicada.')).toBeInTheDocument();
   });
+
+  it('shows immediate TLS loading and reconciles without a page reload', async () => {
+    const user = userEvent.setup();
+    const client = clientWith([project]);
+    let finish: () => void = () => undefined;
+    client.saveProjectConfig = () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+
+    render(<AppShell client={client} pollIntervalMs={0} />);
+    await screen.findByRole('heading', { name: 'catalogo' });
+
+    await user.click(screen.getByRole('button', { name: 'Desativar TLS' }));
+    const loadingButton = screen.getByRole('button', { name: 'Desativando TLS' });
+    expect(loadingButton).toBeDisabled();
+    expect(loadingButton).toHaveAttribute('aria-busy', 'true');
+
+    finish();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Ativar TLS' })).toBeInTheDocument(),
+    );
+  });
+
+  it('marks HMR as starting immediately and keeps the control non-blocking', async () => {
+    const user = userEvent.setup();
+    const devProject: ProjectInfo = {
+      ...project,
+      mode: 'dev',
+      effectiveMode: 'dev',
+      framework: 'vite',
+      localDevState: 'stopped',
+    };
+    const client = clientWith([devProject]);
+    let finish: () => void = () => undefined;
+    client.startDev = () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+
+    render(<AppShell client={client} pollIntervalMs={0} />);
+    await screen.findByRole('heading', { name: 'catalogo' });
+
+    await user.click(screen.getByRole('button', { name: 'Iniciar HMR local' }));
+    const loadingButton = screen.getByRole('button', { name: 'Iniciando HMR…' });
+    expect(loadingButton).toBeDisabled();
+    expect(loadingButton).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByText('Iniciando HMR local')).toBeInTheDocument();
+
+    finish();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Parar HMR local' })).toBeInTheDocument(),
+    );
+  });
 });

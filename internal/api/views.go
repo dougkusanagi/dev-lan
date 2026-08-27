@@ -19,6 +19,7 @@ type projectViewRuntime struct {
 	effective   domain.Config
 	edgeReady   bool
 	wslReady    bool
+	caddyStatus platform.CaddyServiceStatus
 	host        string
 	sockets     map[string]bool
 	socketErr   error
@@ -56,6 +57,7 @@ func loadProjectViewRuntime(ctx context.Context, service *app.App) (*projectView
 		effective:   effective,
 		edgeReady:   edgeReady,
 		wslReady:    wslReady,
+		caddyStatus: caddyStatus,
 		host:        host,
 		sockets:     make(map[string]bool),
 		devStatuses: make(map[string]platform.DevProcessStatus),
@@ -249,7 +251,7 @@ func wslAvailability(ctx context.Context, service *app.App) bool {
 	return found["bash"] || found["caddy"]
 }
 
-func buildSystemStatusView(ctx context.Context, service *app.App, cfg domain.Config, phpVersions []app.PHPVersionStatus, wslAvailable bool) SystemStatusView {
+func buildSystemStatusView(ctx context.Context, service *app.App, cfg domain.Config, phpVersions []app.PHPVersionStatus, wslAvailable bool, caddyStatus platform.CaddyServiceStatus) SystemStatusView {
 	host := cfg.LANAddress
 	if host == "auto" {
 		var lanErr error
@@ -259,7 +261,6 @@ func buildSystemStatusView(ctx context.Context, service *app.App, cfg domain.Con
 		}
 	}
 
-	caddyStatus := serviceCaddyStatus(ctx, service)
 	topology := service.CaddyTopologyStatus(ctx)
 	firewallOk, _ := service.FirewallHealthy(ctx, cfg)
 	hyperVOk := false
@@ -394,7 +395,7 @@ func BuildOverviewView(ctx context.Context, service *app.App, filter string) (Ov
 	phpItems, _ := service.PHPVersions(platform.WithWSLOperation(ctx, platform.WSLOperationStatus))
 	return OverviewView{
 		Projects:    renderProjectViews(runtime, filter),
-		Status:      buildSystemStatusView(ctx, service, runtime.cfg, phpItems, wslAvailability(ctx, service)),
+		Status:      buildSystemStatusView(ctx, service, runtime.cfg, phpItems, wslAvailability(ctx, service), runtime.caddyStatus),
 		PHPVersions: phpVersionViews(phpItems),
 	}, nil
 }
@@ -405,7 +406,7 @@ func BuildStatusView(ctx context.Context, service *app.App) (SystemStatusView, e
 		return SystemStatusView{}, err
 	}
 	phpVers, _ := service.PHPVersions(platform.WithWSLOperation(ctx, platform.WSLOperationStatus))
-	return buildSystemStatusView(ctx, service, cfg, phpVers, wslAvailability(ctx, service)), nil
+	return buildSystemStatusView(ctx, service, cfg, phpVers, wslAvailability(ctx, service), serviceCaddyStatus(ctx, service)), nil
 }
 
 func BuildGlobalConfigView(service *app.App) (GlobalConfigView, error) {
