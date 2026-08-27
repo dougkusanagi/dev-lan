@@ -9,7 +9,7 @@ Um executável Go concentra regras de negócio e oferece a CLI. Ele será respon
 - manter o registro de projetos;
 - gerar configurações;
 - executar comandos controlados no WSL por `wsl.exe`;
-- validar e recarregar os dois Caddys;
+- validar e recarregar o Caddy único no WSL;
 - identificar o IP LAN;
 - criar a regra de firewall durante a instalação;
 - executar diagnósticos de ponta a ponta.
@@ -39,28 +39,39 @@ somente de configuração que aponta para o diretório montado do Windows. A API
 valida versão, token, origem loopback, operação e argumentos. O agente Linux
 para processos JavaScript continua sendo uma responsabilidade separada.
 
-### Caddy no Windows
+### Caddy único no WSL
 
-É a borda da rede. Escuta somente nos endereços e portas configurados, recebe
-requisições da LAN e as encaminha para o WSL. Com SSL desligado, atende HTTP.
-Com SSL ligado, mantém HTTP para redirect, termina TLS na porta 443 com a CA
-interna do Caddy e encaminha ao mesmo upstream WSL.
+Windows 11 22H2+, WSL 2, `networkingMode=mirrored` e systemd são pré-requisitos
+do execution plane. A instância Caddy gerenciada por systemd no WSL é a única
+borda: escuta 80/443 e as portas LAN atribuídas pelo alocador persistente. Ela
+serve `https://nome.localhost/`, `http(s)://IP:porta/` e
+`https://devlan.localhost/` diretamente no WSL.
 
-Sua configuração deve mudar pouco. A lógica de PHP e de cada projeto permanece no WSL.
+Os sites `.localhost` ficam limitados a `127.0.0.1`/`::1`. O dashboard é o
+único reverse proxy para o Windows, em `127.0.0.1:<ui_port>`; PHP-FPM, static,
+Vite/SSR, WebSocket e assets usam os caminhos e sockets do WSL diretamente. A
+API administrativa do Caddy permanece em `127.0.0.1:2020` e nunca é publicada
+na LAN.
 
 Cada projeto recebe uma porta LAN do pool persistido por caminho; a ordem de
-descoberta não altera uma atribuição existente. O firewall Windows cobre o
-pool somente no perfil `Private` e na origem `LocalSubnet`, enquanto o Caddy
-escuta apenas as portas efetivamente atribuídas. A porta administrativa `ui_port`
-fica fora do pool e permanece em loopback.
+descoberta não altera uma atribuição existente. O Windows Firewall e o Hyper-V
+Firewall são reconciliados em conjunto para `Private`/`LocalSubnet`, enquanto
+`ui_port` continua loopback-only. A aplicação segue
+`plan → validate → stage → commit → reload → healthcheck`, com systemd, arquivo
+vivo e backup usados para detectar e recuperar uma falha parcial.
 
-### Caddy no WSL
+### Compatibilidade e migração
 
-A API administrativa do Caddy no Windows usa `127.0.0.1:2019`, enquanto a do
-Caddy no WSL usa `127.0.0.1:2020`. Endereços distintos evitam que o
-encaminhamento de `localhost` do WSL entregue uma recarga ao processo errado.
+`devlan topology check` consulta build do Windows, versão/WSL2, modo espelhado
+efetivo, systemd, loopback, alcance LAN e conflitos em 80/443/pool. O editor
+transacional do `.wslconfig` altera somente as chaves gerenciadas em `[wsl2]`,
+preserva comentários e seções desconhecidas e mantém backup.
 
-Conhece os projetos, seus document roots, modos de atendimento e sockets PHP-FPM. A CLI gera fragmentos a partir do registro de projetos e só recarrega o Caddy após `caddy validate` ter sucesso.
+`devlan topology repair` reconcilia a configuração, firewall e Caddy sem
+interromper distribuições. `devlan topology migrate --yes` é o único fluxo que
+executa `wsl --shutdown`: valida e sobe o Caddy novo, verifica health, para a
+topologia antiga, reinicia/valida o novo serviço e só então remove artefatos
+legados. Qualquer falha posterior restaura os backups disponíveis.
 
 ### PHP-FPM
 
@@ -128,11 +139,10 @@ proxy para o processo backend. Ele:
 
 ```text
 GET http://IP:8080/clientes
-  1. Caddy/Windows recebe a porta 8080
-  2. encaminha ao Caddy/WSL com os headers internos controlados
-  3. Caddy/WSL seleciona o projeto pela porta
-  4. php_fastcgi executa public/index.php
-  5. Laravel responde ao cliente da LAN
+  1. Caddy WSL recebe diretamente a porta 8080
+  2. seleciona o site do projeto pela porta atribuída
+  3. php_fastcgi executa public/index.php
+  4. Laravel responde ao cliente da LAN
 ```
 
 No acesso local, o Caddy usa sempre `https://financeiro.localhost/clientes`.
@@ -141,9 +151,10 @@ Na LAN, cada projeto possui uma porta dedicada e serve a aplicação na raiz:
 projeto estão ativos, a origem LAN usa HTTPS; não há seleção de modo, subpath
 externo ou hostname LAN por projeto.
 
-O Caddy armazena a CA e a chave privada no perfil do usuário Windows. Somente o
-certificado raiz público pode ser copiado para clientes LAN. A chave privada e
-o diretório de armazenamento do Caddy não devem ser compartilhados.
+O Caddy armazena a CA e a chave privada somente no WSL. O DevLAN exporta e
+valida apenas o certificado raiz público para instalar no trust store do
+Windows ou distribuir manualmente a clientes LAN; a chave privada nunca cruza
+essa fronteira.
 
 ## Compatibilidade com Laravel na raiz
 
@@ -169,16 +180,15 @@ Proposta:
   config.toml
   state.json
   wsl-distribution
-  generated/Caddyfile.windows
-  generated/Caddyfile.wsl
+  generated/Caddyfile
+  generated/Caddyfile.previous
   generated/php/php-8-5.conf
   generated/php/info/index.html
   logs/
 
+/etc/caddy/Caddyfile       (cópia viva publicada atomicamente)
 /etc/devlan/
-  generated/Caddyfile
   generated/php/
-  snippets/
   backups/
 ```
 
@@ -188,17 +198,16 @@ Proposta:
 - Arquivos em `generated` não devem ser editados manualmente.
 - Personalizações entram por snippets com pontos de extensão definidos.
 
-No MVP, `generated/Caddyfile.windows` e `generated/Caddyfile.wsl` são arquivos
-gerados pelo núcleo. O caminho Windows é convertido para `/mnt/<drive>/...`
-quando o Caddy do WSL é validado ou recarregado, evitando concatenação de
-comandos shell.
+`generated/Caddyfile` é o único artefato de borda gerado pelo núcleo. O caminho
+Windows é convertido para `/mnt/<drive>/...` quando o Caddy do WSL é validado
+ou publicado em `/etc/caddy/Caddyfile`, evitando concatenação de comandos shell.
 
 ### Bootstrap da máquina
 
 `scripts/install.ps1` é um adaptador de instalação, separado do domínio. Ele
-baixa o código-fonte, instala Go e Caddy no Windows, chama
+baixa o código-fonte, instala Go no Windows, chama
 `scripts/install-wsl.sh` com argumentos separados para instalar PHP-FPM,
-Composer, extensões Laravel e Caddy no WSL, compila `devlan.exe` e o cliente
+Composer, extensões Laravel, systemd e Caddy no WSL, compila `devlan.exe` e o cliente
 Linux do WSL e delega a configuração final para o comando `devlan install`. A
 seleção de versões é
 explícita; o script não instala dependências de projetos nem executa scripts

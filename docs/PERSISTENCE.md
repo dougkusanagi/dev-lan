@@ -21,8 +21,8 @@ plan → validate → stage → commit → reload → healthcheck → finalize
 ```
 
 Falha antes do commit deixa a revisão anterior intacta. Falha depois do
-commit restaura o par persistido, os artefatos gerados e tenta recarregar os
-dois Caddys com a revisão anterior. Os resultados da aplicação distinguem
+commit restaura o par persistido, o Caddyfile unificado e os artefatos gerados
+e tenta recarregar o único Caddy WSL com a revisão anterior. Os resultados da aplicação distinguem
 `applied`, `degraded`, `rolled_back` e `failed`.
 
 ## Migrações e testes

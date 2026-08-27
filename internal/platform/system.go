@@ -80,6 +80,30 @@ func IsPortAvailable(port int) bool {
 	return true
 }
 
+// ProbeTCP verifies that a listener is reachable through a specific host
+// address. It deliberately does not require an HTTP 2xx response: a stopped
+// project upstream may correctly produce a Caddy 502 while the LAN edge and
+// firewall path are working.
+func ProbeTCP(ctx context.Context, host string, port int) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	host = strings.TrimSpace(strings.Trim(host, "[]"))
+	if host == "" {
+		return errors.New("endereço TCP vazio")
+	}
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("porta TCP inválida: %d", port)
+	}
+	dialer := net.Dialer{Timeout: 2 * time.Second}
+	connection, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+	if err != nil {
+		return err
+	}
+	_ = connection.Close()
+	return nil
+}
+
 // ListeningTCPPorts returns ports already occupied by host listeners. It is
 // intentionally a Windows adapter: WSL project listeners are not host route
 // listeners and are supplied separately by the application reservations.

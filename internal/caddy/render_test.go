@@ -44,6 +44,56 @@ func TestRenderWSLIsDeterministicAndSorted(t *testing.T) {
 	}
 }
 
+func TestRenderWSLUnifiedOwnsEveryM8Edge(t *testing.T) {
+	staticMode := domain.ModeStatic
+	devMode := domain.ModeDev
+	dist := "dist"
+	laravel := domain.PHPPresetLaravel
+	devPort := 9150
+	cfg := domain.NewConfig()
+	cfg.UIPort = 3210
+	cfg.LANAddress = "192.168.10.77"
+	cfg.TLSEnabled = true
+	cfg.Projects = []domain.Project{
+		{Name: "php-app", Path: "/home/dev/php-app", PHPPreset: &laravel},
+		{Name: "static-app", Path: "/home/dev/static-app", Mode: &staticMode, StaticDir: &dist},
+		{Name: "vite-app", Path: "/home/dev/vite-app", Mode: &devMode, DevPort: &devPort},
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	result, err := RenderWSLUnified(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"admin 127.0.0.1:2020",
+		"auto_https disable_redirects",
+		"https://devlan.localhost",
+		"reverse_proxy 127.0.0.1:3210",
+		"https://php-app.localhost",
+		"@devlan_local_vite_php-app path /@* /resources/* /node_modules/* /__laravel_vite_plugin__/* /src/*",
+		"reverse_proxy 127.0.0.1:19100",
+		"root * \"/home/dev/php-app/public\"",
+		"https://192.168.10.77:8080",
+		"root * \"/home/dev/static-app/dist\"",
+		"reverse_proxy 127.0.0.1:9150",
+		"bind 0.0.0.0",
+	} {
+		if !strings.Contains(result, expected) {
+			t.Fatalf("Caddyfile unificado não contém %q:\n%s", expected, result)
+		}
+	}
+	for _, forbidden := range []string{"X-DevLAN-", "127.0.0.1:2019", "8181"} {
+		if strings.Contains(result, forbidden) {
+			t.Fatalf("Caddyfile unificado contém protocolo legado %q:\n%s", forbidden, result)
+		}
+	}
+	if strings.Contains(result, "@devlan_local_vite_vite-app") {
+		t.Fatal("Vite não deve ser publicado na rota LAN do projeto")
+	}
+}
+
 func TestRenderWindowsUsesDedicatedAdminAddress(t *testing.T) {
 	result, err := RenderWindows(domain.NewConfig())
 	if err != nil {
@@ -65,7 +115,7 @@ func TestRenderWindowsWithInternalTLS(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, expected := range []string{
-		"default_sni 192.168.10.77", "https://:8080", "tls internal",
+		"default_sni 192.168.10.77", "https://192.168.10.77:8080", "tls internal",
 		"header_up X-DevLAN-Port 8080", "header_up X-DevLAN-HTTPS on",
 	} {
 		if !strings.Contains(result, expected) {
@@ -136,7 +186,7 @@ func TestRenderWindowsRedirectsOnlyProjectsWithTLSPreference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result, "https://:8081 {") {
+	if !strings.Contains(result, "https://localhost:8081 {") {
 		t.Fatalf("listener seguro dedicado ausente:\n%s", result)
 	}
 	if !strings.Contains(result, ":8081 {") {
@@ -360,13 +410,9 @@ func TestRenderWindowsAndWSLHeaderSecurityAndLoopbackRestriction(t *testing.T) {
 	}
 	for _, expected := range []string{
 		"header_up -X-DevLAN-Port",
-		"header_up -X-DevLAN-Project",
 		"header_up -X-DevLAN-Local",
 		"header_up -X-DevLAN-HTTPS",
 		"header_up -X-Forwarded-For",
-		"header_up -X-Forwarded-Host",
-		"header_up -X-Forwarded-Proto",
-		"header_up -X-Forwarded-Port",
 		"header_up X-DevLAN-Port 8080",
 		"header_up X-DevLAN-Project myapp",
 		"header_up X-Forwarded-Port 8080",
@@ -432,6 +478,7 @@ func TestRenderWindowsRoutesDevLANLocalhostToUIPort(t *testing.T) {
 	}
 	for _, expected := range []string{
 		"https://devlan.localhost {",
+		"bind 0.0.0.0",
 		"@devlan_admin_edge {",
 		"host devlan.localhost",
 		"remote_ip 127.0.0.1 ::1",

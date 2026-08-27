@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/dougkusanagi/dev-lan/internal/domain"
+	"github.com/dougkusanagi/dev-lan/internal/platform"
 )
 
 // Store owns only DevLAN-managed files. Project directories are never inside
@@ -74,6 +75,11 @@ type Paths struct {
 	PHPInfoDir      string
 	WindowsCaddy    string
 	WSLCaddy        string
+	// Caddy is the single execution-plane edge introduced by M8. The fields
+	// above remain read-compatible with pre-M8 installations so migration can
+	// inspect and back up their last known topology.
+	Caddy           string
+	CaddyPrevious   string
 	WindowsPrevious string
 	WSLPrevious     string
 	LogsDir         string
@@ -111,6 +117,8 @@ func (s Store) Paths() Paths {
 		PHPInfoDir:      filepath.Join(generated, "php", "info"),
 		WindowsCaddy:    filepath.Join(generated, "Caddyfile.windows"),
 		WSLCaddy:        filepath.Join(generated, "Caddyfile.wsl"),
+		Caddy:           filepath.Join(generated, "Caddyfile"),
+		CaddyPrevious:   filepath.Join(generated, "Caddyfile.previous"),
 		WindowsPrevious: filepath.Join(generated, "Caddyfile.windows.previous"),
 		WSLPrevious:     filepath.Join(generated, "Caddyfile.wsl.previous"),
 		LogsDir:         filepath.Join(s.Dir, "logs"),
@@ -521,6 +529,13 @@ func (s Store) ApplyGenerated(windows, wsl string, validator func(windowsTemp, w
 
 func (s Store) Generated() (windows, wsl string, err error) {
 	paths := s.Paths()
+	// New installations have one Caddyfile. Return it for both legacy return
+	// values so integrations compiled against the old Store API can inspect the
+	// active configuration during the migration window without recreating a
+	// second artifact on disk.
+	if data, readErr := os.ReadFile(paths.Caddy); readErr == nil {
+		return string(data), string(data), nil
+	}
 	windowsData, err := os.ReadFile(paths.WindowsCaddy)
 	if err != nil {
 		return "", "", err
@@ -530,6 +545,69 @@ func (s Store) Generated() (windows, wsl string, err error) {
 		return "", "", err
 	}
 	return string(windowsData), string(wslData), nil
+}
+
+// ApplyCaddy stages and atomically publishes the one live Caddyfile. The
+// previous file is retained independently from the transaction journal so a
+// failed WSL service reload can restore the last working edge.
+func (s Store) ApplyCaddy(contents string, validator func(path string) error) error {
+	if err := s.Ensure(); err != nil {
+		return err
+	}
+	paths := s.Paths()
+	temporary, err := writeTemp(paths.GeneratedDir, "Caddyfile-", []byte(contents))
+	if err != nil {
+		return err
+	}
+	defer os.Remove(temporary)
+	if validator != nil {
+		if err := validator(temporary); err != nil {
+			return fmt.Errorf("validação rejeitou o novo Caddyfile: %w", err)
+		}
+	}
+	old, exists, err := readOptional(paths.Caddy)
+	if err != nil {
+		return err
+	}
+	if exists {
+		if err := atomicWrite(paths.CaddyPrevious, old, 0o644); err != nil {
+			return fmt.Errorf("salvar rollback do Caddy WSL: %w", err)
+		}
+	}
+	if err := platform.AtomicReplaceFile(temporary, paths.Caddy); err != nil {
+		return fmt.Errorf("aplicar Caddy WSL único: %w", err)
+	}
+	return nil
+}
+
+func (s Store) GeneratedCaddy() (string, error) {
+	data, err := os.ReadFile(s.Paths().Caddy)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func (s Store) RollbackCaddy() error {
+	paths := s.Paths()
+	previous, exists, err := readOptional(paths.CaddyPrevious)
+	if err != nil {
+		return err
+	}
+	if err := restore(paths.Caddy, previous, exists); err != nil {
+		return fmt.Errorf("rollback Caddy WSL único: %w", err)
+	}
+	return nil
+}
+
+// LegacyCaddyFiles reports whether the data directory still contains the
+// pre-M8 two-edge artifacts. It is deliberately read-only and is used by the
+// migration coordinator before cleanup.
+func (s Store) LegacyCaddyFiles() (windows, wsl bool) {
+	paths := s.Paths()
+	_, windowsErr := os.Stat(paths.WindowsCaddy)
+	_, wslErr := os.Stat(paths.WSLCaddy)
+	return windowsErr == nil, wslErr == nil
 }
 
 // RollbackGenerated restores the pair saved by the last successful apply. If

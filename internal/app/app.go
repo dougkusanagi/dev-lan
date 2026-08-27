@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	pathpkg "path"
 	"path/filepath"
@@ -28,13 +29,17 @@ import (
 )
 
 type App struct {
-	Store        config.Store
-	Detector     detect.Detector
-	WSL          platform.WSLRunner
-	PHP          platform.PHPManager
-	Dev          platform.DevManager
-	DevProxy     *platform.DevProxy
-	Telemetry    telemetry.Store
+	Store     config.Store
+	Detector  detect.Detector
+	WSL       platform.WSLRunner
+	PHP       platform.PHPManager
+	Dev       platform.DevManager
+	DevProxy  *platform.DevProxy
+	Telemetry telemetry.Store
+	// Caddy is the M8 unified edge. It is intentionally optional in the struct
+	// so callers compiled against the pre-M8 fields can still inject a WSL
+	// client while migrating.
+	Caddy        platform.CaddyClient
 	WindowsCaddy platform.CaddyClient
 	WSLCaddy     platform.CaddyClient
 	// Firewall accepts both the range-aware FirewallReconciler and the legacy
@@ -45,7 +50,29 @@ type App struct {
 	// platform adapter; tests can provide a deterministic snapshot.
 	ExternalListeners func(context.Context) ([]int, error)
 	Now               func() time.Time
-	mutationMu        sync.Mutex
+	// WSLConfigPath is injectable for migration tests; empty means the user's
+	// host-level .wslconfig.
+	WSLConfigPath string
+	mutationMu    sync.Mutex
+	topologyMu    sync.Mutex
+}
+
+func (a *App) edgeCaddy() platform.CaddyClient {
+	// Caddy is the canonical M8 edge. A non-systemd WSLCaddy is accepted only
+	// as an explicit compatibility injection from pre-M8 callers/tests; the
+	// production constructor leaves it empty and a second systemd edge can
+	// never shadow the canonical one.
+	if a.Caddy.Runner != nil {
+		if a.WSLCaddy.Runner != nil && a.Caddy.RequireSystemd && !a.WSLCaddy.RequireSystemd {
+			return a.WSLCaddy
+		}
+		return a.Caddy
+	}
+	if a.WSLCaddy.Runner != nil {
+		return a.WSLCaddy
+	}
+	// Compatibility for callers/tests that only injected the old host edge.
+	return a.WindowsCaddy
 }
 
 type mockRunner struct{}
@@ -59,25 +86,31 @@ func New(dataDir string) *App {
 	}
 	wsl := platform.NewWSLRunner("wsl.exe", distribution)
 	dev := platform.NewWSLDevManager(wsl)
-	winCaddy := platform.NewLocalCaddy("")
 	wslCaddy := platform.NewWSLCaddy(wsl)
 	if os.Getenv("DEVLAN_TEST_MOCK") == "1" {
-		winCaddy = platform.CaddyClient{Runner: mockRunner{}}
 		wslCaddy = platform.CaddyClient{Runner: mockRunner{}, WSL: true}
 	}
 	return &App{
-		Store:             config.NewStore(dataDir),
-		Detector:          detect.Detector{Inspector: detect.SmartInspector{WSL: wsl}},
-		WSL:               wsl,
-		PHP:               platform.NewWSLPHPManager(wsl),
-		Dev:               dev,
-		DevProxy:          platform.NewDevProxy(dev),
-		Telemetry:         telemetry.NewStore(dataDir),
-		WindowsCaddy:      winCaddy,
-		WSLCaddy:          wslCaddy,
-		Firewall:          platform.SystemFirewall{},
+		Store:     config.NewStore(dataDir),
+		Detector:  detect.Detector{Inspector: detect.SmartInspector{WSL: wsl}},
+		WSL:       wsl,
+		PHP:       platform.NewWSLPHPManager(wsl),
+		Dev:       dev,
+		DevProxy:  platform.NewDevProxy(dev),
+		Telemetry: telemetry.NewStore(dataDir),
+		// This is the only operational edge. It is deliberately assigned to the
+		// canonical field; WSLCaddy below is left nil so a second Caddy cannot be
+		// selected accidentally by normal code.
+		Caddy: wslCaddy,
+		// Windows no longer owns an operational Caddy instance. Keep the field
+		// zero-valued so old integrations can still inject a legacy client when
+		// explicitly testing or rolling back a migration.
+		WindowsCaddy:      platform.CaddyClient{},
+		WSLCaddy:          platform.CaddyClient{},
+		Firewall:          platform.CompositeFirewall{},
 		ExternalListeners: platform.ListeningTCPPorts,
 		Now:               time.Now,
+		WSLConfigPath:     platform.UserWSLConfigPath(),
 	}
 }
 
@@ -169,7 +202,9 @@ func (a *App) routeAllocationConfig(ctx context.Context, cfg domain.Config) (dom
 	if err != nil {
 		return domain.Config{}, err
 	}
-	reserved := []int{cfg.WindowsPort, cfg.HTTPSPort, cfg.WSLPort, cfg.UIPort}
+	// M8 has no intermediate Windows/WSL listener. Keep the actual edge ports
+	// reserved even when an older config still contains legacy port fields.
+	reserved := []int{80, 443, cfg.UIPort}
 	reservedSet := make(map[int]struct{}, len(reserved))
 	for _, port := range reserved {
 		reservedSet[port] = struct{}{}
@@ -191,7 +226,7 @@ func (a *App) routeAllocationConfig(ctx context.Context, cfg domain.Config) (dom
 	}
 
 	listeners := []int(nil)
-	if a.ExternalListeners != nil {
+	if a.ExternalListeners != nil && os.Getenv("DEVLAN_TEST_MOCK") != "1" {
 		listeners, err = a.ExternalListeners(ctx)
 		if err != nil {
 			return domain.Config{}, fmt.Errorf("verificar listeners externos: %w", err)
@@ -292,24 +327,13 @@ func (a *App) InstallWithPort(ctx context.Context, configureFirewall bool, windo
 	if err != nil {
 		return result, err
 	}
-	if !platform.IsAdminResponsive(platform.WindowsCaddyAdminAddress) {
-		if !platform.IsPortAvailable(cfg.WindowsPort) {
-			result.Warnings = append(result.Warnings, fmt.Sprintf("porta HTTP %d parece estar em uso por outro processo; use `devlan install --windows-port PORT` se houver conflito", cfg.WindowsPort))
-		}
-		if cfg.TLSEnabled && !platform.IsPortAvailable(cfg.HTTPSPort) {
-			result.Warnings = append(result.Warnings, fmt.Sprintf("porta HTTPS %d parece estar em uso por outro processo", cfg.HTTPSPort))
-		}
-	}
 	if configureFirewall {
 		if err := a.ensureFirewallSpec(ctx, cfg); err != nil && runtime.GOOS == "windows" {
-			result.Warnings = append(result.Warnings, "não foi possível criar a regra de firewall DevLAN; execute install como administrador")
+			result.Warnings = append(result.Warnings, "não foi possível reconciliar Windows Firewall/Hyper-V Firewall; execute install como administrador")
 		}
 	}
-	if err := a.WindowsCaddy.Available(ctx); err != nil {
-		result.Warnings = append(result.Warnings, "Caddy Windows não encontrado; instale-o e execute devlan doctor")
-	}
-	if err := a.WSLCaddy.Available(ctx); err != nil {
-		result.Warnings = append(result.Warnings, "Caddy no WSL não encontrado; instale-o e execute devlan doctor")
+	if err := a.edgeCaddy().Available(ctx); err != nil {
+		result.Warnings = append(result.Warnings, "Caddy único no WSL não encontrado; instale-o e execute devlan doctor")
 	}
 	phpCommands := []string{"php-fpm", "php-fpm8.5", "php-fpm8.4", "php-fpm8.3", "php-fpm8.2", "php-fpm8.1"}
 	phpFound := false
@@ -333,6 +357,11 @@ func (a *App) InstallWithPort(ctx context.Context, configureFirewall bool, windo
 func (a *App) Uninstall(ctx context.Context) (ApplyResult, error) {
 	result := ApplyResult{}
 	_ = a.appendLog("uninstall iniciado")
+	if caddyClient := a.edgeCaddy(); caddyClient.Runner != nil {
+		if err := caddyClient.Stop(ctx); err != nil && runtime.GOOS == "windows" {
+			result.Warnings = append(result.Warnings, "não foi possível parar o serviço Caddy WSL único: "+err.Error())
+		}
+	}
 	if err := a.removeFirewall(ctx); err != nil && runtime.GOOS == "windows" {
 		result.Warnings = append(result.Warnings, "não foi possível remover a regra de firewall DevLAN; execute uninstall como administrador")
 	}
@@ -956,7 +985,7 @@ func (a *App) SetTLS(ctx context.Context, enabled bool) (ApplyResult, error) {
 		result.Warnings = append(result.Warnings, "não foi possível atualizar o firewall; execute o comando em PowerShell como Administrador")
 	}
 	if enabled {
-		if err := a.WindowsCaddy.Trust(ctx); err != nil {
+		if err := a.Trust(ctx); err != nil {
 			result.Warnings = append(result.Warnings, "não foi possível confiar na CA local automaticamente; execute `caddy trust` como Administrador")
 		}
 		_ = a.appendLog("TLS interno ativado")
@@ -967,15 +996,31 @@ func (a *App) SetTLS(ctx context.Context, enabled bool) (ApplyResult, error) {
 }
 
 func (a *App) Trust(ctx context.Context) error {
-	if a.WindowsCaddy.Runner == nil {
-		return fmt.Errorf("Caddy Windows não configurado")
+	caddyClient := a.edgeCaddy()
+	if caddyClient.Runner == nil {
+		return fmt.Errorf("Caddy WSL não configurado")
 	}
-	return a.WindowsCaddy.Trust(ctx)
+	paths := a.Store.Paths()
+	if caddyClient.WSL {
+		if err := caddyClient.ExportRootCA(ctx, paths.CARootExport); err != nil {
+			// A caller that explicitly injected the pre-M8 Windows client is
+			// either running a compatibility test or performing a rollback. The
+			// production constructor leaves WindowsCaddy empty, so this cannot
+			// silently bring the old edge back into the normal install path.
+			if a.WindowsCaddy.Runner != nil {
+				return a.WindowsCaddy.Trust(ctx)
+			}
+			return err
+		}
+		return platform.InstallCARoot(ctx, paths.CARootExport)
+	}
+	// Compatibility for a pre-M8 controller that has not been migrated yet.
+	return caddyClient.Trust(ctx)
 }
 
 // SetProjectTLS changes the HTTPS preference of one registered project. The
-// Windows edge still owns the certificate, but the project selector keeps the
-// command and the advertised URL scoped to the requested project.
+// Caddy WSL edge owns the certificate, while the selector keeps the command
+// and advertised URL scoped to the requested project.
 func (a *App) SetProjectTLS(ctx context.Context, selector string, enabled bool) (ApplyResult, string, error) {
 	cfg, err := a.Store.Load()
 	if err != nil {
@@ -1016,7 +1061,7 @@ func (a *App) SetProjectTLS(ctx context.Context, selector string, enabled bool) 
 		if err := a.ensureFirewallSpec(ctx, cfg); err != nil && runtime.GOOS == "windows" {
 			result.Warnings = append(result.Warnings, "não foi possível atualizar o firewall; execute o comando em PowerShell como Administrador")
 		}
-		if err := a.WindowsCaddy.Trust(ctx); err != nil {
+		if err := a.Trust(ctx); err != nil {
 			result.Warnings = append(result.Warnings, "não foi possível confiar na CA local automaticamente; execute `caddy trust` como Administrador")
 		}
 	}
@@ -1060,7 +1105,7 @@ func (a *App) Reload(ctx context.Context) (ApplyResult, error) {
 		}
 		if allocationsChanged {
 			if err := a.Store.SaveLocked(prepared); err != nil {
-				_ = a.Store.RollbackGenerated()
+				_ = a.Store.RollbackCaddy()
 				_ = a.Store.RollbackPHPFiles()
 				return err
 			}
@@ -1072,7 +1117,7 @@ func (a *App) Reload(ctx context.Context) (ApplyResult, error) {
 			if allocationsChanged {
 				_ = a.Store.RollbackConfigLocked()
 			}
-			_ = a.Store.RollbackGenerated()
+			_ = a.Store.RollbackCaddy()
 			_ = a.Store.RollbackPHPFiles()
 			if previous, loadErr := a.Store.LoadLocked(); loadErr == nil {
 				_, _ = a.reloadApplied(ctx, previous, ApplyResult{}, BootstrapTolerant)
@@ -1119,7 +1164,7 @@ func (a *App) saveAndApplyMode(ctx context.Context, cfg domain.Config, reload bo
 		}
 		if err := a.Store.SaveLocked(cfg); err != nil {
 			_ = a.Store.RollbackConfigLocked()
-			_ = a.Store.RollbackGenerated()
+			_ = a.Store.RollbackCaddy()
 			_ = a.Store.RollbackPHPFiles()
 			result.Status = "failed"
 			return err
@@ -1131,7 +1176,7 @@ func (a *App) saveAndApplyMode(ctx context.Context, cfg domain.Config, reload bo
 				// Compensate both files and live processes. A failed post-commit
 				// reload must not leave a newer state pointing at older services.
 				_ = a.Store.RollbackConfigLocked()
-				_ = a.Store.RollbackGenerated()
+				_ = a.Store.RollbackCaddy()
 				_ = a.Store.RollbackPHPFiles()
 				if previous, loadErr := a.Store.LoadLocked(); loadErr == nil {
 					_, _ = a.reloadApplied(ctx, previous, ApplyResult{}, BootstrapTolerant)
@@ -1179,31 +1224,19 @@ func (a *App) reloadApplied(ctx context.Context, cfg domain.Config, result Apply
 		}
 	}
 	paths := a.Store.Paths()
-	if err := a.WindowsCaddy.Available(ctx); err == nil {
-		if err := a.WindowsCaddy.EnsureRunning(ctx, paths.WindowsCaddy); err != nil {
-			return result, fmt.Errorf("recarregar Caddy Windows: %w", err)
+	caddyClient := a.edgeCaddy()
+	if err := caddyClient.Available(ctx); err == nil {
+		if err := caddyClient.EnsureRunning(ctx, paths.Caddy); err != nil {
+			return result, fmt.Errorf("iniciar/recarregar Caddy WSL único: %w", err)
 		}
-		if err := a.WindowsCaddy.Available(ctx); err != nil {
-			return result, fmt.Errorf("healthcheck Caddy Windows: %w", err)
-		}
-	} else {
-		if mode == OperationalStrict {
-			return result, fmt.Errorf("Caddy Windows indisponível")
-		}
-		result.Warnings = append(result.Warnings, "Caddy Windows não disponível; reload ignorado")
-	}
-	if err := a.WSLCaddy.Available(ctx); err == nil {
-		if err := a.WSLCaddy.EnsureRunning(ctx, paths.WSLCaddy); err != nil {
-			return result, fmt.Errorf("iniciar/recarregar Caddy WSL: %w", err)
-		}
-		if err := a.WSLCaddy.Available(ctx); err != nil {
-			return result, fmt.Errorf("healthcheck Caddy WSL: %w", err)
+		if caddyClient.RequireSystemd && !caddyClient.Status(ctx).Running {
+			return result, fmt.Errorf("healthcheck Caddy WSL único: serviço systemd não está ativo")
 		}
 	} else {
 		if mode == OperationalStrict {
-			return result, fmt.Errorf("Caddy no WSL indisponível")
+			return result, fmt.Errorf("Caddy WSL único indisponível")
 		}
-		result.Warnings = append(result.Warnings, "Caddy no WSL não disponível; reload ignorado")
+		result.Warnings = append(result.Warnings, "Caddy WSL único não disponível; reload ignorado")
 	}
 	if a.DevProxy != nil && os.Getenv("DEVLAN_TEST_MOCK") != "1" {
 		for _, project := range cfg.Projects {
@@ -1228,17 +1261,13 @@ func (a *App) apply(ctx context.Context, cfg domain.Config, validate, reload boo
 	if err := a.ensureProjectAccess(ctx, cfg); err != nil {
 		return ApplyResult{}, err
 	}
-	windowsConfig := cfg
-	if windowsConfig.TLSEnabled && windowsConfig.LANAddress == "auto" {
-		address, addressErr := platform.LANAddress()
-		if addressErr != nil {
-			return ApplyResult{}, fmt.Errorf("resolver IP LAN para certificado TLS: %w", addressErr)
+	// Caddy must issue the LAN certificate for the same address advertised by
+	// the URL table. Resolve the automatic address for the generated edge, but
+	// keep the persisted preference as "auto" so it can follow network changes.
+	if strings.TrimSpace(cfg.LANAddress) == "" || cfg.LANAddress == "auto" {
+		if host, hostErr := platform.LANAddress(); hostErr == nil && host != "" {
+			cfg.LANAddress = host
 		}
-		windowsConfig.LANAddress = address
-	}
-	windows, err := caddy.RenderWindows(windowsConfig)
-	if err != nil {
-		return ApplyResult{}, err
 	}
 	if err := a.Store.Ensure(); err != nil {
 		return ApplyResult{}, err
@@ -1248,7 +1277,10 @@ func (a *App) apply(ctx context.Context, cfg domain.Config, validate, reload boo
 	if err != nil {
 		return ApplyResult{}, fmt.Errorf("resolver caminho do access log no WSL: %w", err)
 	}
-	wsl, err := caddy.RenderWSLWithAccessLog(cfg, wslAccessLogPath)
+	// The WSL Caddy is the only HTTP edge after M8. It binds 80/443 and the
+	// assigned project ports directly; the Windows side receives only the
+	// loopback dashboard API.
+	unified, err := caddy.RenderWSLUnifiedWithAccessLog(cfg, wslAccessLogPath)
 	if err != nil {
 		return ApplyResult{}, err
 	}
@@ -1265,49 +1297,35 @@ func (a *App) apply(ctx context.Context, cfg domain.Config, validate, reload boo
 	for i := range phpPools {
 		phpPools[i].ConfigPath = phpconfig.DisplayPath(a.Store.Paths().PHPGeneratedDir, phpPools[i].Version)
 	}
-	windowsReady := false
-	wslReady := false
+	caddyReady := false
 	if validate || reload {
-		if err := a.WindowsCaddy.Available(ctx); err != nil {
+		if err := a.edgeCaddy().Available(ctx); err != nil {
 			if mode == OperationalStrict {
-				return result, fmt.Errorf("Caddy Windows indisponível: %w", err)
+				return result, fmt.Errorf("Caddy WSL único indisponível: %w", err)
 			}
-			result.Warnings = append(result.Warnings, "Caddy Windows não disponível; validação/reload externo ignorado")
+			result.Warnings = append(result.Warnings, "Caddy WSL único não disponível; validação/reload externo ignorado")
 		} else {
-			windowsReady = true
-		}
-		if err := a.WSLCaddy.Available(ctx); err != nil {
-			if mode == OperationalStrict {
-				return result, fmt.Errorf("Caddy no WSL indisponível: %w", err)
-			}
-			result.Warnings = append(result.Warnings, "Caddy no WSL não disponível; validação/reload externo ignorado")
-		} else {
-			wslReady = true
+			caddyReady = true
 		}
 	}
 
-	validator := func(windowsTemp, wslTemp string) error {
-		if validate && windowsReady {
-			if err := a.WindowsCaddy.Validate(ctx, windowsTemp); err != nil {
-				return fmt.Errorf("Caddy Windows: %w", err)
-			}
-		}
-		if validate && wslReady {
-			if err := a.WSLCaddy.Validate(ctx, wslTemp); err != nil {
-				return fmt.Errorf("Caddy WSL: %w", err)
+	validator := func(caddyTemp string) error {
+		if validate && caddyReady {
+			if err := a.edgeCaddy().Validate(ctx, caddyTemp); err != nil {
+				return fmt.Errorf("Caddy WSL único: %w", err)
 			}
 		}
 		return nil
 	}
-	var callback func(string, string) error
+	var callback func(string) error
 	if validate {
 		callback = validator
 	}
-	if err := a.Store.ApplyGenerated(windows, wsl, callback); err != nil {
+	if err := a.Store.ApplyCaddy(unified, callback); err != nil {
 		return result, err
 	}
 	if err := a.Store.ApplyPHPFiles(phpFiles, infoPage); err != nil {
-		_ = a.Store.RollbackGenerated()
+		_ = a.Store.RollbackCaddy()
 		_ = a.Store.RollbackPHPFiles()
 		return result, err
 	}
@@ -1321,18 +1339,11 @@ func (a *App) apply(ctx context.Context, cfg domain.Config, validate, reload boo
 
 	if reload {
 		paths := a.Store.Paths()
-		if windowsReady {
-			if err := a.WindowsCaddy.EnsureRunning(ctx, paths.WindowsCaddy); err != nil {
-				_ = a.Store.RollbackGenerated()
+		if caddyReady {
+			if err := a.edgeCaddy().EnsureRunning(ctx, paths.Caddy); err != nil {
+				_ = a.Store.RollbackCaddy()
 				_ = a.Store.RollbackPHPFiles()
-				return result, fmt.Errorf("recarregar Caddy Windows: %w", err)
-			}
-		}
-		if wslReady {
-			if err := a.WSLCaddy.EnsureRunning(ctx, paths.WSLCaddy); err != nil {
-				_ = a.Store.RollbackGenerated()
-				_ = a.Store.RollbackPHPFiles()
-				return result, fmt.Errorf("iniciar/recarregar Caddy WSL: %w", err)
+				return result, fmt.Errorf("iniciar/recarregar Caddy WSL único: %w", err)
 			}
 		}
 		if a.DevProxy != nil && os.Getenv("DEVLAN_TEST_MOCK") != "1" {
@@ -1476,7 +1487,11 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 		if address, err := platform.LANAddress(); err != nil {
 			checks = append(checks, Check{"IP LAN", "WARN", err.Error()})
 		} else {
-			generated := extractCaddyLANAddress(a.Store.Paths().WindowsCaddy)
+			generated := extractCaddyLANAddress(a.Store.Paths().Caddy)
+			if generated == "" {
+				// Read-only compatibility with a pre-M8 generated edge.
+				generated = extractCaddyLANAddress(a.Store.Paths().WindowsCaddy)
+			}
 			if generated != "" && generated != "localhost" && generated != "127.0.0.1" && address != generated {
 				checks = append(checks, Check{"IP LAN", "WARN", fmt.Sprintf("IP atual (%s) diverge do Caddyfile (%s); execute `devlan reload`", address, generated)})
 			} else {
@@ -1487,15 +1502,25 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 		checks = append(checks, Check{"IP LAN", "OK", cfg.LANAddress + " (configurado)"})
 	}
 
-	if err := a.WindowsCaddy.Available(ctx); err != nil {
-		checks = append(checks, Check{"Caddy Windows", "WARN", "não encontrado"})
+	caddyClient := a.edgeCaddy()
+	if err := caddyClient.Available(ctx); err != nil {
+		checks = append(checks, Check{"Caddy WSL único", "WARN", "não encontrado: " + err.Error()})
 	} else {
-		checks = append(checks, Check{"Caddy Windows", "OK", "disponível"})
+		status := caddyClient.Status(ctx)
+		if !status.Running && !status.Live {
+			checks = append(checks, Check{"Caddy WSL único", "WARN", "binário disponível, mas serviço/live indisponível"})
+		} else {
+			detail := "serviço Caddy WSL ativo"
+			if status.Systemd {
+				detail = "serviço systemd do Caddy WSL ativo"
+			}
+			checks = append(checks, Check{"Caddy WSL único", "OK", detail})
+		}
 	}
-	if err := a.WSLCaddy.Available(ctx); err != nil {
-		checks = append(checks, Check{"Caddy WSL", "WARN", "não encontrado"})
-	} else {
-		checks = append(checks, Check{"Caddy WSL", "OK", "disponível"})
+
+	compatibility := a.WSLCompatibility(ctx)
+	for _, item := range compatibility.Checks {
+		checks = append(checks, Check{"WSL " + item.Name, string(item.Status), item.Detail})
 	}
 
 	// Check Node & JS package managers in one WSL session.
@@ -1508,23 +1533,24 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 		}
 	}
 
-	adminRunning := platform.IsAdminResponsive(platform.WindowsCaddyAdminAddress)
+	caddyStatus := caddyClient.Status(ctx)
+	adminRunning := caddyStatus.Running || caddyStatus.Live
 	if adminRunning {
-		checks = append(checks, Check{fmt.Sprintf("Porta HTTP (%d)", cfg.WindowsPort), "OK", "gerenciada pelo Caddy Windows"})
+		checks = append(checks, Check{"Porta HTTP (80)", "OK", "gerenciada diretamente pelo Caddy WSL único"})
 		if cfg.TLSEnabled {
-			checks = append(checks, Check{fmt.Sprintf("Porta HTTPS (%d)", cfg.HTTPSPort), "OK", "gerenciada pelo Caddy Windows"})
+			checks = append(checks, Check{"Porta HTTPS (443)", "OK", "gerenciada diretamente pelo Caddy WSL único"})
 		}
 	} else {
-		if platform.IsPortAvailable(cfg.WindowsPort) {
-			checks = append(checks, Check{fmt.Sprintf("Porta HTTP (%d)", cfg.WindowsPort), "OK", "disponível"})
+		if platform.IsPortAvailable(80) {
+			checks = append(checks, Check{"Porta HTTP (80)", "OK", "disponível"})
 		} else {
-			checks = append(checks, Check{fmt.Sprintf("Porta HTTP (%d)", cfg.WindowsPort), "WARN", "ocupada por outro processo; possível conflito"})
+			checks = append(checks, Check{"Porta HTTP (80)", "WARN", "ocupada por outro processo; possível conflito"})
 		}
 		if cfg.TLSEnabled {
-			if platform.IsPortAvailable(cfg.HTTPSPort) {
-				checks = append(checks, Check{fmt.Sprintf("Porta HTTPS (%d)", cfg.HTTPSPort), "OK", "disponível"})
+			if platform.IsPortAvailable(443) {
+				checks = append(checks, Check{"Porta HTTPS (443)", "OK", "disponível"})
 			} else {
-				checks = append(checks, Check{fmt.Sprintf("Porta HTTPS (%d)", cfg.HTTPSPort), "WARN", "ocupada por outro processo; possível conflito"})
+				checks = append(checks, Check{"Porta HTTPS (443)", "WARN", "ocupada por outro processo; possível conflito"})
 			}
 		}
 	}
@@ -1626,6 +1652,25 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 	} else {
 		checks = append(checks, Check{"Firewall", "OK", "regra DevLAN reconciliada: TCP " + firewallSpecDescription(firewallSpec)})
 	}
+	if composite, ok := a.Firewall.(platform.CompositeFirewall); ok {
+		hyperVStatus := composite.HyperVStatus(ctx, firewallSpec)
+		if !hyperVStatus.Supported {
+			checks = append(checks, Check{"Hyper-V Firewall", "WARN", hyperVStatus.Detail})
+		} else if hyperVStatus.Healthy {
+			checks = append(checks, Check{"Hyper-V Firewall", "OK", "Private / LocalSubnet, default inbound Block"})
+		} else {
+			checks = append(checks, Check{"Hyper-V Firewall", "WARN", hyperVStatus.Detail})
+		}
+	} else if composite, ok := a.Firewall.(*platform.CompositeFirewall); ok && composite != nil {
+		hyperVStatus := composite.HyperVStatus(ctx, firewallSpec)
+		if !hyperVStatus.Supported {
+			checks = append(checks, Check{"Hyper-V Firewall", "WARN", hyperVStatus.Detail})
+		} else if hyperVStatus.Healthy {
+			checks = append(checks, Check{"Hyper-V Firewall", "OK", "Private / LocalSubnet, default inbound Block"})
+		} else {
+			checks = append(checks, Check{"Hyper-V Firewall", "WARN", hyperVStatus.Detail})
+		}
+	}
 
 	uiPort := cfg.UIPort
 	if uiPort == 0 {
@@ -1639,7 +1684,7 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 	if adminRunning {
 		checks = append(checks, Check{"Caddy devlan.localhost", "OK", fmt.Sprintf("reverse proxy para 127.0.0.1:%d ativo", uiPort)})
 	} else {
-		checks = append(checks, Check{"Caddy devlan.localhost", "WARN", "Caddy Windows parado; use a porta direta como fallback"})
+		checks = append(checks, Check{"Caddy devlan.localhost", "WARN", "Caddy WSL único parado; execute `devlan reload`"})
 	}
 	checks = append(checks, Check{"Compatibilidade de Versão", "OK", fmt.Sprintf("ProtocolVersion=%d", domain.ProtocolVersion)})
 
@@ -1836,11 +1881,583 @@ func (a *App) CheckLANAddressDivergence() (current string, generated string, div
 	if err != nil {
 		return "", "", false
 	}
-	generated = extractCaddyLANAddress(a.Store.Paths().WindowsCaddy)
+	generated = extractCaddyLANAddress(a.Store.Paths().Caddy)
+	if generated == "" {
+		generated = extractCaddyLANAddress(a.Store.Paths().WindowsCaddy)
+	}
 	if generated != "" && generated != "localhost" && generated != "127.0.0.1" && current != generated {
 		return current, generated, true
 	}
 	return current, generated, false
+}
+
+// CaddyTopologyStatus returns the live topology without treating persisted
+// files as proof that a process is healthy.
+func (a *App) CaddyTopologyStatus(ctx context.Context) platform.TopologySnapshot {
+	paths := a.Store.Paths()
+	_, unifiedErr := os.Stat(paths.Caddy)
+	_, windowsErr := os.Stat(paths.WindowsCaddy)
+	_, wslErr := os.Stat(paths.WSLCaddy)
+	// Status must not make the legacy Windows admin endpoint part of the normal
+	// health graph. Its artifact is enough to identify a partial migration;
+	// only the explicit migration coordinator may probe/stop that old process.
+	windowsRunning := false
+	edge := a.edgeCaddy()
+	edgeStatus := edge.Status(ctx)
+	return platform.DetectCaddyTopology(unifiedErr == nil, windowsErr == nil, wslErr == nil, windowsRunning, edgeStatus.Running)
+}
+
+func restoreManagedFile(path string, data []byte, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".devlan-restore-*.tmp")
+	if err != nil {
+		return err
+	}
+	temporaryName := temporary.Name()
+	defer func() { _ = os.Remove(temporaryName) }()
+	if err := temporary.Chmod(mode); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(data); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return platform.AtomicReplaceFile(temporaryName, path)
+}
+
+func (a *App) CaddyStatus(ctx context.Context) platform.CaddyServiceStatus {
+	return a.edgeCaddy().Status(ctx)
+}
+
+func (a *App) WSLCompatibility(ctx context.Context) platform.WSLCompatibilityReport {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return platform.WSLCompatibilityReport{Checks: []platform.CompatibilityCheck{{Name: "Configuração", Status: platform.CompatibilityFail, Detail: err.Error()}}}
+	}
+	ports := []int{80, 443}
+	base, count := cfg.RouteBasePort, cfg.RoutePortCount
+	if base == 0 {
+		base = 8080
+	}
+	if count == 0 {
+		count = 100
+	}
+	for port := base; port < base+count && port <= 65535; port++ {
+		ports = append(ports, port)
+	}
+	effective, effectiveErr := a.EffectiveConfig(ctx, cfg)
+	// Only listeners represented by the effective routing table are owned by
+	// the live Caddy. An unrelated process using an unassigned port in the
+	// configured pool is still a real allocation conflict and must not be
+	// hidden merely because Caddy itself is healthy.
+	managedPorts := map[int]bool{80: true, 443: true}
+	if effectiveErr == nil {
+		for _, project := range effective.Projects {
+			if resolved, resolveErr := effective.Resolve(project.Name); resolveErr == nil {
+				managedPorts[resolved.RoutePort] = true
+			}
+		}
+	}
+	for _, port := range cfg.RoutePortAllocations {
+		managedPorts[port] = true
+	}
+	edgeStatus := a.edgeCaddy().Status(ctx)
+	edgeLive := edgeStatus.Running && edgeStatus.Live
+	lanHost := cfg.LANAddress
+	if lanHost == "auto" || strings.TrimSpace(lanHost) == "" {
+		lanHost, err = platform.LANAddress()
+		if err != nil {
+			lanHost = ""
+		}
+	}
+	lanPort := 80
+	if effectiveErr == nil && len(effective.Projects) > 0 {
+		if resolved, resolveErr := effective.Resolve(effective.Projects[0].Name); resolveErr == nil && resolved.RoutePort > 0 {
+			lanPort = resolved.RoutePort
+		}
+	}
+	probe := platform.WSLCompatibilityProbe{
+		WSL: a.WSL,
+		WSLVersion: func() platform.Runner {
+			if a.WSL.Invoker != nil {
+				return a.WSL.Invoker
+			}
+			binary := a.WSL.Binary
+			if binary == "" {
+				binary = "wsl.exe"
+			}
+			return platform.NewExecRunner(binary)
+		}(),
+		ConfigText: func() string {
+			path := a.WSLConfigPath
+			if path == "" {
+				path = platform.UserWSLConfigPath()
+			}
+			data, _ := os.ReadFile(path)
+			return string(data)
+		}(),
+		PortAvailable: func(_ context.Context, port int) bool {
+			if edgeLive && managedPorts[port] {
+				return true
+			}
+			return platform.IsPortAvailable(port)
+		},
+		LANProbe: func(probeContext context.Context) error {
+			if strings.TrimSpace(lanHost) == "" || lanHost == "localhost" || lanHost == "127.0.0.1" || lanHost == "::1" {
+				return errors.New("endereço LAN não resolvido")
+			}
+			// Once the unified edge is prepared, probe the host's physical LAN
+			// address from Windows. In mirrored mode this is the same inbound
+			// listener a second machine uses; probing that address from inside WSL
+			// is not reliable for a host's own interface on every WSL release.
+			if _, unifiedErr := os.Stat(a.Store.Paths().Caddy); unifiedErr == nil {
+				if probeErr := probeLANTCP(probeContext, lanHost, lanPort); probeErr != nil {
+					// Some mirrored WSL builds do not hairpin a Windows
+					// connection to the host's own LAN address. Verify the same
+					// non-loopback listener from the mirrored Linux interface;
+					// host and Hyper-V firewall policy is reconciled separately.
+					if wslProbeErr := probeWSLLANTCP(probeContext, a.WSL, lanHost, lanPort); wslProbeErr != nil {
+						return fmt.Errorf("probe LAN %s:%d falhou no Windows (%v) e no WSL (%w)", lanHost, lanPort, probeErr, wslProbeErr)
+					}
+				}
+				return nil
+			}
+			// The probe originates inside the selected WSL distribution and
+			// reaches the host's LAN address. It verifies the mirrored path with
+			// the same direct listener that a second machine would use, without
+			// interpolating the address into shell source.
+			const script = `set -e
+if command -v curl >/dev/null 2>&1; then
+    curl --silent --show-error --connect-timeout 1 --max-time 2 -o /dev/null "http://$1:$2/"
+elif command -v wget >/dev/null 2>&1; then
+    wget -q -T 2 -O /dev/null "http://$1:$2/"
+else
+    exit 127
+fi`
+			_, probeErr := a.WSL.RunOperation(probeContext, platform.WSLOperationDoctor, "/bin/sh", "-c", script, "devlan", lanHost, strconv.Itoa(lanPort))
+			if probeErr != nil {
+				return fmt.Errorf("probe WSL→LAN %s:%d: %w", lanHost, lanPort, probeErr)
+			}
+			return nil
+		},
+		LoopbackProbe: func(probeContext context.Context) error {
+			if !a.edgeCaddy().AdminLive(probeContext) {
+				return errors.New("probe Windows→WSL no admin do Caddy não respondeu")
+			}
+			return nil
+		},
+		WSLToWindowsProbe: func(probeContext context.Context) error {
+			return probeWSLToWindowsLoopback(probeContext, a.WSL)
+		},
+	}
+	return probe.Check(ctx, a.WSL.Distribution, ports...)
+}
+
+// probeWSLToWindowsLoopback verifies mirrored localhost forwarding without
+// depending on the long-running API service. The listener is private,
+// ephemeral and exists only for the duration of this probe.
+func probeWSLToWindowsLoopback(ctx context.Context, runner platform.WSLRunner) error {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("abrir listener temporário no Windows: %w", err)
+	}
+	defer listener.Close()
+
+	serverResult := make(chan error, 1)
+	go func() {
+		connection, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			serverResult <- acceptErr
+			return
+		}
+		defer connection.Close()
+		_ = connection.SetDeadline(time.Now().Add(2 * time.Second))
+		_, writeErr := connection.Write([]byte("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n"))
+		serverResult <- writeErr
+	}()
+
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
+	const script = `if command -v curl >/dev/null 2>&1; then
+    curl --silent --show-error --connect-timeout 1 --max-time 2 -o /dev/null "http://127.0.0.1:$1/"
+elif command -v wget >/dev/null 2>&1; then
+    wget -q -T 2 -O /dev/null "http://127.0.0.1:$1/"
+else
+    exit 127
+fi`
+	if _, err := runner.RunOperation(probeCtx, platform.WSLOperationDoctor, "/bin/sh", "-c", script, "devlan", port); err != nil {
+		return fmt.Errorf("probe WSL→Windows em 127.0.0.1:%s: %w", port, err)
+	}
+	select {
+	case serveErr := <-serverResult:
+		if serveErr != nil {
+			return fmt.Errorf("responder probe WSL→Windows: %w", serveErr)
+		}
+		return nil
+	case <-probeCtx.Done():
+		return probeCtx.Err()
+	}
+}
+
+func probeWSLLANTCP(ctx context.Context, runner platform.WSLRunner, host string, port int) error {
+	probeCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	const script = `timeout 2 /bin/bash -c '</dev/tcp/$1/$2' devlan "$1" "$2"`
+	if _, err := runner.RunOperation(probeCtx, platform.WSLOperationDoctor, "/bin/bash", "-c", script, "devlan", host, strconv.Itoa(port)); err != nil {
+		return err
+	}
+	return nil
+}
+
+// probeLANTCP gives mirrored WSL a short convergence window after the VM is
+// restarted. systemd can report Caddy healthy before the host-side mirrored
+// listener is reachable; treating that transient as a migration failure leaves
+// the operator with an unnecessary rollback.
+func probeLANTCP(ctx context.Context, host string, port int) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	deadline := time.Now().Add(8 * time.Second)
+	var lastErr error
+	for {
+		attemptContext, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
+		lastErr = platform.ProbeTCP(attemptContext, host, port)
+		cancel()
+		if lastErr == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return lastErr
+		}
+		timer := time.NewTimer(250 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+// MigrateToSingleCaddy applies the M8 topology in a deliberately explicit
+// flow. The WSL shutdown is confirmation-gated because it stops every running
+// distribution, not only the configured one.
+func (a *App) MigrateToSingleCaddy(ctx context.Context, confirmed bool) (platform.MigrationResult, error) {
+	if !confirmed {
+		return platform.MigrationResult{}, platform.ErrWSLShutdownConfirmation
+	}
+	a.topologyMu.Lock()
+	defer a.topologyMu.Unlock()
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return platform.MigrationResult{}, err
+	}
+	// The unified edge exposes its listeners directly through mirrored WSL.
+	// Reconcile the host and Hyper-V policies before the port handoff so a
+	// non-elevated migration fails while the previous Caddy is still serving.
+	if os.Getenv("DEVLAN_TEST_MOCK") != "1" {
+		if err := a.ensureFirewallSpec(ctx, cfg); err != nil && runtime.GOOS == "windows" {
+			return platform.MigrationResult{}, fmt.Errorf("preparar Windows Firewall/Hyper-V Firewall antes da migração: %w; execute o comando em um terminal como Administrador", err)
+		}
+	}
+	paths := a.Store.Paths()
+	_, unifiedStatErr := os.Stat(paths.Caddy)
+	if unifiedStatErr != nil && !errors.Is(unifiedStatErr, os.ErrNotExist) {
+		return platform.MigrationResult{}, fmt.Errorf("ler configuração Caddy WSL: %w", unifiedStatErr)
+	}
+	unifiedExisted := unifiedStatErr == nil
+	preparedUnified := false
+	cleanupPrepared := func() {
+		if !preparedUnified {
+			return
+		}
+		_ = a.Store.RollbackConfig()
+		_ = a.Store.RollbackCaddy()
+		_ = a.Store.RollbackPHPFiles()
+	}
+	if errors.Is(unifiedStatErr, os.ErrNotExist) {
+		if _, applyErr := a.saveAndApplyMode(ctx, cfg, false, BootstrapTolerant); applyErr != nil {
+			return platform.MigrationResult{}, fmt.Errorf("preparar configuração Caddy WSL: %w", applyErr)
+		}
+		preparedUnified = true
+	}
+	legacy := []string{}
+	windowsLegacyExisted := false
+	wslLegacyExisted := false
+	for _, path := range []string{paths.WindowsCaddy, paths.WSLCaddy} {
+		if _, statErr := os.Stat(path); statErr == nil {
+			legacy = append(legacy, path)
+			if path == paths.WindowsCaddy {
+				windowsLegacyExisted = true
+			} else if path == paths.WSLCaddy {
+				wslLegacyExisted = true
+			}
+		}
+	}
+	backupRoot := filepath.Join(paths.Dir, "migration-backups", a.now().UTC().Format("20060102-150405.000000000"))
+	caddyClient := a.edgeCaddy()
+	initialUnifiedRunning := caddyClient.Status(ctx).Running
+	unifiedStartAttempted := false
+	unifiedStarted := false
+	legacyStopAttempted := false
+	legacyStopped := false
+	legacyCaddy := a.WindowsCaddy
+	if legacyCaddy.Runner == nil {
+		if _, windowsConfigErr := os.Stat(paths.WindowsCaddy); windowsConfigErr == nil {
+			// This adapter is created only inside the migration window. It is not
+			// part of the normal M8 lifecycle, but lets an upgrade stop a still
+			// running pre-M8 Caddy when its binary is still installed.
+			legacyCaddy = platform.NewLocalCaddy("")
+		}
+	}
+	wslConfigPath := a.WSLConfigPath
+	if strings.TrimSpace(wslConfigPath) == "" {
+		wslConfigPath = platform.UserWSLConfigPath()
+	}
+	oldWSLConfig, wslConfigErr := os.ReadFile(wslConfigPath)
+	if wslConfigErr != nil && !errors.Is(wslConfigErr, os.ErrNotExist) {
+		cleanupPrepared()
+		return platform.MigrationResult{}, fmt.Errorf("ler .wslconfig: %w", wslConfigErr)
+	}
+	wslConfigExisted := wslConfigErr == nil
+	if wslConfigExisted {
+		if err := os.MkdirAll(backupRoot, 0o700); err != nil {
+			cleanupPrepared()
+			return platform.MigrationResult{}, fmt.Errorf("criar backup da configuração WSL: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(backupRoot, "wslconfig"), oldWSLConfig, 0o600); err != nil {
+			cleanupPrepared()
+			return platform.MigrationResult{}, fmt.Errorf("salvar backup da configuração WSL: %w", err)
+		}
+	}
+	if os.Getenv("DEVLAN_TEST_MOCK") != "1" {
+		if _, updateErr := platform.UpdateWSLConfig(wslConfigPath, platform.DefaultWSLConfigSettings()); updateErr != nil {
+			cleanupPrepared()
+			return platform.MigrationResult{}, updateErr
+		}
+	}
+	restoreWSLConfig := func() error {
+		if os.Getenv("DEVLAN_TEST_MOCK") == "1" {
+			return nil
+		}
+		return platform.RestoreWSLConfig(wslConfigPath, oldWSLConfig, wslConfigExisted)
+	}
+
+	migration := platform.CaddyMigration{
+		UnifiedConfig:   paths.Caddy,
+		LegacyFiles:     legacy,
+		BackupRoot:      backupRoot,
+		ConfirmShutdown: confirmed,
+		Now:             a.Now,
+		ValidateUnified: func(ctx context.Context) error { return caddyClient.Validate(ctx, paths.Caddy) },
+		// Mirrored networking puts the old Windows listeners and the new WSL
+		// listeners on the same host namespace. The candidate is validated before
+		// this handoff; rollback restarts the legacy edge if the new service does
+		// not become healthy.
+		StopLegacyBeforeStart: windowsLegacyExisted,
+		StartUnified: func(ctx context.Context) error {
+			unifiedStartAttempted = true
+			status := caddyClient.Status(ctx)
+			if caddyClient.RequireSystemd && !status.Systemd {
+				// The host .wslconfig change takes effect only after the explicit
+				// shutdown. The candidate was already validated; its service is
+				// started by the second call after the VM comes back.
+				return nil
+			}
+			if err := caddyClient.EnsureRunning(ctx, paths.Caddy); err != nil {
+				return err
+			}
+			unifiedStarted = true
+			return nil
+		},
+		HealthUnified: func(ctx context.Context) error {
+			if os.Getenv("DEVLAN_TEST_MOCK") == "1" {
+				return nil
+			}
+			status := caddyClient.Status(ctx)
+			if caddyClient.RequireSystemd && !status.Systemd {
+				return nil
+			}
+			if status.Available && status.Running && status.Live {
+				return nil
+			}
+			return fmt.Errorf("Caddy WSL único não está ativo: %s", status.Detail)
+		},
+		StopLegacy: func(ctx context.Context) error {
+			if !windowsLegacyExisted || legacyCaddy.Runner == nil || !platform.IsAdminResponsive(platform.WindowsCaddyAdminAddress) {
+				return nil
+			}
+			legacyStopAttempted = true
+			if err := legacyCaddy.Stop(ctx); err != nil {
+				return err
+			}
+			legacyStopped = true
+			return nil
+		},
+		ShutdownWSL: func(ctx context.Context) error {
+			if os.Getenv("DEVLAN_TEST_MOCK") == "1" {
+				return nil
+			}
+			return a.WSL.Shutdown(ctx)
+		},
+		VerifyAfterWSL: func(ctx context.Context) error {
+			if os.Getenv("DEVLAN_TEST_MOCK") == "1" {
+				return nil
+			}
+			report := a.WSLCompatibility(ctx)
+			if !report.MirroredNetworking || !report.Systemd || !report.LoopbackBidirectional || !report.LANReachable || len(report.PortConflicts) > 0 {
+				return fmt.Errorf("mirrored=%t systemd=%t loopback=%t lan=%t conflicts=%d", report.MirroredNetworking, report.Systemd, report.LoopbackBidirectional, report.LANReachable, len(report.PortConflicts))
+			}
+			return nil
+		},
+		RemoveLegacy: func() error {
+			for _, path := range legacy {
+				if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+					return removeErr
+				}
+			}
+			return nil
+		},
+		Rollback: func(ctx context.Context, backupDir string) error {
+			var rollbackErr error
+			recordRollbackErr := func(err error) {
+				if err != nil && rollbackErr == nil {
+					rollbackErr = err
+				}
+			}
+			for _, path := range legacy {
+				backupPath := filepath.Join(backupDir, filepath.Base(path))
+				data, readErr := os.ReadFile(backupPath)
+				if readErr != nil {
+					recordRollbackErr(readErr)
+					continue
+				}
+				recordRollbackErr(restoreManagedFile(path, data, 0o644))
+			}
+			recordRollbackErr(restoreWSLConfig())
+			unifiedBackup := filepath.Join(backupDir, "unified.Caddyfile")
+			if unifiedExisted {
+				data, readErr := os.ReadFile(unifiedBackup)
+				if readErr != nil {
+					recordRollbackErr(readErr)
+				} else {
+					restoreErr := restoreManagedFile(paths.Caddy, data, 0o644)
+					recordRollbackErr(restoreErr)
+					if restoreErr == nil && (initialUnifiedRunning || unifiedStartAttempted) {
+						recordRollbackErr(caddyClient.EnsureRunning(ctx, paths.Caddy))
+					}
+				}
+			} else {
+				if unifiedStartAttempted || unifiedStarted {
+					recordRollbackErr(caddyClient.Stop(ctx))
+				}
+				recordRollbackErr(os.Remove(paths.Caddy))
+				if errors.Is(rollbackErr, os.ErrNotExist) {
+					rollbackErr = nil
+				}
+			}
+			if windowsLegacyExisted && legacyCaddy.Runner != nil && (legacyStopped || legacyStopAttempted) {
+				recordRollbackErr(legacyCaddy.EnsureRunning(ctx, paths.WindowsCaddy))
+			}
+			// An explicitly injected legacy WSL adapter is supported for upgrade
+			// tests/rollback, but the production App has no second operational
+			// client. Never synthesize one here.
+			if wslLegacyExisted && a.Caddy.Runner != nil && a.WSLCaddy.Runner != nil {
+				recordRollbackErr(a.WSLCaddy.EnsureRunning(ctx, paths.WSLCaddy))
+			}
+			return rollbackErr
+		},
+	}
+	result, err := migration.Migrate(ctx)
+	if err != nil {
+		// A validation/start failure can occur before the migration coordinator
+		// has a reversible process phase, but it must still not leave the host
+		// .wslconfig changed.
+		_ = restoreWSLConfig()
+		if !unifiedExisted {
+			_ = os.Remove(paths.Caddy)
+		}
+		if preparedUnified {
+			cleanupPrepared()
+		}
+		a.recordTelemetry("topology.migrate", map[string]string{"component": "caddy_wsl", "result": "rolled_back"})
+		return result, err
+	}
+	_ = a.Store.AppendSecurityAudit("CADDY_TOPOLOGY_MIGRATE", "topologia única WSL ativada")
+	a.recordTelemetry("topology.migrate", map[string]string{"component": "caddy_wsl", "result": "ok"})
+	return result, nil
+}
+
+// RepairM8 reconciles the non-destructive parts of the single-Caddy topology.
+// It never calls wsl --shutdown: changing .wslconfig is transactional, but
+// applying it to the running VM is intentionally left to the explicit
+// migration flow because shutdown terminates every WSL distribution.
+func (a *App) RepairM8(ctx context.Context) (ApplyResult, error) {
+	result := ApplyResult{}
+	a.topologyMu.Lock()
+	defer a.topologyMu.Unlock()
+	cfg, err := a.Store.Load()
+	if err != nil {
+		return result, err
+	}
+	if os.Getenv("DEVLAN_TEST_MOCK") != "1" {
+		path := a.WSLConfigPath
+		if path == "" {
+			path = platform.UserWSLConfigPath()
+		}
+		update, err := platform.UpdateWSLConfig(path, platform.DefaultWSLConfigSettings())
+		if err != nil {
+			return result, err
+		}
+		if update.Changed {
+			result.Warnings = append(result.Warnings, "o .wslconfig foi atualizado; reinicie o WSL pelo fluxo de migração para aplicar networkingMode=mirrored")
+		}
+	}
+	if err := a.ensureFirewallSpec(ctx, cfg); err != nil && runtime.GOOS == "windows" {
+		return result, fmt.Errorf("reconciliar Windows Firewall/Hyper-V Firewall: %w", err)
+	}
+	paths := a.Store.Paths()
+	caddyStatus := a.CaddyStatus(ctx)
+	caddyClient := a.edgeCaddy()
+	if caddyClient.RequireSystemd && !caddyStatus.Systemd {
+		applied, applyErr := a.saveAndApplyMode(ctx, cfg, false, BootstrapTolerant)
+		if applyErr != nil {
+			return result, applyErr
+		}
+		result.Warnings = append(result.Warnings, applied.Warnings...)
+		result.Warnings = append(result.Warnings, "systemd do Caddy aguardando o reinício explícito do WSL")
+		result.Revision = applied.Revision
+	} else if _, err := os.Stat(paths.Caddy); errors.Is(err, os.ErrNotExist) {
+		applied, applyErr := a.saveAndApplyMode(ctx, cfg, true, OperationalStrict)
+		if applyErr != nil {
+			return result, applyErr
+		}
+		result.Warnings = append(result.Warnings, applied.Warnings...)
+		result.Revision = applied.Revision
+	} else {
+		reloaded, reloadErr := a.Reload(ctx)
+		if reloadErr != nil {
+			return result, reloadErr
+		}
+		result.Warnings = append(result.Warnings, reloaded.Warnings...)
+		result.Revision = reloaded.Revision
+	}
+	result.Status = statusFor(result)
+	_ = a.Store.AppendSecurityAudit("CADDY_TOPOLOGY_REPAIR", "componentes não destrutivos reconciliados")
+	a.recordTelemetry("topology.repair", map[string]string{"component": "caddy_wsl", "result": "ok", "status": result.Status})
+	return result, nil
 }
 
 func (a *App) resolveProject(ctx context.Context, selector string) (domain.Project, domain.Config, error) {
@@ -2410,8 +3027,8 @@ func (a *App) SetAuth(ctx context.Context, selector string, enabled bool, userna
 	}
 	var hash string
 	if password != "" {
-		if a.WindowsCaddy.Runner != nil {
-			h, err := a.WindowsCaddy.HashPassword(ctx, password)
+		if caddyClient := a.edgeCaddy(); caddyClient.Runner != nil {
+			h, err := caddyClient.HashPassword(ctx, password)
 			if err == nil && h != "" {
 				hash = strings.TrimSpace(h)
 			}
@@ -2450,25 +3067,54 @@ func (a *App) DisableAuth(ctx context.Context, selector string) (ApplyResult, er
 }
 
 func (a *App) CAInfo(ctx context.Context) (map[string]string, error) {
-	path := platform.FindCARootCertPath()
-	info := map[string]string{
-		"path": path,
-	}
-	if path != "" {
-		if data, err := os.ReadFile(path); err == nil {
-			info["exists"] = "true"
-			info["size"] = fmt.Sprintf("%d bytes", len(data))
+	path := a.Store.Paths().CARootExport
+	if _, err := os.Stat(path); err != nil {
+		caddyClient := a.edgeCaddy()
+		if caddyClient.WSL && caddyClient.Runner != nil {
+			if exportErr := caddyClient.ExportRootCA(ctx, path); exportErr != nil {
+				path = ""
+			}
 		} else {
-			info["exists"] = "false"
+			path = platform.FindCARootCertPath()
 		}
-	} else {
-		info["exists"] = "false"
+	}
+	details := platform.ReadCARootDetails(path)
+	info := map[string]string{"path": path, "exists": strconv.FormatBool(details.Exists), "valid": strconv.FormatBool(details.Valid)}
+	if details.Fingerprint != "" {
+		info["fingerprint"] = details.Fingerprint
+	}
+	trusted := false
+	if details.Valid && runtime.GOOS == "windows" {
+		if value, trustErr := platform.CARootTrusted(ctx, path); trustErr == nil {
+			trusted = value
+		}
+	}
+	info["trusted"] = strconv.FormatBool(trusted)
+	if details.NotAfter != "" {
+		info["not_after"] = details.NotAfter
+	}
+	info["renewal_due"] = strconv.FormatBool(details.RenewalDue)
+	if details.RemainingDays > 0 {
+		info["remaining_days"] = strconv.Itoa(details.RemainingDays)
+	}
+	if details.Detail != "" {
+		info["detail"] = details.Detail
 	}
 	return info, nil
 }
 
 func (a *App) ExportCA(ctx context.Context, targetPath string) (string, error) {
-	src := platform.FindCARootCertPath()
+	src := a.Store.Paths().CARootExport
+	if _, err := os.Stat(src); err != nil {
+		caddyClient := a.edgeCaddy()
+		if caddyClient.WSL && caddyClient.Runner != nil {
+			if err := caddyClient.ExportRootCA(ctx, src); err != nil {
+				return "", err
+			}
+		} else {
+			src = platform.FindCARootCertPath()
+		}
+	}
 	if src == "" {
 		return "", fmt.Errorf("certificado raiz da CA do Caddy não encontrado no sistema")
 	}
@@ -2479,8 +3125,31 @@ func (a *App) ExportCA(ctx context.Context, targetPath string) (string, error) {
 	if targetPath == "" {
 		targetPath = a.Store.Paths().CARootExport
 	}
-	if err := os.WriteFile(targetPath, data, 0o644); err != nil {
-		return "", fmt.Errorf("gravar certificado em %s: %w", targetPath, err)
+	if err := platform.ValidateCARootPEM(data); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+		return "", fmt.Errorf("criar diretório para certificado %s: %w", targetPath, err)
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(targetPath), ".devlan-ca-export-*.tmp")
+	if err != nil {
+		return "", err
+	}
+	temporaryName := temporary.Name()
+	defer func() { _ = os.Remove(temporaryName) }()
+	if err := temporary.Chmod(0o644); err != nil {
+		_ = temporary.Close()
+		return "", err
+	}
+	if _, err := temporary.Write(data); err != nil {
+		_ = temporary.Close()
+		return "", fmt.Errorf("gravar certificado temporário: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return "", err
+	}
+	if err := platform.AtomicReplaceFile(temporaryName, targetPath); err != nil {
+		return "", fmt.Errorf("publicar certificado em %s: %w", targetPath, err)
 	}
 	_ = a.Store.AppendSecurityAudit("CA_EXPORT", fmt.Sprintf("target=%s", targetPath))
 	return targetPath, nil
@@ -2488,8 +3157,8 @@ func (a *App) ExportCA(ctx context.Context, targetPath string) (string, error) {
 
 func (a *App) RotateCA(ctx context.Context) (ApplyResult, error) {
 	result := ApplyResult{}
-	if a.WindowsCaddy.Runner != nil {
-		_ = a.WindowsCaddy.Trust(ctx)
+	if err := a.Trust(ctx); err != nil {
+		result.Warnings = append(result.Warnings, "não foi possível atualizar a confiança da CA: "+err.Error())
 	}
 	_ = a.Store.AppendSecurityAudit("CA_ROTATE", "rotação de CA solicitada")
 	reloadResult, err := a.Reload(ctx)
@@ -2559,19 +3228,56 @@ func (a *App) DiagnosticBundle(ctx context.Context, targetPath string) (string, 
 	if err != nil {
 		return "", fmt.Errorf("serializar inventário WSL: %w", err)
 	}
+	compatibility := a.WSLCompatibility(ctx)
+	topologySnapshot := map[string]any{
+		"topology":      a.CaddyTopologyStatus(ctx),
+		"caddy":         a.CaddyStatus(ctx),
+		"compatibility": compatibility,
+	}
+	firewallHealthy, firewallErr := a.FirewallHealthy(ctx, cfg)
+	firewallSnapshot := map[string]any{
+		"spec":    platform.FirewallSpecForConfig(cfg),
+		"healthy": firewallHealthy,
+	}
+	if firewallErr != nil {
+		firewallSnapshot["detail"] = firewallErr.Error()
+	}
+	topologySnapshot["firewall"] = firewallSnapshot
+	switch composite := a.Firewall.(type) {
+	case platform.CompositeFirewall:
+		topologySnapshot["hyperv"] = composite.HyperVStatus(ctx, platform.FirewallSpecForConfig(cfg))
+	case *platform.CompositeFirewall:
+		if composite != nil {
+			topologySnapshot["hyperv"] = composite.HyperVStatus(ctx, platform.FirewallSpecForConfig(cfg))
+		}
+	}
+	if caInfo, caErr := a.CAInfo(ctx); caErr == nil {
+		topologySnapshot["ca"] = caInfo
+	} else {
+		topologySnapshot["ca"] = map[string]any{"error": caErr.Error()}
+	}
+	topologyData, err := json.MarshalIndent(topologySnapshot, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("serializar topologia M8: %w", err)
+	}
+	firewallData, err := json.MarshalIndent(firewallSnapshot, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("serializar estado de firewall: %w", err)
+	}
 
 	entries := map[string][]byte{
-		"config.json": exported,
-		"doctor.json": append(doctorData, '\n'),
-		"wsl.json":    append(wslStatsData, '\n'),
-		"runtime.txt": []byte(fmt.Sprintf("runtime=%s\ndata_dir=%s\n", RuntimeDescription(), a.Store.Paths().Dir)),
+		"config.json":   exported,
+		"doctor.json":   append(doctorData, '\n'),
+		"wsl.json":      append(wslStatsData, '\n'),
+		"topology.json": append(topologyData, '\n'),
+		"firewall.json": append(firewallData, '\n'),
+		"runtime.txt":   []byte(fmt.Sprintf("runtime=%s\ndata_dir=%s\n", RuntimeDescription(), a.Store.Paths().Dir)),
 	}
 	paths := a.Store.Paths()
 	for archiveName, sourcePath := range map[string]string{
-		"generated/Caddyfile.windows": paths.WindowsCaddy,
-		"generated/Caddyfile.wsl":     paths.WSLCaddy,
-		"logs/devlan.log":             filepath.Join(paths.LogsDir, "devlan.log"),
-		"logs/security.log":           paths.SecurityLog,
+		"generated/Caddyfile": paths.Caddy,
+		"logs/devlan.log":     filepath.Join(paths.LogsDir, "devlan.log"),
+		"logs/security.log":   paths.SecurityLog,
 	} {
 		data, readErr := os.ReadFile(sourcePath)
 		if errors.Is(readErr, os.ErrNotExist) {
@@ -2580,7 +3286,7 @@ func (a *App) DiagnosticBundle(ctx context.Context, targetPath string) (string, 
 		if readErr != nil {
 			return "", fmt.Errorf("ler %s para o diagnóstico: %w", sourcePath, readErr)
 		}
-		if strings.HasSuffix(archiveName, "Caddyfile.windows") || strings.HasSuffix(archiveName, "Caddyfile.wsl") {
+		if strings.HasSuffix(archiveName, "Caddyfile") {
 			data = redactDiagnosticConfig(data)
 		}
 		entries[archiveName] = data

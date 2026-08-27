@@ -215,6 +215,8 @@ func (s *Server) Handler(token ...string) http.Handler {
 	apiMux.HandleFunc("/v1/health", s.handleHealth)
 	apiMux.HandleFunc("/api/v1/status", s.handleStatus)
 	apiMux.HandleFunc("/v1/status", s.handleStatus)
+	apiMux.HandleFunc("/api/v1/topology", s.handleTopology)
+	apiMux.HandleFunc("/v1/topology", s.handleTopology)
 	apiMux.HandleFunc("/api/v1/overview", s.handleOverview)
 	apiMux.HandleFunc("/v1/overview", s.handleOverview)
 
@@ -515,6 +517,14 @@ func (s *Server) handleStatus(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 	writeJSON(writer, http.StatusOK, view)
+}
+
+func (s *Server) handleTopology(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		methodNotAllowed(writer, http.MethodGet)
+		return
+	}
+	writeJSON(writer, http.StatusOK, BuildTopologyView(request.Context(), s.service))
 }
 
 func (s *Server) handleOverview(writer http.ResponseWriter, request *http.Request) {
@@ -1158,6 +1168,16 @@ func (s *Server) handleDoctorFix(writer http.ResponseWriter, request *http.Reque
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
 		}
+	case "topology", "topology-repair":
+		if _, err := s.service.RepairM8(ctx); err != nil {
+			writeJSONError(writer, http.StatusConflict, err.Error())
+			return
+		}
+	case "trust":
+		if err := s.service.Trust(ctx); err != nil {
+			writeJSONError(writer, http.StatusConflict, err.Error())
+			return
+		}
 	case "restart-dev":
 		if input.Target != "" {
 			if err := s.service.RestartDev(ctx, input.Target); err != nil {
@@ -1315,6 +1335,16 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 			return
 		}
 		response["status"] = statusView
+	case "topology":
+		if len(input.Args) > 1 || (len(input.Args) == 1 && input.Args[0] != "status" && input.Args[0] != "check") {
+			writeJSONError(writer, http.StatusBadRequest, "uso: topology [status|check]")
+			return
+		}
+		response["topology"] = s.service.CaddyTopologyStatus(ctx)
+		response["caddy"] = s.service.CaddyStatus(ctx)
+		if len(input.Args) == 1 && input.Args[0] == "check" {
+			response["compatibility"] = s.service.WSLCompatibility(ctx)
+		}
 	case "reload":
 		if len(input.Args) != 0 {
 			writeJSONError(writer, http.StatusBadRequest, "uso: reload")

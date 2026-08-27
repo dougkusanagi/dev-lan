@@ -64,3 +64,60 @@ func TestRoutingModesCannotReturn(t *testing.T) {
 		}
 	}
 }
+
+// TestM8UnifiedEdgeContract guards the active production path during the
+// migration window. Legacy artifacts remain readable for rollback, but new
+// reloads, the unified renderer and the installer must not grow a second edge.
+func TestM8UnifiedEdgeContract(t *testing.T) {
+	root := filepath.Join("..", "..")
+	read := func(relative string) string {
+		data, err := os.ReadFile(filepath.Join(root, relative))
+		if err != nil {
+			t.Fatalf("ler %s: %v", relative, err)
+		}
+		return string(data)
+	}
+
+	render := read(filepath.Join("internal", "caddy", "render.go"))
+	start := strings.Index(render, "func RenderWSLUnified(")
+	if start < 0 {
+		t.Fatal("renderer unificado não encontrado")
+	}
+	activeRenderer := render[start:]
+	for _, forbidden := range []string{"X-DevLAN-", "127.0.0.1:2019", "8181"} {
+		if strings.Contains(activeRenderer, forbidden) {
+			t.Fatalf("renderer unificado reintroduziu o contrato legado %q", forbidden)
+		}
+	}
+	for _, required := range []string{"RenderWSLUnifiedWithAccessLog", "wslAdminAddress", "reverse_proxy 127.0.0.1:%d"} {
+		if !strings.Contains(activeRenderer, required) {
+			t.Fatalf("renderer unificado não contém %q", required)
+		}
+	}
+
+	app := read(filepath.Join("internal", "app", "app.go"))
+	applyStart := strings.Index(app, "func (a *App) apply(")
+	if applyStart < 0 {
+		t.Fatal("pipeline apply não encontrado")
+	}
+	applyEnd := strings.Index(app[applyStart:], "\nfunc ")
+	if applyEnd < 0 {
+		t.Fatal("fim do pipeline apply não encontrado")
+	}
+	activeApply := app[applyStart : applyStart+applyEnd]
+	for _, required := range []string{"RenderWSLUnifiedWithAccessLog", "ApplyCaddy", "edgeCaddy"} {
+		if !strings.Contains(activeApply, required) {
+			t.Fatalf("pipeline apply não usa %q", required)
+		}
+	}
+	if strings.Contains(activeApply, "RenderWindows(") || strings.Contains(activeApply, "ApplyGenerated(") {
+		t.Fatal("pipeline apply ainda gera a topologia dupla")
+	}
+
+	installer := read(filepath.Join("scripts", "install.ps1"))
+	for _, forbidden := range []string{"Install-WindowsCaddy", "Start-WindowsCaddy", "Caddyfile.windows", "127.0.0.1:2019"} {
+		if strings.Contains(installer, forbidden) {
+			t.Fatalf("instalador reintroduziu a borda Windows %q", forbidden)
+		}
+	}
+}

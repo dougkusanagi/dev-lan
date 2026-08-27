@@ -160,10 +160,14 @@ func viteHostSpecified(command string) bool {
 func (m WSLDevManager) configureViteHotFile(ctx context.Context, project domain.Project) error {
 	hotFile := pathpkg.Join(project.Path, "public", "hot")
 	if m.usesWSL(project.Path) {
-		_, err := m.WSL.Run(ctx, "/bin/sh", "-c", `printf 'https://%s.localhost\n' "$1" > "$2"`, "devlan", project.Name, hotFile)
+		// An empty hot file keeps Laravel's Vite tags relative to the current
+		// project origin. The unified Caddy edge proxies those paths to Vite,
+		// which also avoids project-specific middleware rewriting the origin to
+		// https://localhost.
+		_, err := m.WSL.Run(ctx, "/bin/sh", "-c", `printf '\n' > "$1"`, "devlan", hotFile)
 		return err
 	}
-	return os.WriteFile(filepath.Join(filepath.FromSlash(project.Path), "public", "hot"), []byte("https://"+project.Name+".localhost\n"), 0o644)
+	return os.WriteFile(filepath.Join(filepath.FromSlash(project.Path), "public", "hot"), []byte("\n"), 0o644)
 }
 
 func devUnitName(projectName string) string {

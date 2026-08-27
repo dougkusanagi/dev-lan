@@ -34,8 +34,9 @@ func loadProjectViewRuntime(ctx context.Context, service *app.App) (*projectView
 	if err != nil {
 		return nil, err
 	}
-	edgeReady := platform.IsAdminResponsive(platform.WindowsCaddyAdminAddress)
-	wslReady := platform.IsAdminResponsive(platform.WSLCaddyAdminAddress)
+	caddyStatus := serviceCaddyStatus(ctx, service)
+	edgeReady := caddyStatus.Running || caddyStatus.Live
+	wslReady := caddyStatus.Available
 	if os.Getenv("DEVLAN_TEST_MOCK") == "1" {
 		edgeReady = true
 		wslReady = true
@@ -171,10 +172,10 @@ func renderProjectViews(runtime *projectViewRuntime, filter string) []ProjectVie
 			view.Status = "degraded"
 			missing := make([]string, 0, 2)
 			if !runtime.edgeReady {
-				missing = append(missing, "Caddy Windows")
+				missing = append(missing, "Caddy WSL único")
 			}
 			if !runtime.wslReady {
-				missing = append(missing, "Caddy WSL")
+				missing = append(missing, "execution plane WSL")
 			}
 			view.StatusDetail = "infraestrutura indisponível: " + strings.Join(missing, ", ")
 		}
@@ -258,9 +259,33 @@ func buildSystemStatusView(ctx context.Context, service *app.App, cfg domain.Con
 		}
 	}
 
-	winCaddyRunning := platform.IsAdminResponsive(platform.WindowsCaddyAdminAddress)
-	wslCaddyRunning := platform.IsAdminResponsive(platform.WSLCaddyAdminAddress)
+	caddyStatus := serviceCaddyStatus(ctx, service)
+	topology := service.CaddyTopologyStatus(ctx)
 	firewallOk, _ := service.FirewallHealthy(ctx, cfg)
+	hyperVOk := false
+	if composite, ok := service.Firewall.(platform.CompositeFirewall); ok {
+		hyperVStatus := composite.HyperVStatus(ctx, platform.FirewallSpecForConfig(cfg))
+		hyperVOk = !hyperVStatus.Supported || hyperVStatus.Healthy
+	} else if composite, ok := service.Firewall.(*platform.CompositeFirewall); ok && composite != nil {
+		hyperVStatus := composite.HyperVStatus(ctx, platform.FirewallSpecForConfig(cfg))
+		hyperVOk = !hyperVStatus.Supported || hyperVStatus.Healthy
+	}
+	compatibility := platform.WSLCompatibilityReport{}
+	if os.Getenv("DEVLAN_TEST_MOCK") == "1" {
+		// The mock has no host WSL boundary to probe. Keep the file-backed setting
+		// visible while real builds report configured and effective state from a
+		// fresh capability probe below.
+		configured := mirroredNetworkingConfigured(service)
+		compatibility.MirroredConfigured = configured
+		compatibility.MirroredNetworking = configured
+	} else {
+		compatibility = service.WSLCompatibility(ctx)
+	}
+	caValid, caTrusted := false, false
+	if caInfo, caErr := service.CAInfo(ctx); caErr == nil {
+		caValid = caInfo["valid"] == "true"
+		caTrusted = caInfo["trusted"] == "true"
+	}
 	vers := make([]string, 0, len(phpVersions))
 	for _, version := range phpVersions {
 		vers = append(vers, version.Version)
@@ -276,14 +301,75 @@ func buildSystemStatusView(ctx context.Context, service *app.App, cfg domain.Con
 		TLSEnabled:          cfg.TLSEnabled,
 		DefaultMode:         string(cfg.DefaultMode),
 		PHPDefaultVersion:   cfg.PHPDefaultVersion,
-		WindowsCaddyRunning: winCaddyRunning,
-		WSLCaddyRunning:     wslCaddyRunning,
+		WindowsCaddyRunning: false,
+		WSLCaddyRunning:     caddyStatus.Running,
+		CaddyRunning:        caddyStatus.Running,
+		CaddyTopology:       string(topology.Topology),
+		CaddySystemd:        caddyStatus.Systemd,
+		CaddyLive:           caddyStatus.Live,
+		MirroredConfigured:  compatibility.MirroredConfigured,
+		MirroredNetworking:  compatibility.MirroredNetworking,
+		HyperVFirewallOk:    hyperVOk,
+		CARootValid:         caValid,
+		CARootTrusted:       caTrusted,
 		WSLAvailable:        wslAvailable,
 		FirewallOk:          firewallOk,
 		PHPVersions:         vers,
 		TotalProjects:       len(cfg.Projects),
 		ProtocolVersion:     ProtocolVersion,
 	}
+}
+
+// BuildTopologyView is the explicit M8 diagnostic boundary. The aggregate
+// status remains compact for polling; this endpoint carries the detailed,
+// independently observable state needed by doctor/repair and support tools.
+func BuildTopologyView(ctx context.Context, service *app.App) map[string]any {
+	cfg, cfgErr := service.Store.Load()
+	if cfgErr != nil {
+		return map[string]any{"error": cfgErr.Error()}
+	}
+	firewallSpec := platform.FirewallSpecForConfig(cfg)
+	firewallOK, firewallErr := service.FirewallHealthy(ctx, cfg)
+	result := map[string]any{
+		"topology":      service.CaddyTopologyStatus(ctx),
+		"caddy":         service.CaddyStatus(ctx),
+		"compatibility": service.WSLCompatibility(ctx),
+		"firewall": map[string]any{
+			"healthy": firewallOK,
+			"spec":    firewallSpec,
+		},
+	}
+	if firewallErr != nil {
+		result["firewall"].(map[string]any)["detail"] = firewallErr.Error()
+	}
+	if composite, ok := service.Firewall.(platform.CompositeFirewall); ok {
+		result["hyperv"] = composite.HyperVStatus(ctx, firewallSpec)
+	} else if composite, ok := service.Firewall.(*platform.CompositeFirewall); ok && composite != nil {
+		result["hyperv"] = composite.HyperVStatus(ctx, firewallSpec)
+	}
+	if ca, caErr := service.CAInfo(ctx); caErr == nil {
+		result["ca"] = ca
+	}
+	return result
+}
+
+func serviceCaddyStatus(ctx context.Context, service *app.App) platform.CaddyServiceStatus {
+	if os.Getenv("DEVLAN_TEST_MOCK") == "1" {
+		return platform.CaddyServiceStatus{Available: true, Running: true, Live: true, AdminAddress: platform.UnifiedCaddyAdminAddress}
+	}
+	// The App owns the Caddy adapter; the status method stays behind the
+	// application boundary so HTTP/Wails/read models cannot accidentally probe
+	// a second Windows edge.
+	return service.CaddyStatus(ctx)
+}
+
+func mirroredNetworkingConfigured(service *app.App) bool {
+	path := service.WSLConfigPath
+	if path == "" {
+		path = platform.UserWSLConfigPath()
+	}
+	data, err := os.ReadFile(path)
+	return err == nil && platform.WSLConfigHasMirroredNetworking(string(data))
 }
 
 func phpVersionViews(items []app.PHPVersionStatus) []PHPVersionView {
@@ -359,6 +445,12 @@ func BuildDoctorChecksView(ctx context.Context, service *app.App, name string) (
 			if strings.Contains(c.Name, "Caddy") || strings.Contains(c.Name, "Config") {
 				fixable = true
 				fixAction = "reload"
+			} else if strings.Contains(c.Name, "mirrored") || strings.Contains(c.Name, "systemd") || strings.Contains(c.Name, "Hyper-V") {
+				fixable = true
+				fixAction = "topology-repair"
+			} else if strings.Contains(c.Name, "CA Local") {
+				fixable = true
+				fixAction = "trust"
 			} else if strings.Contains(c.Name, "Firewall") {
 				fixable = true
 				fixAction = "firewall"

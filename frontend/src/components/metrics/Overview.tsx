@@ -183,14 +183,23 @@ export function Overview({
         <h2 className="section-label">SERVIÇOS</h2>
         <div className="services-grid">
           <ServiceCard
-            name="Caddy Windows"
-            up={!!system?.windowsCaddyRunning}
-            detail="Borda e TLS local"
+            name="Caddy WSL único"
+            up={!!(system?.caddyRunning ?? system?.wslCaddyRunning)}
+            detail={
+              system?.caddySystemd === false
+                ? 'systemd indisponível'
+                : `Borda, TLS e rotas LAN${system?.caddyTopology ? ` · ${system.caddyTopology}` : ''}`
+            }
           />
           <ServiceCard
-            name="Caddy WSL"
-            up={!!system?.wslCaddyRunning}
-            detail="Proxy e aplicações Linux"
+            name="WSL mirrored"
+            up={system?.mirroredNetworking ?? false}
+            detail="Loopback Windows↔WSL e acesso direto à LAN"
+          />
+          <ServiceCard
+            name="Hyper-V Firewall"
+            up={system?.hypervFirewallOk ?? false}
+            detail="Private / LocalSubnet · portas gerenciadas"
           />
           {project.effectiveMode === 'php' && (
             <ServiceCard
@@ -225,6 +234,11 @@ export function Overview({
           {system && !system.firewallOk && (
             <button type="button" disabled={!!busy} onClick={onRepairFirewall}>
               Corrigir firewall privado
+            </button>
+          )}
+          {system && (system.hypervFirewallOk === false || system.mirroredNetworking === false) && (
+            <button type="button" disabled={!!busy} onClick={onRepairFirewall}>
+              Corrigir rede WSL espelhada
             </button>
           )}
         </div>

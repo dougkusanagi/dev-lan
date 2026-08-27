@@ -48,6 +48,15 @@ export interface SystemStatus {
   phpDefaultVersion: string;
   windowsCaddyRunning: boolean;
   wslCaddyRunning: boolean;
+  caddyRunning?: boolean;
+  caddyTopology?: string;
+  caddySystemd?: boolean;
+  caddyLive?: boolean;
+  mirroredConfigured?: boolean;
+  mirroredNetworking?: boolean;
+  hypervFirewallOk?: boolean;
+  caRootValid?: boolean;
+  caRootTrusted?: boolean;
   wslAvailable: boolean;
   firewallOk: boolean;
   phpVersions: string[];
@@ -153,6 +162,12 @@ export const DEVLAN_API_CONTRACT = {
       "path": "/api/v1/status",
       "wails": "GetStatus",
       "response": "SystemStatus"
+    },
+    "getTopology": {
+      "method": "GET",
+      "path": "/api/v1/topology",
+      "wails": "GetTopology",
+      "response": "Record<string, unknown>"
     },
     "getMetrics": {
       "method": "GET",

@@ -46,6 +46,48 @@ restart_service() {
     fi
 }
 
+ensure_wsl_systemd() {
+    local config='/etc/wsl.conf'
+    local temporary
+    temporary="$(mktemp)"
+    if [[ -f "$config" ]]; then
+        awk '
+            function add_systemd() {
+                if (in_boot && !systemd_seen) {
+                    print "systemd=true"
+                    systemd_seen=1
+                }
+            }
+            /^[[:space:]]*\[/ {
+                add_systemd()
+                section=tolower($0)
+                in_boot=(section ~ /^\[[[:space:]]*boot[[:space:]]*\][[:space:]]*$/)
+                if (in_boot) boot_seen=1
+            }
+            in_boot && $0 ~ /^[[:space:]]*systemd[[:space:]]*=/ {
+                if (!systemd_seen) {
+                    print "systemd=true"
+                    systemd_seen=1
+                }
+                next
+            }
+            { print }
+            END {
+                add_systemd()
+                if (!boot_seen) {
+                    print ""
+                    print "[boot]"
+                    print "systemd=true"
+                }
+            }
+        ' "$config" > "$temporary"
+    else
+        printf '[boot]\nsystemd=true\n' > "$temporary"
+    fi
+    "${SUDO[@]}" install -m 0644 "$temporary" "$config"
+    rm -f "$temporary"
+}
+
 php_prefix="php${php_minor}"
 php_packages=(
     "${php_prefix}-fpm"
@@ -110,6 +152,11 @@ if [[ "$install_caddy" == "1" ]] && ! command -v caddy >/dev/null 2>&1; then
     apt_install caddy
 fi
 
+# systemd is required by the single WSL Caddy topology. The edit is
+# idempotent and preserves unrelated sections/comments in /etc/wsl.conf;
+# WSL applies it after the next explicit `wsl --shutdown`.
+ensure_wsl_systemd
+
 pool_file="$(find /etc/php -type f -path '*/fpm/pool.d/www.conf' | sort | head -n1 || true)"
 if [[ -n "$pool_file" ]]; then
     "${SUDO[@]}" sed -Ei 's/^[;[:space:]]*pm[[:space:]]*=[[:space:]]*.*/pm = ondemand/' "$pool_file"
@@ -130,6 +177,7 @@ if [[ -n "$socket" ]]; then
 fi
 
 if [[ "$install_caddy" == "1" ]]; then
+    restart_service caddy || true
     printf 'WSL dependencies ready: PHP %s, PHP-FPM socket /run/php/php-fpm.sock, Composer and Caddy\n' "$php_minor"
 else
     printf 'WSL dependencies ready: PHP %s, PHP-FPM socket /run/php/php-fpm.sock and Composer\n' "$php_minor"

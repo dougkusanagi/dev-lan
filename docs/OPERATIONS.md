@@ -56,6 +56,7 @@ interfaces ou para rotas desconhecidas. A versão atual expõe:
 GET  /v1/health
 GET  /v1/overview
 GET  /v1/status
+GET  /v1/topology
 GET  /v1/projects
 GET  /v1/config
 POST /v1/reload
@@ -80,9 +81,38 @@ devlan api serve
 ```
 
 CLI e UI podem chamar o núcleo Go diretamente; o cliente Linux usa `/v1/command`
-para encaminhar `link`, `unlink`, `park`, `unpark`, `links`, `status`, `reload`,
-`doctor` e `open`. Todas as formas usam o mesmo modelo e validação, sem expor a
-porta de controle na LAN.
+para encaminhar `link`, `unlink`, `park`, `unpark`, `links`, `status`, `topology`,
+`reload`, `doctor` e `open`. Todas as formas usam o mesmo modelo e validação,
+sem expor a porta de controle na LAN.
+
+## Caddy único, mirrored networking e migração
+
+O estado live da topologia pode ser consultado sem interromper o WSL:
+
+```powershell
+devlan topology status
+devlan topology check
+devlan topology repair
+```
+
+O diagnóstico exige Windows 11 22H2+, WSL 2, `networkingMode=mirrored`,
+systemd, loopback bidirecional, alcance LAN e disponibilidade de 80/443 e do
+pool. A política conjunta usa Windows Firewall e Hyper-V Firewall em
+`Private`/`LocalSubnet`, com default inbound `Block`; `ui_port` permanece
+loopback-only.
+
+Para migrar uma instalação antiga, faça backup do trabalho em todas as
+distribuições e execute:
+
+```powershell
+devlan topology migrate --yes
+```
+
+O fluxo faz backup dos Caddyfiles, valida e inicia o Caddy WSL, verifica o
+healthcheck, interrompe a instância antiga, reinicia o serviço depois do
+`wsl --shutdown` e só então remove os artefatos legados. O shutdown encerra
+todas as distribuições WSL. Se uma etapa falhar, o backup fica em
+`migration-backups` e a topologia anterior é restaurada quando possível.
 
 ## Exportação e importação
 
@@ -110,7 +140,8 @@ devlan diagnostic C:\Temp\devlan-support.zip
 ```
 
 O ZIP inclui manifesto, configuração sem segredos, resultado do `doctor`,
-runtime, Caddyfiles com credenciais mascaradas e logs gerenciados disponíveis.
+runtime, o Caddyfile WSL único com credenciais mascaradas, estado de systemd,
+mirrored networking, Hyper-V Firewall/CA e logs gerenciados disponíveis.
 Ele não percorre projetos, não inclui `.env`, variáveis de ambiente, banco,
 credenciais ou conteúdo de aplicação. O arquivo é criado com permissão privada
 e deve ser enviado ao suporte por canal confiável.

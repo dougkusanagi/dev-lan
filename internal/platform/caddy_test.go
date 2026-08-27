@@ -2,7 +2,9 @@ package platform
 
 import (
 	"context"
+	"errors"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -36,5 +38,27 @@ func TestWSLCaddyReloadTargetsWSLAdmin(t *testing.T) {
 	want := []string{"caddy", "reload", "--address", WSLCaddyAdminAddress, "--config", "/mnt/c/DevLAN/Caddyfile.wsl", "--adapter", "caddyfile"}
 	if !slices.Equal(runner.args, want) {
 		t.Fatalf("argumentos inesperados: %q", runner.args)
+	}
+}
+
+type statusRunner struct{}
+
+func (statusRunner) Run(_ context.Context, args ...string) (string, error) {
+	if strings.Contains(strings.Join(args, " "), "is-active") {
+		return "inactive\n", errors.New("inactive")
+	}
+	return "", nil
+}
+
+func TestWSLCaddyStatusDoesNotPromoteStrayAdminEndpoint(t *testing.T) {
+	client := CaddyClient{
+		Runner:         statusRunner{},
+		WSL:            true,
+		RequireSystemd: true,
+		AdminProbe:     func(context.Context, string) bool { return true },
+	}
+	status := client.Status(context.Background())
+	if !status.Available || !status.Systemd || status.Running || !status.Live {
+		t.Fatalf("endpoint admin órfão não deveria parecer serviço systemd ativo: %#v", status)
 	}
 }

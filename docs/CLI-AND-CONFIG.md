@@ -11,8 +11,8 @@ devlan links
 ```
 
 `links` exibe as colunas `PROJETO`, `MODO`, `ORIGEM`, `SSL`, `URL` e
-`CAMINHO`. Todos os projetos compartilham a borda Windows, mas cada um recebe
-uma porta LAN dedicada; `SSL` reflete a preferência efetiva de cada origem.
+`CAMINHO`. Todos os projetos compartilham o Caddy WSL único, mas cada um
+recebe uma porta LAN dedicada; `SSL` reflete a preferência efetiva de cada origem.
 
 O bootstrap instala uma CLI Linux fina para executar no WSL:
 
@@ -181,13 +181,17 @@ js.idle-timeout      15m       global
 ## Comandos do MVP
 
 ```text
-devlan install [--no-firewall]  prepara Caddy, PHP-FPM e firewall
+devlan install [--no-firewall]  prepara Caddy WSL, PHP-FPM e firewalls
 devlan uninstall                remove componentes gerenciados, preserva projetos
 devlan link NAME PATH           registra um projeto Laravel
 devlan unlink NAME              remove o registro e a rota
 devlan park PATH                registra uma pasta de projetos
 devlan unpark PATH              remove a pasta estacionada
 devlan status                   mostra componentes, projetos e URLs
+devlan topology status          mostra Caddy único e estados de compatibilidade
+devlan topology check           verifica Windows/WSL/mirrored/portas
+devlan topology repair          corrige componentes sem interromper o WSL
+devlan topology migrate --yes   migra a topologia antiga com backup
 devlan open [NAME]              abre projeto ou dashboard textual
 devlan reload                   valida e aplica configurações
 devlan secure NAME|PATH         ativa HTTPS para um projeto
@@ -214,16 +218,15 @@ devlan unsecure NAME|PATH
 ```
 
 `secure` habilita HTTPS na porta LAN dedicada do projeto e emite um certificado
-com a CA interna do Caddy. O comando tenta atualizar a regra de firewall e
-confiar na CA no Windows. Se o
+com a CA interna do Caddy WSL. O comando tenta atualizar Windows Firewall e
+Hyper-V Firewall e instalar o certificado raiz público no Windows. Se o
 PowerShell atual não for administrativo, ele mantém a configuração aplicada e
 avisa quais etapas exigem executar `devlan secure` novamente como Administrador.
 
 Certificados de uma CA interna não são confiados automaticamente por outros
 computadores e celulares. Em cada cliente da LAN, importe como autoridade raiz
-confiável o arquivo `%APPDATA%\Caddy\pki\authorities\local\root.crt` gerado na
-máquina do DevLAN. Distribua esse arquivo apenas por um canal confiável e nunca
-distribua a chave privada ao lado dele.
+confiável o arquivo produzido por `devlan ca export`. Distribua esse arquivo
+apenas por um canal confiável e nunca distribua a chave privada ao lado dele.
 
 `unsecure` volta a origem LAN do projeto para HTTP, preservando projetos, parks
 e dados. A configuração global ainda registra `tls_enabled` e `https_port`
@@ -238,19 +241,19 @@ projeto específico.
 
 O binário aceita `--data-dir DIR` antes do comando. Sem essa opção, usa
 `%LOCALAPPDATA%/DevLAN` no Windows ou `~/.devlan` em outros sistemas. O
-diretório contém `config.toml`, `state.json`, os Caddyfiles gerados e logs.
+diretório contém `config.toml`, `state.json`, o Caddyfile WSL gerado e logs.
 
 `park PATH` registra a pasta, mas não copia projetos para o estado. Em cada
 geração, filhos diretos são examinados sem executar scripts; somente os que
 contêm `artisan` e `public/index.php` tornam-se rotas. Um `link` explícito tem
 prioridade se houver colisão de nome. `park ignore` registra uma exclusão no
 próprio park; `park unignore` remove essa exclusão. `link`, `unlink`, `park`, `unpark` e as
-mudanças de modo aplicam a configuração automaticamente: a CLI recarrega um
-Caddy em execução ou inicia o Caddy Windows quando ele ainda não estiver ativo.
+mudanças de projeto aplicam a configuração automaticamente: a CLI valida,
+publica e recarrega o Caddy WSL único ou informa o estado parcial do serviço.
 
-`reload` cria arquivos temporários, valida os Caddyfiles disponíveis, substitui
-os arquivos gerados e só então tenta o reload. Se o reload falhar, restaura o
-par anterior. Quando Caddy ou PHP-FPM não estão instalados, a configuração
+`reload` cria um Caddyfile temporário, valida-o, substitui atomicamente o
+artefato único e só então recarrega o serviço systemd. Se o reload falhar,
+restaura o artefato anterior. Quando Caddy ou PHP-FPM não estão instalados, a configuração
 continua sendo gerada e `doctor` informa a dependência ausente.
 
 ## Rotas e Segurança
@@ -330,7 +333,9 @@ devlan ca export C:\DevLAN\devlan-ca-root.crt
 devlan ca rotate
 ```
 
-*Dispositivos na LAN também podem baixar o certificado raiz diretamente via navegador acessando:* `http://<LAN_IP>/__devlan/ca.crt`
+*Dispositivos na LAN devem receber somente o certificado raiz público exportado
+por `devlan ca export`; a chave privada permanece no Caddy WSL e nunca é
+publicada por HTTP.*
 
 ### Auditoria e Postura de Segurança
 
@@ -369,7 +374,7 @@ devlan diagnostic [PATH]
 
 O JSON de configuração é versionado e não contém hashes de senha, usuários de
 autenticação ou exposições temporárias. O pacote de diagnóstico é um ZIP com
-allowlist de arquivos gerenciados e Caddyfiles redigidos.
+allowlist de arquivos gerenciados e o Caddyfile WSL redigido.
 
 Telemetria é desativada por padrão e não envia nada automaticamente:
 

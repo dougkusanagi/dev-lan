@@ -169,7 +169,6 @@ func TestDualOriginCaddyfileGeneration(t *testing.T) {
 		"https://app-php-generic.localhost",
 		"remote_ip 127.0.0.1 ::1",
 		"header_up -X-DevLAN-Port",
-		"header_up -X-DevLAN-Project",
 		"header_up -X-DevLAN-Local",
 		"header_up -X-DevLAN-HTTPS",
 		"header_up X-DevLAN-Local on",
@@ -183,7 +182,7 @@ func TestDualOriginCaddyfileGeneration(t *testing.T) {
 
 	// Verify Windows LAN listeners (dedicated ports with header sanitization)
 	for _, expected := range []string{
-		"https://:8080 {", // PHP project with TLS enabled
+		"https://192.168.1.100:8080 {", // PHP project with TLS enabled
 		"header_up X-DevLAN-Port 8080",
 		"header_up X-DevLAN-Project app-php",
 		"header_up X-Forwarded-Port 8080",

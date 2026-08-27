@@ -2,7 +2,7 @@
 
 O DevLAN foi desenhado para Windows com WSL 2 e Ubuntu. O bootstrap completo
 fica em `scripts/install.ps1`; ele baixa uma cópia do código, instala as
-dependências do host, compila a CLI e prepara os dois Caddys.
+dependências do host, compila a CLI e prepara um único Caddy no WSL.
 
 ## Instalação rápida
 
@@ -51,24 +51,35 @@ devlan install
 - Go estável para Windows amd64, baixado da lista oficial do Go quando o
   comando ainda não existe. O toolchain local fica em
   `%LOCALAPPDATA%\DevLAN\toolchains\go`.
-- Caddy no Windows, primeiro pelo pacote `CaddyServer.Caddy` do `winget` e,
-  como fallback, pelo release oficial com verificação SHA-256.
 - PHP-FPM e extensões comuns do Laravel no WSL, além de Composer.
-- Caddy no WSL pelo repositório oficial Debian/Ubuntu.
+- systemd e Caddy no WSL pelo repositório oficial Debian/Ubuntu.
+- `.wslconfig` preparado de forma transacional para `networkingMode=mirrored`,
+  `firewall=true`, `dnsTunneling=true` e `autoProxy=true`.
 - Pool PHP-FPM compartilhado com `pm=ondemand`, dez workers máximos,
   `pm.process_idle_timeout=10s` e `pm.max_requests=500`.
-- `devlan.exe` em `%LOCALAPPDATA%\DevLAN\bin`, PATH do usuário e a regra de
-  firewall privada do DevLAN.
+- `devlan.exe` em `%LOCALAPPDATA%\DevLAN\bin`, PATH do usuário e as regras
+  mínimas do Windows Firewall/Hyper-V Firewall.
 
 O executável instalado usa o subsistema de console do Windows: `devlan`,
 `devlan -h` e mensagens de erro sempre aparecem no PowerShell. A interface
 Wails é iniciada explicitamente por `devlan gui`.
 
-O bootstrap pode ser executado novamente com segurança. Go e Caddy no Windows
-são reutilizados quando já existem; no WSL, PHP-FPM da versão escolhida, suas
-extensões, Composer e Caddy são verificados antes de executar `apt update` ou
-`apt install`. A CLI é recompilada e os arquivos gerenciados são sincronizados
-para aplicar atualizações do DevLAN.
+O bootstrap pode ser executado novamente com segurança. No WSL, PHP-FPM da
+versão escolhida, suas extensões, Composer, systemd e Caddy são verificados
+antes de executar `apt update` ou `apt install`. A CLI é recompilada e o
+Caddyfile único é publicado pelo controlador.
+
+O instalador não executa `wsl --shutdown` por padrão. Depois de salvar o
+trabalho nas distribuições WSL, aplique o modo espelhado explicitamente:
+
+```powershell
+devlan topology check
+devlan topology migrate --yes
+```
+
+O segundo comando encerra todas as distribuições WSL, não apenas a escolhida
+no DevLAN. Para um bootstrap automatizado que já recebeu essa confirmação,
+use `-ConfirmWSLShutdown` no script.
 
 Depois da instalação, HTTPS é opcional:
 
@@ -77,9 +88,10 @@ devlan secure NAME|PATH
 ```
 
 Execute esse comando em PowerShell como Administrador na primeira ativação para
-permitir a porta 443 no firewall e confiar na CA interna no Windows. O uso
-normal da CLI continua sem elevação. Outros dispositivos precisam importar o
-certificado raiz `%APPDATA%\Caddy\pki\authorities\local\root.crt`; consulte
+permitir a porta 443 no Windows Firewall/Hyper-V Firewall e instalar no Windows
+o certificado raiz público emitido pelo Caddy WSL. O uso normal da CLI continua
+sem elevação. Outros dispositivos precisam importar o certificado raiz
+exportado por `devlan ca export`; a chave privada nunca é exportada. Consulte
 [CLI e configuração](CLI-AND-CONFIG.md#https-na-lan).
 
 O script não executa `composer install` nos projetos e não instala bancos,
@@ -154,18 +166,20 @@ Quando a distribuição não oferece a branch escolhida, o script tenta o PPA
 ```text
 -Distribution Ubuntu-24.04  escolhe a distribuição WSL
 -PhpVersion 8.3|8.4|8.5     escolhe a branch PHP (padrão: 8.5)
--WindowsPort PORT            fixa a porta HTTP do Windows (padrão: automática)
+-WindowsPort PORT            legado; a borda M8 usa 80/443 no WSL
 -InstallRoot PATH            altera o diretório gerenciado
 -SkipWSL                     não instala dependências no WSL
 -SkipCaddy                   não instala Caddy
 -NoFirewall                  não cria a regra de firewall nesta execução
 -NoPath                      não persiste alterações no PATH do usuário
+-ConfirmWSLShutdown          confirma o shutdown de todas as distros WSL
 -Ref TAG_OU_COMMIT           fixa a versão do código baixado
 ```
 
-O bootstrap prefere a porta `80`. Se ela estiver ocupada por Docker, Podman,
-WSL ou outro serviço, escolhe automaticamente `8080`, `8081` ou `8888` e salva
-essa escolha na configuração. Use `-WindowsPort` para exigir uma porta específica.
+O Caddy WSL usa diretamente `80` e `443` e as portas atribuídas no pool de
+rotas (por padrão `8080–8179`). Se houver conflito, `devlan topology check`
+mostra cada porta ocupada antes da migração; `ui_port` continua restrita ao
+loopback e nunca entra no firewall LAN.
 
 Para uma instalação reproduzível, fixe `-Ref` em uma tag ou commit e revise o
 script antes de executá-lo. O instalador exige elevação porque WSL, porta 80 e

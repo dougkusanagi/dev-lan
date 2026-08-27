@@ -6,6 +6,7 @@ import {
   parsePHPVersions,
   parseProjects,
   parseSystemStatus,
+  parseTopology,
 } from './contracts';
 import type {
   DoctorCheck,
@@ -25,6 +26,7 @@ export interface WailsApp {
   GetOverview?: (filter: string) => Promise<unknown>;
   GetProjects: (filter: string) => Promise<unknown>;
   GetStatus: () => Promise<unknown>;
+  GetTopology?: () => Promise<unknown>;
   GetMetrics?: (project: string, range: MetricsRange) => Promise<unknown>;
   GetGlobalConfig: () => Promise<unknown>;
   GetPHPVersions: () => Promise<unknown>;
@@ -72,6 +74,7 @@ export interface DevLANClient {
   getOverview?: (filter?: string) => Promise<Overview>;
   getProjects(filter?: string): Promise<ProjectInfo[]>;
   getStatus(): Promise<SystemStatus>;
+  getTopology(): Promise<Record<string, unknown>>;
   getMetrics(project: string, range: MetricsRange): Promise<MetricsSnapshot | null>;
   getGlobalConfig(): Promise<GlobalConfig>;
   getPHPVersions(): Promise<PHPVersion[]>;
@@ -226,6 +229,10 @@ export class HttpDevLANClient implements DevLANClient {
 
   getStatus(): Promise<SystemStatus> {
     return this.request('GET', '/api/v1/status', undefined, parseSystemStatus);
+  }
+
+  getTopology(): Promise<Record<string, unknown>> {
+    return this.request('GET', '/api/v1/topology', undefined, parseTopology);
   }
 
   getMetrics(project: string, range: MetricsRange): Promise<MetricsSnapshot | null> {
@@ -395,6 +402,11 @@ export class WailsDevLANClient implements DevLANClient {
     return parseSystemStatus(await this.app.GetStatus());
   }
 
+  async getTopology(): Promise<Record<string, unknown>> {
+    if (!this.app.GetTopology) return {};
+    return parseTopology(await this.app.GetTopology());
+  }
+
   async getMetrics(project: string, range: MetricsRange): Promise<MetricsSnapshot | null> {
     if (!this.app.GetMetrics) return null;
     return parseMetricsSnapshot(await this.app.GetMetrics(project, range));
@@ -548,6 +560,16 @@ export class MockDevLANClient implements DevLANClient {
   async getStatus() {
     this.check('getStatus');
     return structuredClone(this.status);
+  }
+  async getTopology() {
+    this.check('getTopology');
+    return {
+      topology: { topology: this.status.caddyTopology ?? 'unknown' },
+      caddy: {
+        running: this.status.caddyRunning ?? this.status.wslCaddyRunning,
+        live: this.status.caddyLive ?? this.status.wslCaddyRunning,
+      },
+    };
   }
   async getMetrics() {
     this.check('getMetrics');
@@ -742,8 +764,16 @@ const defaultStatus: SystemStatus = {
   tlsEnabled: true,
   defaultMode: 'auto',
   phpDefaultVersion: '8.3',
-  windowsCaddyRunning: true,
+  windowsCaddyRunning: false,
   wslCaddyRunning: true,
+  caddyRunning: true,
+  caddyTopology: 'single-wsl',
+  caddySystemd: true,
+  caddyLive: true,
+  mirroredNetworking: true,
+  hypervFirewallOk: true,
+  caRootValid: true,
+  caRootTrusted: true,
   wslAvailable: true,
   firewallOk: true,
   phpVersions: ['8.3', '8.5'],
@@ -772,8 +802,8 @@ const defaultDoctorChecks: DoctorCheck[] = [
     detail: 'Portas LAN reconciliadas para rede privada.',
     fixable: false,
   },
-  { name: 'Caddy Windows', status: 'OK', detail: 'Proxy de borda respondendo.', fixable: false },
-  { name: 'Caddy WSL', status: 'OK', detail: 'Proxy Linux respondendo.', fixable: false },
+  { name: 'Caddy WSL único', status: 'OK', detail: 'Proxy de borda respondendo.', fixable: false },
+  { name: 'WSL mirrored', status: 'OK', detail: 'Rede espelhada ativa.', fixable: false },
 ];
 
 export type ClientMode = 'auto' | 'http' | 'wails' | 'mock';

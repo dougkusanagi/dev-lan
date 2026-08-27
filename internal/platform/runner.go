@@ -2,6 +2,7 @@ package platform
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
 )
 
 var ErrUnavailable = errors.New("dependência não disponível")
@@ -37,13 +39,64 @@ func (r ExecRunner) Run(ctx context.Context, args ...string) (string, error) {
 		if errors.Is(err, exec.ErrNotFound) {
 			return "", fmt.Errorf("%w: %s", ErrUnavailable, r.Program)
 		}
-		message := strings.TrimSpace(string(output))
+		message := strings.TrimSpace(normalizeCommandOutput(output))
 		if message != "" {
 			return "", fmt.Errorf("%s %v: %w: %s", r.Program, commandArgs, err, message)
 		}
 		return "", fmt.Errorf("%s %v: %w", r.Program, commandArgs, err)
 	}
-	return string(output), nil
+	return normalizeCommandOutput(output), nil
+}
+
+// normalizeCommandOutput handles native Windows utilities that write UTF-16
+// to a redirected pipe. wsl.exe uses that encoding for several informational
+// commands (including --version and --list) and, on some builds, omits the
+// BOM. The rest of the runner contract is UTF-8/text, so decode only when the
+// byte pattern is unambiguously UTF-16 and leave ordinary command output
+// untouched.
+func normalizeCommandOutput(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+
+	offset := 0
+	var order binary.ByteOrder = binary.LittleEndian
+	if len(data) >= 2 && data[0] == 0xff && data[1] == 0xfe {
+		offset = 2
+	} else if len(data) >= 2 && data[0] == 0xfe && data[1] == 0xff {
+		order = binary.BigEndian
+		offset = 2
+	} else if !looksLikeUTF16(data) {
+		return string(data)
+	}
+
+	available := len(data) - offset
+	units := make([]uint16, available/2)
+	for index := range units {
+		units[index] = order.Uint16(data[offset+index*2:])
+	}
+	decoded := string(utf16.Decode(units))
+	if available%2 != 0 {
+		decoded += string(data[len(data)-1])
+	}
+	return decoded
+}
+
+func looksLikeUTF16(data []byte) bool {
+	if len(data) < 4 || len(data)%2 != 0 {
+		return false
+	}
+	pairs := len(data) / 2
+	zeroOdd, zeroEven := 0, 0
+	for index := 0; index < len(data); index += 2 {
+		if data[index] == 0 {
+			zeroEven++
+		}
+		if data[index+1] == 0 {
+			zeroOdd++
+		}
+	}
+	return zeroOdd >= 2 && zeroOdd*3 >= pairs && zeroOdd > zeroEven*2
 }
 
 type WSLRunner struct {
@@ -66,6 +119,25 @@ func NewWSLRunner(binary, distribution string) WSLRunner {
 		Stats:        NewWSLStats(),
 		Execution:    NewWSLExecutionCache(),
 	}
+}
+
+// Shutdown stops the WSL VM, not merely the selected distribution. It is kept
+// explicit because the operation terminates every running distribution and is
+// therefore never called by a normal reload.
+func (r WSLRunner) Shutdown(ctx context.Context) error {
+	invoker := r.Invoker
+	if invoker == nil {
+		binary := r.Binary
+		if binary == "" {
+			binary = "wsl.exe"
+		}
+		invoker = NewExecRunner(binary)
+	}
+	_, err := invoker.Run(ctx, "--shutdown")
+	if err != nil {
+		return fmt.Errorf("executar wsl --shutdown: %w", err)
+	}
+	return nil
 }
 
 func (r WSLRunner) Run(ctx context.Context, args ...string) (string, error) {

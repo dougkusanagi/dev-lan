@@ -73,6 +73,14 @@ func (a *App) GetStatus() (SystemStatusView, error) {
 	return localapi.BuildStatusView(ctx, a.service)
 }
 
+// GetTopology exposes the detailed single-edge diagnostic model to the Wails
+// shell. It delegates to the same read boundary as the HTTP API.
+func (a *App) GetTopology() (map[string]any, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	return localapi.BuildTopologyView(ctx, a.service), nil
+}
+
 func (a *App) GetOverview(filter string) (OverviewView, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -300,6 +308,11 @@ func (a *App) ApplyDoctorFix(action, target string) error {
 		return err
 	case "firewall":
 		return a.service.ReconcileFirewall(ctx)
+	case "topology", "topology-repair":
+		_, err := a.service.RepairM8(ctx)
+		return err
+	case "trust":
+		return a.service.Trust(ctx)
 	case "restart-dev":
 		if target != "" {
 			return a.service.RestartDev(ctx, target)

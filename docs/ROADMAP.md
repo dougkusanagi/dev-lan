@@ -9,7 +9,9 @@ Esta é a tasklist canônica. Detalhes ficam nos planos de
 
 Baseline em 26/08/2026: `go test ./...`, `go vet ./...` e `npm run build`
 passam. **P0** bloqueia a nova arquitetura; **P1** conclui operação segura;
-**P2** melhora escala/manutenção.
+**P2** melhora escala/manutenção. Os marcos concluídos permanecem como
+histórico; decisões substituídas por marcos posteriores não devem ser
+reescritas retroativamente.
 
 ## Marco 0 — Decisão e rede de segurança (P0)
 
@@ -186,29 +188,95 @@ o respectivo comando de validação.
 **Gate:** operações WSL cumprem os budgets documentados; o benchmark mediu
 batching e nenhum daemon existe sem ganho adicional demonstrado.
 
-## Marco 8 — Observabilidade correta e performática (P1)
+## Marco 8 — Caddy único no WSL com rede espelhada (P0/P1)
 
-- [ ] `M8-01` Atribuir logs ao projeto por metadado confiável, não por URI.
-- [ ] `M8-02` Ler arquivo ativo/rotações via streaming bounded.
-- [ ] `M8-03` Adicionar checkpoint/agregação incremental para polling da GUI.
-- [ ] `M8-04` Limitar cardinalidade e fortalecer normalização de IDs.
-- [ ] `M8-05` Testar logs grandes, linhas >64 KiB, rotação/truncamento/parcial.
-- [ ] `M8-06` Provar ausência de IP, query, headers, cookies e segredos.
+- [x] `M8-01` Registrar ADR substituindo a fronteira de dois Caddys: exigir
+  Windows 11 22H2+, WSL 2 compatível e `networkingMode=mirrored`; manter o
+  control plane/estado e a API da GUI no Windows, mas mover toda a borda HTTP,
+  HTTPS e LAN para um único Caddy no WSL.
+- [x] `M8-02` Implementar diagnóstico de compatibilidade para versão/build do
+  Windows, versão do WSL, suporte efetivo a mirrored networking, systemd,
+  loopback bidirecional, acesso LAN e conflitos nas portas 80/443/pool.
+- [x] `M8-03` Implementar editor transacional de `%USERPROFILE%\.wslconfig` que
+  preserve seções/chaves/comentários do usuário, crie backup e configure
+  `networkingMode=mirrored`, `firewall=true`, `dnsTunneling=true` e
+  `autoProxy=true` sem sobrescrever o arquivo inteiro.
+- [x] `M8-04` Expor a mudança por fluxo explícito de instalação/migração,
+  informar que `wsl --shutdown` encerra todas as distribuições, exigir
+  confirmação antes da interrupção e verificar o modo efetivo após reiniciar o
+  WSL.
+- [x] `M8-05` Consolidar os renderers em um Caddyfile WSL: servir
+  `https://nome.localhost/`, `http(s)://IP:porta/` e
+  `https://devlan.localhost/`; encaminhar apenas o dashboard para a API Windows
+  em `127.0.0.1:ui_port` e manter PHP-FPM, static, Vite/SSR e assets diretamente
+  no execution plane.
+- [x] `M8-06` Remover do caminho operacional o protocolo intermediário entre
+  Caddys, incluindo `X-DevLAN-*`, porta/admin `2019`, upstream fixo `8181`,
+  renderer/artefato `Caddyfile.windows`, lifecycle e healthcheck do Caddy
+  Windows; preservar forwarded headers confiáveis gerados na única borda. Os
+  símbolos legados restantes são somente leitura/rollback durante upgrade.
+- [x] `M8-07` Executar o Caddy WSL como serviço systemd, com bind direto em
+  80/443 e apenas nas portas LAN atribuídas; implementar start, reload atômico,
+  validação, healthcheck da configuração viva, restart e rollback de uma única
+  instância.
+- [x] `M8-08` Substituir a regra de firewall TCP tradicional por reconciliação
+  conjunta e mínima do Windows Firewall e Hyper-V Firewall para
+  `Private`/`LocalSubnet`, sem usar `DefaultInboundAction Allow`; cobrir 80,
+  443, pool e overrides, mantendo `ui_port` restrita a loopback.
+- [x] `M8-09` Mover a CA para o Caddy WSL, exportar somente o certificado raiz e
+  instalá-lo no trust store do Windows; nunca copiar a chave privada para o
+  host e diagnosticar emissão, validade, confiança e renovação.
+- [x] `M8-10` Implementar migração segura: subir e validar o Caddy WSL antes de
+  desligar/remover o Caddy Windows, detectar instalações parciais, preservar
+  backup dos artefatos anteriores e oferecer rollback para a última topologia
+  funcional.
+- [x] `M8-11` Atualizar CLI, API, UI, doctor, repair, status, export e telemetria
+  para apresentar uma única instância Caddy e o estado separado de mirrored
+  networking, firewall Hyper-V, CA e serviço systemd.
+- [x] `M8-12` Criar testes reais Windows+WSL para `.localhost`, dashboard,
+  redirect/cookie/HTTPS, WebSocket/HMR, cada modo de projeto e cliente LAN;
+  cobrir reboot, `wsl --shutdown`, VPN, troca de rede/IP, porta ocupada, firewall
+  bloqueado, CA ausente e rollback da migração.
+- [x] `M8-13` Remover do caminho operacional código/testes/documentação da
+  topologia dupla e adicionar teste arquitetural que impeça a reintrodução de
+  Caddy Windows, admin `2019` e headers de identidade internos. Artefatos
+  legados permanecem apenas para detecção e rollback de instalações antigas.
+
+**Gate:** uma instalação limpa e uma migração existente operam com exatamente
+um Caddy no WSL; GUI local, projetos `.localhost` e portas LAN passam na matriz
+real após reboot e `wsl --shutdown`; firewall e CA permanecem mínimos e o
+rollback restaura uma topologia funcional.
+
+**Implementação:** o contrato ativo, o fluxo de migração, o diagnóstico e os
+testes determinísticos estão concluídos. O smoke Windows+WSL é opt-in em
+`DEVLAN_M8_REAL=1 go test ./internal/platform -run TestM8RealWindowsWSL` ou no
+script `scripts/test-m8-real.ps1`; ele deve ser executado em um host preparado
+para fechar o gate após reboot, VPN/troca de IP e `wsl --shutdown`.
+
+## Marco 9 — Observabilidade correta e performática (P1)
+
+- [ ] `M9-01` Atribuir logs ao projeto por metadado confiável, não por URI.
+- [ ] `M9-02` Ler arquivo ativo/rotações via streaming bounded.
+- [ ] `M9-03` Adicionar checkpoint/agregação incremental para polling da GUI.
+- [ ] `M9-04` Limitar cardinalidade e fortalecer normalização de IDs.
+- [ ] `M9-05` Testar logs grandes, linhas >64 KiB, rotação/truncamento/parcial.
+- [ ] `M9-06` Provar ausência de IP, query, headers, cookies e segredos.
 
 **Gate:** métricas corretas respeitam budgets de CPU/memória.
 
-## Marco 9 — Robustez e documentação (P1/P2)
+## Marco 10 — Robustez e documentação (P1/P2)
 
-- [ ] `M9-01` Configurar/testar timeouts e slow clients na API web.
-- [ ] `M9-02` Reutilizar reverse proxy/transporte no gateway dev.
-- [ ] `M9-03` Reconciliar remoção/troca de porta sem listeners órfãos.
-- [ ] `M9-04` Tornar erros de discovery diagnósticos tipados.
-- [ ] `M9-05` Testar lifecycle/concorrência de serviço, web server, supervisor,
+- [ ] `M10-01` Configurar/testar timeouts e slow clients na API web.
+- [ ] `M10-02` Reutilizar reverse proxy/transporte no gateway dev.
+- [ ] `M10-03` Reconciliar remoção/troca de porta sem listeners órfãos.
+- [ ] `M10-04` Tornar erros de discovery diagnósticos tipados.
+- [ ] `M10-05` Testar lifecycle/concorrência de serviço, web server, supervisor,
   firewall e executáveis auxiliares.
-- [ ] `M9-06` Definir/medir budgets de startup, reload, polling, memória e logs.
-- [ ] `M9-07` Revisar permissões de estado/auditoria e sanitização do bundle.
-- [ ] `M9-08` Atualizar toda a documentação removendo subpath/host LAN/DNS e
-  documentando GUI web, porta, `devlan.localhost` e postura local/LAN.
-- [ ] `M9-09` Executar matriz real e anexar resultados à release.
+- [ ] `M10-06` Definir/medir budgets de startup, reload, polling, memória e logs.
+- [ ] `M10-07` Revisar permissões de estado/auditoria e sanitização do bundle.
+- [ ] `M10-08` Atualizar toda a documentação removendo subpath/host LAN/DNS e a
+  topologia de dois Caddys, documentando mirrored networking, Caddy WSL único,
+  GUI web, portas, `devlan.localhost`, firewall Hyper-V e postura local/LAN.
+- [ ] `M10-09` Executar matriz real e anexar resultados à release.
 
 **Gate:** documentação descreve o implementado e todos os budgets passam.

@@ -81,21 +81,23 @@ O MVP não precisa começar como serviço permanente. O instalador pode realizar
 
 Se for necessário iniciar antes do login ou manter supervisão contínua, será criado um serviço Windows separado da interface. Serviços não desenham UI na sessão do usuário; Wails/tray será o cliente visual desse serviço.
 
-## Dois Caddys
+## Caddy único no WSL com rede espelhada
 
-Manter dois Caddys preserva fronteiras:
+A decisão anterior de manter dois Caddys foi substituída pelo
+[ADR 0005](adr/0005-caddy-unico-wsl-mirrored.md). Em Windows 11 22H2+ com WSL 2
+e `networkingMode=mirrored`, um único Caddy systemd no WSL é dono da borda
+HTTP/HTTPS/LAN. O Windows continua dono do estado, control plane, API local e
+coordenação de firewall; o dashboard é o único upstream para
+`127.0.0.1:<ui_port>`.
 
-- Windows: entrada LAN, endereço/porta, headers e política externa;
-- WSL: document roots Linux, PHP-FPM, arquivos estáticos e upstreams JS.
+## TLS por projeto na borda WSL, com CA interna
 
-O Caddy do Windows deve ter configuração quase estática. O do WSL pode ser regenerado conforme os projetos.
-
-## TLS por projeto na borda, com CA interna
-
-TLS é propriedade da borda Windows. `secure` continua sendo uma preferência do
-projeto, enquanto a negociação e a CA permanecem no Caddy da borda. A origem
+TLS é propriedade da borda WSL. `secure` continua sendo uma preferência do
+projeto, enquanto a negociação e a CA permanecem no Caddy único. A origem
 local é sempre HTTPS em `.localhost`; a origem LAN usa HTTP ou HTTPS na porta
-dedicada conforme a configuração global e a preferência do projeto.
+dedicada conforme a configuração global e a preferência do projeto. Somente o
+certificado raiz público pode ser exportado para o Windows ou para clientes;
+chaves privadas permanecem no WSL.
 
 Uma autoridade pública não é pressuposta para IPs privados. A CA interna
 permite criptografia na LAN, porém cada dispositivo cliente precisa confiar no

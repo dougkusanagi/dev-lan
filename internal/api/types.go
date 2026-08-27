@@ -26,22 +26,34 @@ type ProjectView struct {
 }
 
 type SystemStatusView struct {
-	LANIP               string   `json:"lanIp"`
-	WindowsPort         int      `json:"windowsPort"`
-	HTTPSPort           int      `json:"httpsPort"`
-	RouteBasePort       int      `json:"routeBasePort"`
-	RoutePortCount      int      `json:"routePortCount"`
-	UIPort              int      `json:"uiPort"`
-	TLSEnabled          bool     `json:"tlsEnabled"`
-	DefaultMode         string   `json:"defaultMode"`
-	PHPDefaultVersion   string   `json:"phpDefaultVersion"`
-	WindowsCaddyRunning bool     `json:"windowsCaddyRunning"`
-	WSLCaddyRunning     bool     `json:"wslCaddyRunning"`
-	WSLAvailable        bool     `json:"wslAvailable"`
-	FirewallOk          bool     `json:"firewallOk"`
-	PHPVersions         []string `json:"phpVersions"`
-	TotalProjects       int      `json:"totalProjects"`
-	ProtocolVersion     int      `json:"protocolVersion"`
+	LANIP               string `json:"lanIp"`
+	WindowsPort         int    `json:"windowsPort"`
+	HTTPSPort           int    `json:"httpsPort"`
+	RouteBasePort       int    `json:"routeBasePort"`
+	RoutePortCount      int    `json:"routePortCount"`
+	UIPort              int    `json:"uiPort"`
+	TLSEnabled          bool   `json:"tlsEnabled"`
+	DefaultMode         string `json:"defaultMode"`
+	PHPDefaultVersion   string `json:"phpDefaultVersion"`
+	WindowsCaddyRunning bool   `json:"windowsCaddyRunning"`
+	WSLCaddyRunning     bool   `json:"wslCaddyRunning"`
+	// M8 fields are additive so older browser clients can still decode the
+	// status response while new clients distinguish the single edge from
+	// mirrored networking and Hyper-V policy state.
+	CaddyRunning       bool     `json:"caddyRunning,omitempty"`
+	CaddyTopology      string   `json:"caddyTopology,omitempty"`
+	CaddySystemd       bool     `json:"caddySystemd,omitempty"`
+	CaddyLive          bool     `json:"caddyLive,omitempty"`
+	MirroredConfigured bool     `json:"mirroredConfigured,omitempty"`
+	MirroredNetworking bool     `json:"mirroredNetworking,omitempty"`
+	HyperVFirewallOk   bool     `json:"hypervFirewallOk,omitempty"`
+	CARootValid        bool     `json:"caRootValid,omitempty"`
+	CARootTrusted      bool     `json:"caRootTrusted,omitempty"`
+	WSLAvailable       bool     `json:"wslAvailable"`
+	FirewallOk         bool     `json:"firewallOk"`
+	PHPVersions        []string `json:"phpVersions"`
+	TotalProjects      int      `json:"totalProjects"`
+	ProtocolVersion    int      `json:"protocolVersion"`
 }
 
 // OverviewView is the single read model used by the browser polling loop. It

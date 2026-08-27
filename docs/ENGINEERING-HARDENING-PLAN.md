@@ -12,10 +12,13 @@ go vet ./...
 npm run build
 ```
 
-Não foram executados testes reais de Windows + WSL + Caddy + firewall nem
-carga prolongada. Os achados são dívidas verificáveis ou lacunas de teste, não
-uma afirmação de que todo fluxo esteja quebrado. A tasklist/prioridade
-canônicas ficam em [ROADMAP.md](ROADMAP.md).
+A matriz real completa de Windows + WSL + Caddy + firewall e a carga prolongada
+ainda dependem de um host preparado; o smoke opt-in foi executado neste host e
+parou corretamente ao detectar que o listener LAN de teste não estava ativo.
+Os achados são dívidas verificáveis ou lacunas de teste, não uma afirmação de
+que todo fluxo esteja quebrado. O Marco 8 consolidou a borda em um Caddy WSL
+único; referências abaixo a dois Caddys são achados históricos da revisão
+anterior. A tasklist/prioridade canônicas ficam em [ROADMAP.md](ROADMAP.md).
 
 ## 1. Consistência de estado e concorrência — crítico
 
@@ -49,20 +52,22 @@ Rollback inclui processos, não apenas arquivos.
 
 ## 2. Alocação de portas e firewall — crítico
 
-### Evidência atual
+### Evidência histórica — resolvida nos Marcos 3 e 8
 
-- `EffectiveRoutePort` deriva porta do índice de `Config.Projects`;
-- projetos de park não possuem identidade persistente de porta;
-- `EnsureFirewall` recebe listas pontuais e não representa faixas/pool;
-- `set rule name=DevLAN new localport=...` não comprova direção, ação,
-  protocolo, perfil ou origem da regra existente;
-- firewall não possui teste unitário, pois `netsh` não é injetado.
+- alocações persistentes, parks e overrides agora têm uma política única;
+- `FirewallSpec` representa portas, pool, perfil, origem e propriedades
+  completas da regra;
+- Windows Firewall e Hyper-V Firewall são reconciliados por adapters injetáveis;
+- a política Hyper-V mantém `DefaultInboundAction=Block`, `Private` e
+  `LocalSubnet`, sem abrir a `ui_port`.
 
 ### Melhoria
 
-Persistir alocações, centralizar reservas e introduzir `FirewallSpec` puro com
-adapter consultável/reconciliável. Identificar a regra gerenciada por mais que
-um nome genérico e comparar todas as propriedades. Integrar ao coordenador.
+O estado implementado persiste alocações, centraliza reservas e usa
+`FirewallSpec` puro com adapters consultáveis/reconciliáveis. A regra só é
+adotada quando a assinatura gerenciada é compatível; caso contrário, há
+conflito explícito. O coordenador aplica a mesma especificação em install,
+reload, doctor e repair.
 
 ### Testes
 
@@ -75,21 +80,19 @@ um nome genérico e comparar todas as propriedades. Integrar ao coordenador.
 
 ### Evidência atual
 
-- renderers geram `.localhost` local e listeners LAN dedicados por porta, mas
-  muitos testes verificam apenas substrings do Caddyfile;
-- o salto Windows -> WSL usa `X-DevLAN-Project`/`X-DevLAN-Port`; remoção,
-  reconstrução e alcance do listener precisam de teste ponta a ponta;
-- a validação do nome local não cobre integralmente labels, comprimentos,
-  nomes reservados e duplicidade;
-- a estabilidade das portas ainda depende do índice até o Marco 3, e a
-  reconciliação de listeners/firewall ainda precisa ser endurecida.
+- `RenderWSLUnified` gera `.localhost`, dashboard e listeners LAN diretamente
+  no único Caddy WSL;
+- o renderer ativo não usa `X-DevLAN-*`, `2019` ou `8181` e remove/reconstrói
+  os forwarded headers antes de encaminhar WebSocket/HMR;
+- a matriz determinística cobre PHP, static, Vite/SSR, redirect, allowlist,
+  auth e exposição expirada; o smoke real é opt-in por host Windows.
 
 ### Melhoria
 
-Definir matriz de headers por salto/origem, usar tipo de hostname validado e
-testar Caddy real contra spoofing de headers. Remover completamente os modos,
-manter `.localhost` sempre local e porta como única origem LAN, conforme o
-[plano de roteamento](ORIGIN-BASED-ROUTING-PLAN.md).
+O renderer ativo já define a matriz de headers por origem, valida nomes antes
+de gerar e mantém `.localhost` local e porta como única origem LAN, conforme o
+[plano de roteamento](ORIGIN-BASED-ROUTING-PLAN.md). O protocolo legado fica
+restrito a fixtures e leitura/rollback de upgrades.
 
 ### Testes
 
@@ -143,7 +146,8 @@ antes da gravação.
 
 ### Melhoria
 
-Manter control plane, estado, firewall, CA, UI web e Caddy de borda no Windows.
+Manter control plane, estado, firewall, CA e UI web no Windows; o Caddy de
+borda é uma única instância systemd no WSL.
 Primeiro medir e agrupar chamadas `wsl.exe`. Somente se o custo continuar
 material, criar agente Linux estreito/persistente com contrato versionado; ele
 executa discovery/runtimes/Caddy WSL, mas não possui estado concorrente nem
@@ -243,7 +247,8 @@ visuais determinísticos.
 
 A suíte Go cobre domínio/renderização, porém firewall, serviço Windows e
 executáveis auxiliares não têm testes diretos. Não foi encontrado pipeline de
-CI, e os testes não sobem a topologia real dos dois Caddys.
+CI, e os testes não sobem ainda a topologia real do Caddy WSL único com
+Windows/WSL/LAN.
 
 ### Melhoria
 

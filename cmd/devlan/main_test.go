@@ -9,7 +9,17 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestTopologyMigrationGetsColdWSLStartupBudget(t *testing.T) {
+	if got := cliCommandTimeout("topology", []string{"migrate", "--yes"}); got != 3*time.Minute {
+		t.Fatalf("timeout da migração = %s", got)
+	}
+	if got := cliCommandTimeout("topology", []string{"check"}); got != 45*time.Second {
+		t.Fatalf("timeout do check = %s", got)
+	}
+}
 
 func TestWriteProjectTable(t *testing.T) {
 	var output bytes.Buffer
@@ -136,4 +146,3 @@ func TestPhase4CLIRuns(t *testing.T) {
 		t.Fatalf("desktop uninstall failed: %v", err)
 	}
 }
-

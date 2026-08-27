@@ -1,6 +1,6 @@
 # DevLAN
 
-DevLAN é uma ferramenta para publicar projetos que rodam no WSL para outros dispositivos da rede local, usando o Windows como ponto de entrada.
+DevLAN é uma ferramenta para publicar projetos que rodam no WSL para outros dispositivos da rede local. O control plane fica no Windows e a borda é um único Caddy no WSL com rede espelhada.
 
 Cada projeto possui duas origens fixas:
 
@@ -17,8 +17,8 @@ operação persistente e a recuperação evoluem na Fase 6.
 ## Princípios
 
 - A CLI e a interface gráfica usam o mesmo núcleo em Go.
-- O Windows controla a exposição na rede e o firewall.
-- O WSL executa Caddy, PHP-FPM e os processos dos projetos.
+- O Windows controla estado, API local e coordena Windows Firewall/Hyper-V Firewall.
+- O WSL executa o Caddy único, PHP-FPM e os processos dos projetos.
 - Configurações geradas são validadas antes de serem aplicadas.
 - Cada projeto pode sobrescrever padrões globais.
 - A primeira versão deve resolver bem Laravel/PHP antes de crescer.
@@ -28,12 +28,9 @@ operação persistente e a recuperação evoluem na Fase 6.
 
 ```text
 Dispositivo na LAN
-       │
+       │ mirrored networking
        ▼
-Caddy no Windows :80 / :443 opcional
-       │ localhost / integração WSL
-       ▼
-Caddy no WSL :8181
+Caddy único no WSL :80 / :443 / portas LAN
        │
        ▼
 PHP-FPM ── projeto Laravel
@@ -91,7 +88,7 @@ O núcleo está implementado como uma CLI Go em `cmd/devlan`. Ele cobre:
 - detecção sem executar scripts, com presets Laravel, Symfony e PHP genérico;
 - múltiplas versões PHP, extensões por versão, Composer versionado e pools
   `ondemand` compartilhados ou isolados;
-- Caddyfiles Windows/WSL determinísticos, com uma porta LAN dedicada por projeto
+- Caddyfile WSL determinístico, com uma porta LAN dedicada por projeto
   e contexto FastCGI na raiz;
 - HTTPS opcional por CA interna na porta dedicada do projeto, selecionado com
   `devlan secure NAME|PATH`, e retorno a HTTP com `devlan unsecure NAME|PATH`;
@@ -106,14 +103,20 @@ O núcleo está implementado como uma CLI Go em `cmd/devlan`. Ele cobre:
 - exportação/importação sem credenciais, diagnóstico ZIP sanitizado e telemetria opt-in;
 - preparação de updates `stable`/`preview` com validação SHA-256.
 
-`devlan install` prepara os arquivos gerenciados e tenta criar a regra de firewall. Para uma máquina limpa, use o [bootstrap de instalação](docs/INSTALL.md): ele instala Go, WSL/Ubuntu, Caddy, PHP-FPM 8.5, extensões Laravel e Composer, compila a CLI e executa `devlan install`. Dependências dos projetos continuam explícitas; o bootstrap não executa `composer install` automaticamente.
+`devlan install` prepara os arquivos gerenciados e tenta criar as regras de
+firewall. Para uma máquina limpa, use o [bootstrap de instalação](docs/INSTALL.md):
+ele instala Go, WSL/Ubuntu, Caddy no WSL, PHP-FPM 8.5, extensões Laravel e
+Composer, compila a CLI e executa `devlan install`. Depois de salvar o trabalho
+nas distribuições, aplique `devlan topology migrate --yes`; o comando encerra
+todas as distribuições WSL. Dependências dos projetos continuam explícitas; o
+bootstrap não executa `composer install` automaticamente.
 
 Os procedimentos da Fase 6 estão em [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
 ## Instalação rápida via curl
 
 Abra o **PowerShell como Administrador**. A elevação é necessária para instalar
-ou configurar WSL, Caddy e a regra de firewall. Em seguida, execute:
+ou configurar WSL e as regras de firewall. Em seguida, execute:
 
 ```powershell
 curl.exe -fsSL https://raw.githubusercontent.com/dougkusanagi/dev-lan/master/scripts/install.ps1 -o "$env:TEMP\devlan-install.ps1"; powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\devlan-install.ps1"

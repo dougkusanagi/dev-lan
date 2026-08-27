@@ -36,7 +36,7 @@ O budget estrutural por ciclo é:
 | polling browser `GET /api/v1/overview` | até `parks + 5`; normalmente `parks + 4` |
 | ACL de install/reload | 1 para todos os projetos WSL |
 
-Install/reload também executam as ações fixas de validação/reload dos Caddys;
+Install/reload também executam as ações fixas de validação/reload do Caddy WSL único;
 essas ações não crescem com a quantidade de projetos. O contador real e as
 durações ficam disponíveis no `WSLRunner` do processo para diagnóstico e
 testes.

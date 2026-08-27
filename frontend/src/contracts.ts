@@ -210,12 +210,29 @@ export function parseSystemStatus(
     phpDefaultVersion: requiredString(item, 'phpDefaultVersion', 'status'),
     windowsCaddyRunning: requiredBoolean(item, 'windowsCaddyRunning', 'status'),
     wslCaddyRunning: requiredBoolean(item, 'wslCaddyRunning', 'status'),
+    caddyRunning: optionalBoolean(item, 'caddyRunning', 'status'),
+    caddyTopology: optionalString(item, 'caddyTopology', 'status'),
+    caddySystemd: optionalBoolean(item, 'caddySystemd', 'status'),
+    caddyLive: optionalBoolean(item, 'caddyLive', 'status'),
+    mirroredConfigured: optionalBoolean(item, 'mirroredConfigured', 'status'),
+    mirroredNetworking: optionalBoolean(item, 'mirroredNetworking', 'status'),
+    hypervFirewallOk: optionalBoolean(item, 'hypervFirewallOk', 'status'),
+    caRootValid: optionalBoolean(item, 'caRootValid', 'status'),
+    caRootTrusted: optionalBoolean(item, 'caRootTrusted', 'status'),
     wslAvailable: requiredBoolean(item, 'wslAvailable', 'status'),
     firewallOk: requiredBoolean(item, 'firewallOk', 'status'),
     phpVersions: stringArray(item, 'phpVersions', 'status'),
     totalProjects: requiredNumber(item, 'totalProjects', 'status'),
     protocolVersion,
   };
+}
+
+// The detailed topology endpoint intentionally remains extensible: it is a
+// diagnostic envelope with independently evolving Caddy, WSL, firewall and CA
+// snapshots. The outer object is still validated so consumers never mistake a
+// scalar/error response for a topology payload.
+export function parseTopology(value: unknown): Record<string, unknown> {
+  return record(value, 'topology');
 }
 
 export function parsePHPVersion(value: unknown, path = 'phpVersions[]'): PHPVersion {

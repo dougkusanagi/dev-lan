@@ -65,6 +65,9 @@ func run(args []string) error {
 	// never opens a second store or runs a second controller; it forwards the
 	// supported operational commands to the authenticated Windows API.
 	if runtime.GOOS == "linux" {
+		if command == "topology" && len(args) > 0 && args[0] == "migrate" {
+			return fmt.Errorf("a migração da topologia deve ser iniciada pelo controlador Windows")
+		}
 		return runWSLClient(context.Background(), dataDir, command, args)
 	}
 	service := app.New(dataDir)
@@ -77,7 +80,7 @@ func run(args []string) error {
 		ctx = context.Background()
 		cancel = func() {}
 	} else {
-		ctx, cancel = context.WithTimeout(context.Background(), 45*time.Second)
+		ctx, cancel = context.WithTimeout(context.Background(), cliCommandTimeout(command, args))
 	}
 	defer cancel()
 
@@ -245,6 +248,9 @@ func run(args []string) error {
 			return fmt.Errorf("uso: devlan status")
 		}
 		return printStatus(ctx, service, dataDir)
+
+	case "topology":
+		return runTopology(ctx, service, args)
 
 	case "reload":
 		if len(args) != 0 {
@@ -476,6 +482,20 @@ func run(args []string) error {
 	}
 }
 
+func cliCommandTimeout(command string, args []string) time.Duration {
+	// A topology migration deliberately performs wsl --shutdown and then boots
+	// the VM, systemd and Caddy again. A cold WSL start can consume most of the
+	// normal command budget on otherwise healthy machines.
+	if command == "topology" {
+		for _, arg := range args {
+			if arg == "migrate" {
+				return 3 * time.Minute
+			}
+		}
+	}
+	return 45 * time.Second
+}
+
 func runConfig(ctx context.Context, service *app.App, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("uso: devlan config export [PATH] | devlan config import PATH")
@@ -519,6 +539,95 @@ func runConfig(ctx context.Context, service *app.App, args []string) error {
 	default:
 		return fmt.Errorf("subcomando config desconhecido: %s", args[0])
 	}
+}
+
+func runTopology(ctx context.Context, service *app.App, args []string) error {
+	subcommand := "status"
+	asJSON := false
+	confirmed := false
+	for _, arg := range args {
+		switch arg {
+		case "status", "check", "migrate", "repair":
+			if subcommand != "status" {
+				return fmt.Errorf("uso: devlan topology status|check|repair|migrate [--yes]")
+			}
+			subcommand = arg
+		case "--json":
+			asJSON = true
+		case "--yes", "--confirm-wsl-shutdown":
+			confirmed = true
+		default:
+			return fmt.Errorf("uso: devlan topology status|check|repair|migrate [--yes]")
+		}
+	}
+
+	encode := func(value any) error {
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(value)
+	}
+
+	switch subcommand {
+	case "check":
+		report := service.WSLCompatibility(ctx)
+		if asJSON {
+			return encode(report)
+		}
+		fmt.Printf("Windows: %s (build %d)\n", report.WindowsVersion, report.WindowsBuild)
+		fmt.Printf("WSL: %s | WSL2: %t | mirrored: %t | systemd: %t | loopback: %t | LAN: %t\n", report.WSLVersion, report.WSL2, report.MirroredNetworking, report.Systemd, report.LoopbackBidirectional, report.LANReachable)
+		for _, check := range report.Checks {
+			fmt.Printf("[%s] %-28s %s\n", check.Status, check.Name, check.Detail)
+		}
+		return nil
+	case "repair":
+		result, err := service.RepairM8(ctx)
+		printWarnings(result.Warnings)
+		if err != nil {
+			return err
+		}
+		if asJSON {
+			return encode(result)
+		}
+		fmt.Println("Topologia Caddy WSL único reconciliada (sem wsl --shutdown).")
+		return nil
+	case "migrate":
+		if !confirmed {
+			fmt.Fprintln(os.Stderr, "A migração reinicia o WSL inteiro e encerra todas as distribuições em execução.")
+			fmt.Fprintln(os.Stderr, "Repita com `devlan topology migrate --yes` somente após salvar o trabalho em todas as distribuições.")
+			return platform.ErrWSLShutdownConfirmation
+		}
+		result, err := service.MigrateToSingleCaddy(ctx, true)
+		if asJSON {
+			_ = encode(result)
+		}
+		if err != nil {
+			return err
+		}
+		if !asJSON {
+			fmt.Printf("Migração concluída: %s\nBackup: %s\nEtapas: %s\n", result.Topology, result.BackupDir, strings.Join(stringMigrationSteps(result.Steps), ", "))
+		}
+		return nil
+	default:
+		snapshot := service.CaddyTopologyStatus(ctx)
+		status := service.CaddyStatus(ctx)
+		if asJSON {
+			return encode(map[string]any{"topology": snapshot, "caddy": status})
+		}
+		fmt.Printf("Topologia: %s\n", snapshot.Topology)
+		fmt.Printf("Caddy WSL único: disponível=%t ativo=%t systemd=%t live=%t (%s)\n", status.Available, status.Running, status.Systemd, status.Live, status.Detail)
+		if snapshot.WindowsConfig || snapshot.WSLConfig {
+			fmt.Printf("Artefatos legados: Windows=%t WSL=%t; use `devlan topology migrate --yes`\n", snapshot.WindowsConfig, snapshot.WSLConfig)
+		}
+		return nil
+	}
+}
+
+func stringMigrationSteps(steps []platform.MigrationStep) []string {
+	result := make([]string, 0, len(steps))
+	for _, step := range steps {
+		result = append(result, string(step))
+	}
+	return result
 }
 
 func runAPI(ctx context.Context, service *app.App, args []string) error {
@@ -572,7 +681,7 @@ func runGUI(ctx context.Context, service *app.App, dataDir string, args []string
 	}
 
 	targetURL := "https://devlan.localhost/"
-	if !platform.IsAdminResponsive(platform.WindowsCaddyAdminAddress) {
+	if !service.CaddyStatus(ctx).Live {
 		targetURL = fmt.Sprintf("http://127.0.0.1:%d/", uiPort)
 	}
 
@@ -960,6 +1069,7 @@ func runWSLClient(ctx context.Context, dataDir, command string, args []string) e
 	allowed := map[string]bool{
 		"link": true, "unlink": true, "park": true, "unpark": true,
 		"links": true, "status": true, "reload": true, "doctor": true, "open": true, "route": true,
+		"topology": true,
 	}
 	if !allowed[command] {
 		return fmt.Errorf("comando %q ainda não está disponível no cliente WSL; use o controlador Windows", command)
@@ -974,7 +1084,7 @@ func runWSLClient(ctx context.Context, dataDir, command string, args []string) e
 	if message, ok := payload["message"].(string); ok && message != "" {
 		fmt.Println(message)
 	}
-	if command == "links" || command == "status" || command == "doctor" || command == "route" {
+	if command == "links" || command == "status" || command == "doctor" || command == "route" || command == "topology" {
 		if command == "links" {
 			if projects, ok := payload["projects"]; ok {
 				data, _ := json.MarshalIndent(projects, "", "  ")
@@ -990,6 +1100,9 @@ func runWSLClient(ctx context.Context, dataDir, command string, args []string) e
 				data, _ := json.MarshalIndent(checks, "", "  ")
 				fmt.Println(string(data))
 			}
+		} else if command == "topology" {
+			data, _ := json.MarshalIndent(payload, "", "  ")
+			fmt.Println(string(data))
 		} else if allocations, ok := payload["allocations"]; ok {
 			data, _ := json.MarshalIndent(allocations, "", "  ")
 			fmt.Println(string(data))
@@ -1541,17 +1654,10 @@ func printStatus(ctx context.Context, service *app.App, dataDir string) error {
 	}
 	fmt.Printf("DevLAN %s (%s)\n", version, app.RuntimeDescription())
 	fmt.Printf("Dados: %s\n", dataDir)
-	fmt.Printf("Padrão: %s | HTTP: %d | HTTPS: %d | SSL: %s | porta WSL: %d\n", cfg.DefaultMode, cfg.WindowsPort, cfg.HTTPSPort, sslState(cfg.TLSEnabled), cfg.WSLPort)
-	if err := service.WindowsCaddy.Available(ctx); err == nil {
-		fmt.Println("Caddy Windows: disponível")
-	} else {
-		fmt.Println("Caddy Windows: ausente")
-	}
-	if err := service.WSLCaddy.Available(ctx); err == nil {
-		fmt.Println("Caddy WSL: disponível")
-	} else {
-		fmt.Println("Caddy WSL: ausente")
-	}
+	fmt.Printf("Padrão: %s | LAN HTTP: %d | LAN HTTPS: %d | SSL: %s | pool: %d-%d\n", cfg.DefaultMode, cfg.WindowsPort, cfg.HTTPSPort, sslState(cfg.TLSEnabled), cfg.RouteBasePort, cfg.RouteBasePort+cfg.RoutePortCount-1)
+	caddyStatus := service.CaddyStatus(ctx)
+	topology := service.CaddyTopologyStatus(ctx)
+	fmt.Printf("Caddy WSL único: disponível=%t ativo=%t systemd=%t live=%t | topologia=%s\n", caddyStatus.Available, caddyStatus.Running, caddyStatus.Systemd, caddyStatus.Live, topology.Topology)
 	if versions, versionErr := service.PHPVersions(ctx); versionErr == nil {
 		labels := make([]string, 0, len(versions))
 		for _, version := range versions {
@@ -1610,6 +1716,9 @@ Operação:
   gui [--foreground]         inicia o dashboard web no navegador (devlan.localhost)
   desktop install|...        instala/gerencia atalhos e integração de desktop
   status                     mostra componentes, projetos e URLs
+  topology status|check      mostra topologia Caddy e compatibilidade WSL
+  topology repair            reconcilia Caddy, firewall e .wslconfig sem shutdown
+  topology migrate --yes     migra com backup para o Caddy único no WSL
   reload                     valida/aplica configurações e recarrega Caddy
   trust                      instala e confia na CA interna do Caddy (Administrador*)
   secure NAME|PATH           ativa HTTPS para um projeto (Administrador*)
@@ -1697,6 +1806,7 @@ func printCommandUsage(command string) {
 		"gui":        "uso: devlan gui [--foreground]",
 		"desktop":    "uso: devlan desktop install | status | uninstall",
 		"status":     "uso: devlan status",
+		"topology":   "uso: devlan topology status|check|repair|migrate [--yes]",
 		"reload":     "uso: devlan reload",
 		"trust":      "uso: devlan trust",
 		"secure":     "uso: devlan secure NAME|PATH",
@@ -2153,7 +2263,7 @@ func runCA(ctx context.Context, service *app.App, args []string) error {
 		}
 		fmt.Println("\nPara instalar no Android/iOS/outro computador:")
 		fmt.Println("1. Exporte o arquivo: devlan ca export")
-		fmt.Println("2. Ou baixe direto pelo navegador na LAN: http://<LAN_IP>/__devlan/ca.crt")
+		fmt.Println("2. Copie somente esse arquivo .crt para os outros dispositivos; a chave privada nunca é exportada.")
 		return nil
 	}
 	switch args[0] {

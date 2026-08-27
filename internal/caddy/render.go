@@ -72,11 +72,7 @@ func RenderWindows(cfg domain.Config) (string, error) {
 		b.WriteString("    auto_https off\n")
 	}
 	if cfg.TLSEnabled {
-		host := cfg.LANAddress
-		if host == "" || host == "auto" {
-			host = "localhost"
-		}
-		fmt.Fprintf(&b, "    default_sni %s\n", host)
+		fmt.Fprintf(&b, "    default_sni %s\n", lanSiteHost(cfg))
 	}
 	b.WriteString("}\n\n")
 	// The local .localhost origin is always available and is intentionally
@@ -89,7 +85,7 @@ func RenderWindows(cfg domain.Config) (string, error) {
 		port := route.RoutePort
 		b.WriteString("\n")
 		if cfg.TLSEnabled && cfg.SecureProject(route.Project) {
-			fmt.Fprintf(&b, "https://:%d {\n", port)
+			fmt.Fprintf(&b, "https://%s:%d {\n", lanSiteHost(cfg), port)
 			b.WriteString("    bind 0.0.0.0\n")
 			b.WriteString("    tls internal\n")
 			b.WriteString("    encode gzip\n")
@@ -99,14 +95,8 @@ func RenderWindows(cfg domain.Config) (string, error) {
 			b.WriteString("    encode gzip\n")
 		}
 		fmt.Fprintf(&b, "    reverse_proxy 127.0.0.1:%d {\n", cfg.WSLPort)
-		b.WriteString("        header_up -X-DevLAN-Port\n")
-		b.WriteString("        header_up -X-DevLAN-Project\n")
 		b.WriteString("        header_up -X-DevLAN-Local\n")
-		b.WriteString("        header_up -X-DevLAN-HTTPS\n")
 		b.WriteString("        header_up -X-Forwarded-For\n")
-		b.WriteString("        header_up -X-Forwarded-Host\n")
-		b.WriteString("        header_up -X-Forwarded-Proto\n")
-		b.WriteString("        header_up -X-Forwarded-Port\n")
 		fmt.Fprintf(&b, "        header_up X-DevLAN-Port %d\n", port)
 		fmt.Fprintf(&b, "        header_up X-DevLAN-Project %s\n", route.Project.Name)
 		b.WriteString("        header_up X-Forwarded-Host {http.request.host}\n")
@@ -114,6 +104,8 @@ func RenderWindows(cfg domain.Config) (string, error) {
 		fmt.Fprintf(&b, "        header_up X-Forwarded-Port %d\n", port)
 		if cfg.TLSEnabled && cfg.SecureProject(route.Project) {
 			b.WriteString("        header_up X-DevLAN-HTTPS on\n")
+		} else {
+			b.WriteString("        header_up -X-DevLAN-HTTPS\n")
 		}
 		b.WriteString("    }\n")
 		b.WriteString("}\n")
@@ -132,6 +124,11 @@ func renderWindowsLocalOnly(b *strings.Builder, cfg domain.Config, routes []Rout
 		fmt.Fprintf(b, " https://%s.localhost", route.Project.Name)
 	}
 	b.WriteString(" {\n")
+	// Keep the listener address stable across upgrades. Older DevLAN releases
+	// explicitly used the IPv4 wildcard; changing it to Caddy's implicit
+	// dual-stack listener makes a graceful reload try to bind :443 while the
+	// previous listener is still alive, which fails on Windows.
+	b.WriteString("    bind 0.0.0.0\n")
 	b.WriteString("    tls internal\n")
 	b.WriteString("    encode gzip\n")
 	b.WriteString("\n    @devlan_admin_edge {\n")
@@ -153,6 +150,7 @@ func renderWindowsLocalOnly(b *strings.Builder, cfg domain.Config, routes []Rout
 		fmt.Fprintf(b, " http://%s.localhost", route.Project.Name)
 	}
 	b.WriteString(" {\n")
+	b.WriteString("    bind 0.0.0.0\n")
 	b.WriteString("    @devlan_local_http_loopback remote_ip 127.0.0.1 ::1\n")
 	b.WriteString("    redir @devlan_local_http_loopback https://{http.request.host}{uri} permanent\n")
 	b.WriteString("    respond \"Acesso local permitido somente via loopback\" 403\n")
@@ -188,13 +186,7 @@ func renderWindowsLocalRoutes(b *strings.Builder, cfg domain.Config, routes []Ro
 		} else {
 			fmt.Fprintf(b, "        reverse_proxy 127.0.0.1:%d {\n", cfg.WSLPort)
 			b.WriteString("            header_up -X-DevLAN-Port\n")
-			b.WriteString("            header_up -X-DevLAN-Project\n")
-			b.WriteString("            header_up -X-DevLAN-Local\n")
-			b.WriteString("            header_up -X-DevLAN-HTTPS\n")
 			b.WriteString("            header_up -X-Forwarded-For\n")
-			b.WriteString("            header_up -X-Forwarded-Host\n")
-			b.WriteString("            header_up -X-Forwarded-Proto\n")
-			b.WriteString("            header_up -X-Forwarded-Port\n")
 			fmt.Fprintf(b, "            header_up X-DevLAN-Project %s\n", name)
 			b.WriteString("            header_up X-DevLAN-Local on\n")
 			b.WriteString("            header_up X-DevLAN-HTTPS on\n")
@@ -351,4 +343,215 @@ func renderProjectServing(b *strings.Builder, cfg domain.Config, route Route) {
 
 func quoteCaddy(value string) string {
 	return strconv.Quote(value)
+}
+
+// RenderWSLUnified creates the M8 edge: one Caddy process in WSL owns the
+// local .localhost HTTPS origin, the dashboard, and every LAN route. Project
+// routing is expressed by site addresses and host matchers, so no
+// Windows-to-WSL identity header or intermediate listener is required.
+func RenderWSLUnified(cfg domain.Config) (string, error) {
+	return RenderWSLUnifiedWithAccessLog(cfg, "")
+}
+
+func RenderWSLUnifiedWithAccessLog(cfg domain.Config, accessLogPath string) (string, error) {
+	return renderWSLUnifiedAt(cfg, accessLogPath, time.Now())
+}
+
+// RenderUnified and RenderSingleWSL are descriptive aliases for integrations
+// that do not want to know the historical package naming.
+func RenderUnified(cfg domain.Config) (string, error) {
+	return RenderWSLUnified(cfg)
+}
+
+func RenderSingleWSL(cfg domain.Config) (string, error) {
+	return RenderWSLUnified(cfg)
+}
+
+func renderWSLUnifiedAt(cfg domain.Config, accessLogPath string, now time.Time) (string, error) {
+	if err := cfg.Validate(); err != nil {
+		return "", err
+	}
+	routes, err := Routes(cfg)
+	if err != nil {
+		return "", err
+	}
+	uiPort := cfg.UIPort
+	if uiPort == 0 {
+		uiPort = 3210
+	}
+	var b strings.Builder
+	b.WriteString(generatedHeader)
+	b.WriteString("{\n")
+	fmt.Fprintf(&b, "    admin %s\n", wslAdminAddress)
+	// Keep certificate automation enabled for explicit tls internal sites while
+	// disabling Caddy's automatic HTTP redirect; the local HTTP block below is
+	// the loopback-only redirect policy owned by DevLAN.
+	b.WriteString("    auto_https disable_redirects\n")
+	if cfg.TLSEnabled {
+		fmt.Fprintf(&b, "    default_sni %s\n", lanSiteHost(cfg))
+	}
+	b.WriteString("}\n\n")
+
+	if accessLogPath != "" {
+		b.WriteString("(devlan_access_log) {\n")
+		b.WriteString("    log {\n")
+		fmt.Fprintf(&b, "        output file %s {\n", quoteCaddy(accessLogPath))
+		b.WriteString("            roll_size 10MiB\n")
+		b.WriteString("            roll_keep 3\n")
+		b.WriteString("            roll_keep_for 168h\n")
+		b.WriteString("        }\n")
+		b.WriteString("        format filter {\n")
+		b.WriteString("            request>remote_ip delete\n")
+		b.WriteString("            request>remote_port delete\n")
+		b.WriteString("            request>client_ip delete\n")
+		b.WriteString("            request>headers delete\n")
+		b.WriteString("            request>uri regexp \\?.*$ \"\"\n")
+		b.WriteString("            resp_headers delete\n")
+		b.WriteString("            user_id delete\n")
+		b.WriteString("            wrap json\n")
+		b.WriteString("        }\n")
+		b.WriteString("    }\n")
+		b.WriteString("}\n\n")
+	}
+
+	// The two loopback-only site blocks are explicitly bound to both loopback
+	// families. Mirrored networking makes 127.0.0.1 reachable from WSL while
+	// keeping the dashboard out of the LAN firewall policy.
+	localHosts := []string{"https://devlan.localhost"}
+	for _, route := range routes {
+		localHosts = append(localHosts, "https://"+route.Project.Name+".localhost")
+	}
+	fmt.Fprintf(&b, "%s {\n", strings.Join(localHosts, " "))
+	b.WriteString("    bind 127.0.0.1 ::1\n")
+	b.WriteString("    tls internal\n")
+	b.WriteString("    encode gzip\n")
+	if accessLogPath != "" {
+		b.WriteString("    import devlan_access_log\n")
+	}
+	b.WriteString("\n    @devlan_dashboard {\n")
+	b.WriteString("        host devlan.localhost\n")
+	b.WriteString("        remote_ip 127.0.0.1 ::1\n")
+	b.WriteString("    }\n")
+	b.WriteString("    handle @devlan_dashboard {\n")
+	fmt.Fprintf(&b, "        reverse_proxy 127.0.0.1:%d\n", uiPort)
+	b.WriteString("    }\n")
+	for _, route := range routes {
+		name := route.Project.Name
+		fmt.Fprintf(&b, "\n    @devlan_local_%s {\n", name)
+		fmt.Fprintf(&b, "        host %s.localhost\n", name)
+		b.WriteString("        remote_ip 127.0.0.1 ::1\n")
+		b.WriteString("    }\n")
+		fmt.Fprintf(&b, "    handle @devlan_local_%s {\n", name)
+		if cfg.IsExposureExpired(route.Project, now) {
+			b.WriteString("        respond \"Acesso expirado\" 403\n")
+		} else {
+			renderUnifiedProjectServing(&b, cfg, route, true)
+		}
+		b.WriteString("    }\n")
+	}
+	b.WriteString("\n    respond \"not found\" 404\n")
+	b.WriteString("}\n\n")
+
+	// HTTP is accepted only on loopback and upgraded to the canonical HTTPS
+	// origin. LAN clients never reach this block because the site is bound to
+	// loopback, while every assigned project port below binds directly on WSL.
+	httpHosts := []string{"http://devlan.localhost"}
+	for _, route := range routes {
+		httpHosts = append(httpHosts, "http://"+route.Project.Name+".localhost")
+	}
+	fmt.Fprintf(&b, "%s {\n", strings.Join(httpHosts, " "))
+	b.WriteString("    bind 127.0.0.1 ::1\n")
+	b.WriteString("    @devlan_local_http remote_ip 127.0.0.1 ::1\n")
+	b.WriteString("    redir @devlan_local_http https://{http.request.host}{uri} permanent\n")
+	b.WriteString("    respond \"Acesso local permitido somente via loopback\" 403\n")
+	b.WriteString("}\n")
+
+	for _, route := range routes {
+		secure := cfg.TLSEnabled && cfg.SecureProject(route.Project)
+		if secure {
+			fmt.Fprintf(&b, "\nhttps://%s:%d {\n", lanSiteHost(cfg), route.RoutePort)
+			b.WriteString("    bind 0.0.0.0\n")
+			b.WriteString("    tls internal\n")
+		} else {
+			fmt.Fprintf(&b, "\nhttp://:%d {\n", route.RoutePort)
+			b.WriteString("    bind 0.0.0.0\n")
+		}
+		b.WriteString("    encode gzip\n")
+		if accessLogPath != "" {
+			b.WriteString("    import devlan_access_log\n")
+		}
+		if cfg.IsExposureExpired(route.Project, now) {
+			b.WriteString("    respond \"Acesso expirado\" 403\n")
+		} else {
+			renderUnifiedProjectServing(&b, cfg, route, false)
+		}
+		b.WriteString("}\n")
+	}
+	return b.String(), nil
+}
+
+func renderUnifiedProjectServing(b *strings.Builder, cfg domain.Config, route Route, local bool) {
+	name := route.Project.Name
+	allowlist := cfg.EffectiveAllowlist(route.Project)
+	if len(allowlist) > 0 {
+		fmt.Fprintf(b, "    @devlan_denied_%s not remote_ip %s\n", name, strings.Join(allowlist, " "))
+		fmt.Fprintf(b, "    respond @devlan_denied_%s \"Acesso bloqueado por allowlist\" 403\n", name)
+	}
+	hasAuth, authUsers := cfg.EffectiveAuth(route.Project)
+	if hasAuth && len(authUsers) > 0 {
+		b.WriteString("    basicauth {\n")
+		for _, user := range authUsers {
+			fmt.Fprintf(b, "        %s %s\n", user.Username, user.PasswordHash)
+		}
+		b.WriteString("    }\n")
+	}
+	if local && route.Mode == domain.ModePHP && route.Preset == domain.PHPPresetLaravel {
+		backend := viteBackendPort(cfg.DevPort(route.Project))
+		matcher := "devlan_local_vite_" + name
+		// Keep Laravel's Vite HMR and module requests on the project origin.
+		// The LAN route intentionally remains a production/compiled preview.
+		fmt.Fprintf(b, "    @%s_ws header Upgrade websocket\n", matcher)
+		fmt.Fprintf(b, "    handle @%s_ws {\n", matcher)
+		fmt.Fprintf(b, "        reverse_proxy 127.0.0.1:%d\n", backend)
+		b.WriteString("    }\n")
+		fmt.Fprintf(b, "    @%s path /@* /resources/* /node_modules/* /__laravel_vite_plugin__/* /src/*\n", matcher)
+		fmt.Fprintf(b, "    handle @%s {\n", matcher)
+		fmt.Fprintf(b, "        reverse_proxy 127.0.0.1:%d\n", backend)
+		b.WriteString("    }\n")
+	}
+	switch route.Mode {
+	case domain.ModePHP:
+		fmt.Fprintf(b, "    root * %s\n", quoteCaddy(cfg.PHPDocumentRoot(route.Project)))
+		fmt.Fprintf(b, "    php_fastcgi unix/%s {\n", cfg.PHPSocket(route.Project))
+		// The scheme is derived by this one edge; no internal identity header is
+		// necessary or trusted by the PHP runtime.
+		b.WriteString("        env HTTPS {http.request.scheme}\n")
+		b.WriteString("    }\n")
+		b.WriteString("    file_server\n")
+	case domain.ModeStatic:
+		fmt.Fprintf(b, "    root * %s\n", quoteCaddy(cfg.StaticDocumentRoot(route.Project)))
+		if cfg.SPAFallback(route.Project) {
+			b.WriteString("    try_files {path} {path}/ /index.html\n")
+		}
+		b.WriteString("    file_server\n")
+	case domain.ModeDev:
+		devPort := cfg.DevPort(route.Project)
+		fmt.Fprintf(b, "    reverse_proxy 127.0.0.1:%d {\n", devPort)
+		b.WriteString("        header_up -X-Forwarded-For\n")
+		b.WriteString("        header_up -X-Forwarded-Host\n")
+		b.WriteString("        header_up -X-Forwarded-Proto\n")
+		b.WriteString("        header_up X-Forwarded-Host {http.request.host}\n")
+		b.WriteString("        header_up X-Forwarded-Proto {http.request.scheme}\n")
+		b.WriteString("        header_up Upgrade {http.request.header.Upgrade}\n")
+		b.WriteString("        header_up Connection {http.request.header.Connection}\n")
+		b.WriteString("    }\n")
+	}
+}
+
+func lanSiteHost(cfg domain.Config) string {
+	host := strings.TrimSpace(cfg.LANAddress)
+	if host == "" || host == "auto" {
+		return "localhost"
+	}
+	return host
 }

@@ -82,6 +82,31 @@ func TestSystemFirewallReconcilesIdempotentlyAndProtectsThirdPartyRules(t *testi
 	}
 }
 
+func TestSystemFirewallAdoptsOnlyStrictLegacyDevLANRule(t *testing.T) {
+	spec := DefaultFirewallSpec()
+	runner := &firewallTestRunner{showOutput: strings.Join([]string{
+		"Rule Name: DevLAN",
+		"Enabled: Yes",
+		"Direction: In",
+		"Action: Allow",
+		"Protocol: TCP",
+		"LocalPort: 80,443",
+		"Profiles: Private",
+		"RemoteIP: LocalSubnet",
+	}, "\n")}
+	if err := (SystemFirewall{Runner: runner}).Reconcile(context.Background(), spec); err != nil {
+		t.Fatalf("regra legada segura deveria ser adotada: %v", err)
+	}
+	if len(runner.calls) != 3 || runner.calls[1][2] != "delete" || runner.calls[2][2] != "add" {
+		t.Fatalf("regra legada deveria ser substituída: %#v", runner.calls)
+	}
+
+	runner = &firewallTestRunner{showOutput: "Rule Name: DevLAN\nEnabled: Yes\nDirection: In\nAction: Allow\nProtocol: TCP\nLocalPort: Any\nProfiles: Any\nRemoteIP: Any"}
+	if err := (SystemFirewall{Runner: runner}).Reconcile(context.Background(), spec); !errors.Is(err, ErrFirewallConflict) {
+		t.Fatalf("regra ampla sem assinatura não pode ser adotada: %v", err)
+	}
+}
+
 func TestSystemFirewallAddsMissingRuleWithExactProperties(t *testing.T) {
 	spec := DefaultFirewallSpec()
 	runner := &firewallTestRunner{showErr: ErrFirewallNotFound}
@@ -92,10 +117,21 @@ func TestSystemFirewallAddsMissingRuleWithExactProperties(t *testing.T) {
 		t.Fatalf("esperava consulta e criação, chamadas: %#v", runner.calls)
 	}
 	joined := strings.Join(runner.calls[1], " ")
-	for _, expected := range []string{"dir=in", "action=allow", "protocol=TCP", "profile=private", "remoteip=localsubnet", "localport=80,443,8080-8179", "group=DevLAN Managed"} {
+	for _, expected := range []string{"name=DevLAN", "dir=in", "action=allow", "protocol=TCP", "profile=private", "remoteip=localsubnet", "localport=80,443,8080-8179", "description=Managed by DevLAN; do not edit."} {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("propriedade %q ausente: %s", expected, joined)
 		}
+	}
+}
+
+func TestSystemFirewallRecognizesLocalizedMissingRuleFromRunnerError(t *testing.T) {
+	spec := DefaultFirewallSpec()
+	runner := &firewallTestRunner{showErr: errors.New("netsh: exit status 1: Nenhuma regra correspondente aos critérios especificados.")}
+	if err := (SystemFirewall{Runner: runner}).Reconcile(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 2 || runner.calls[1][2] != "add" {
+		t.Fatalf("saída localizada deveria acionar criação da regra: %#v", runner.calls)
 	}
 }
 

@@ -1,10 +1,17 @@
 # Plano de substituição do roteamento por subpath
 
+> Documento histórico anterior ao Marco 8. A fronteira de execução foi
+> consolidada em um único Caddy WSL com rede espelhada; consulte
+> [ADR 0005](adr/0005-caddy-unico-wsl-mirrored.md),
+> [ARCHITECTURE.md](ARCHITECTURE.md) e [ROADMAP.md](ROADMAP.md) para o contrato
+> vigente. Este plano permanece apenas como registro das decisões que levaram
+> à remoção de subpath/host.
+
 ## Status e documentos relacionados
 
-Este documento define o estado desejado; não afirma que ele já está
-implementado. A tasklist canônica está em [ROADMAP.md](ROADMAP.md) e os achados
-transversais em
+Este documento registra o contrato vigente e as decisões que o antecederam.
+O smoke real dependente de Windows/WSL continua opt-in. A tasklist canônica
+está em [ROADMAP.md](ROADMAP.md) e os achados transversais em
 [ENGINEERING-HARDENING-PLAN.md](ENGINEERING-HARDENING-PLAN.md).
 
 ## Decisão final
@@ -31,7 +38,9 @@ Consequências:
 - DNS interno e Ubuntu Server ficam fora deste plano.
 
 Essa simplificação evita apresentar como escolha dois endereços que podem e
-devem coexistir. Também elimina branches, comandos e estados impossíveis.
+devem coexistir. O Marco 8 mantém o control plane no Windows, mas consolida a
+borda em um único Caddy WSL; os artefatos do desenho anterior só existem para
+leitura/rollback de upgrades.
 
 ## Motivação
 
@@ -51,7 +60,7 @@ depender de `Referer` nem reescrever HTML, CSS ou JavaScript.
 ┌──────────────────────────── Windows ────────────────────────────┐
 │ UI/CLI/serviço DevLAN (control plane e estado autoritativo)     │
 │   ├─ servidor web: SPA + API em porta administrativa            │
-│   ├─ Caddy Windows: *.localhost + portas LAN + TLS              │
+│   ├─ Caddy WSL único: *.localhost + portas LAN + TLS             │
 │   ├─ Firewall/CA/startup/update                                 │
 │   └─ adapter WSL via wsl.exe                                   │
 └──────────────────────────────┬──────────────────────────────────┘
@@ -64,16 +73,16 @@ depender de `Referer` nem reescrever HTML, CSS ou JavaScript.
 
 O núcleo continua no Windows. O WSL executa as responsabilidades que dependem
 do filesystem/runtimes Linux. Essa fronteira já corresponde ao produto: o
-estado, UI, serviço, firewall, CA e Caddy de borda são Windows; Caddy interno,
-PHP e projetos são Linux.
+estado, UI, serviço, firewall e CA são Windows; o Caddy de borda, PHP e
+projetos são Linux.
 
 ### Por que não instalar o núcleo inteiro no WSL
 
 Mover o control plane para o WSL aproxima o núcleo dos projetos, mas desloca
 para o lado errado as responsabilidades mais privilegiadas e específicas:
 
-- firewall, perfil de rede, serviço/startup, Caddy de borda e CA pertencem ao
-  Windows;
+- firewall, perfil de rede, serviço/startup e CA pertencem ao Windows; o Caddy
+  de borda pertence ao WSL;
 - Wails/tray continuam sendo processos Windows e precisariam de IPC com WSL;
 - estado, token, lifecycle e updates passariam a atravessar dois sistemas;
 - um daemon no WSL depende de inicialização/disponibilidade da distribuição;
@@ -118,10 +127,10 @@ https://devlan.localhost/
 ```
 
 `3210` é o default planejado e deve ser configurável. A porta administrativa é
-reservada antes do pool de projetos, das portas de runtime e dos Caddys. A URL
-por host passa pelo Caddy Windows; a URL por porta chega diretamente ao servidor
-web Go. Ambas atendem o mesmo build e o mesmo contrato HTTP, sem backends de UI
-duplicados.
+reservada antes do pool de projetos e das portas de runtime. A URL por host
+passa pelo Caddy WSL único até `127.0.0.1:ui_port`; a URL por porta chega
+diretamente ao servidor web Go. Ambas atendem o mesmo build e o mesmo contrato
+HTTP, sem backends de UI duplicados.
 
 ### Papel do Wails
 
@@ -198,7 +207,7 @@ esse fluxo.
 Gerenciar a origem local significa:
 
 - normalizar o nome do projeto e impedir duplicidade;
-- gerar `https://nome.localhost` no Caddy Windows;
+- gerar `https://nome.localhost` no Caddy WSL único;
 - aceitar esse virtual host somente de loopback;
 - emitir certificado pela CA local e diagnosticar sua confiança;
 - encaminhar ao projeto correto no WSL, sempre na raiz `/`;
@@ -222,8 +231,8 @@ http://192.168.10.77:8080/ -> projeto A
 http://192.168.10.77:8081/ -> projeto B
 ```
 
-O Caddy Windows remove headers internos enviados pelo cliente, adiciona uma
-identidade controlada e encaminha ao Caddy WSL. O projeto ocupa `/`.
+O Caddy WSL único remove headers internos enviados pelo cliente, reconstrói os
+forwarded headers confiáveis e serve o projeto diretamente na raiz `/`.
 
 Requisitos:
 
@@ -369,9 +378,9 @@ Não há seletor de modo, hostname customizado, suffix, DNS ou subpath. Toda
 mutação passa por `internal/app.App`; frontend não chama `netsh` ou Caddy.
 
 A própria UI abre por `https://devlan.localhost/` ou pela porta administrativa.
-Seu estado de saúde mostra separadamente servidor web, API, Caddy Windows,
-Caddy WSL, CA e firewall; a UI não pode declarar o sistema saudável apenas
-porque seus assets carregaram.
+Seu estado de saúde mostra separadamente servidor web, API, Caddy WSL único,
+systemd, mirrored networking, CA e firewall; a UI não pode declarar o sistema
+saudável apenas porque seus assets carregaram.
 
 ## Estratégia de testes
 
@@ -388,9 +397,9 @@ porque seus assets carregaram.
 ### Integração
 
 Duas fixtures expõem os mesmos assets, redirect, endpoint de origem e
-WebSocket. Validar simultaneamente `.localhost` e portas distintas com Caddys
-reais: raiz `/`, assets sem `Referer`, redirects, HTTPS, HMR, cookies, spoof de
-headers, falhas transacionais e healthcheck.
+WebSocket. Validar simultaneamente `.localhost` e portas distintas com um
+Caddy WSL real: raiz `/`, assets sem `Referer`, redirects, HTTPS, HMR, cookies,
+spoof de headers, falhas transacionais e healthcheck.
 
 Para a interface, testar as duas origens, history fallback, version mismatch,
 Host/Origin inválidos, CSRF, CSP, sessão independente, API indisponível e

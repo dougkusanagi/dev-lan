@@ -101,22 +101,31 @@ func FirewallSpecForConfig(cfg domain.Config) FirewallSpec {
 	if count == 0 {
 		count = 100
 	}
-	windowsPort, httpsPort := cfg.WindowsPort, cfg.HTTPSPort
-	if windowsPort == 0 {
-		windowsPort = 80
-	}
-	if httpsPort == 0 {
-		httpsPort = 443
-	}
+	// M8 removes the Windows edge and therefore removes the configurable host
+	// listener from the policy. The unified Caddy binds these two ports in WSL;
+	// legacy windows_port/https_port values remain readable for migration only.
+	windowsPort, httpsPort := 80, 443
 	spec := DefaultFirewallSpec()
 	spec.Ports = []int{windowsPort, httpsPort}
 	spec.Ranges = []PortRange{{From: base, To: base + count - 1}}
+	uiPort := cfg.UIPort
+	activePaths := make(map[string]struct{}, len(cfg.Projects))
 	for _, project := range cfg.Projects {
+		activePaths[project.Path] = struct{}{}
 		if project.RoutePort != nil && *project.RoutePort > 0 && !portInRanges(*project.RoutePort, spec.Ranges) {
-			spec.Ports = append(spec.Ports, *project.RoutePort)
+			if *project.RoutePort != uiPort {
+				spec.Ports = append(spec.Ports, *project.RoutePort)
+			}
 		}
 	}
-	for _, port := range cfg.RoutePortAllocations {
+	for path, port := range cfg.RoutePortAllocations {
+		// Allocations are intentionally retained as orphan-prune state. They
+		// must not become firewall openings after their project disappears. An
+		// explicit project override is already covered above; automatic active
+		// projects may use the pool range, which is covered compactly there.
+		if _, active := activePaths[path]; !active || port == uiPort {
+			continue
+		}
 		if !portInRanges(port, spec.Ranges) {
 			spec.Ports = append(spec.Ports, port)
 		}
@@ -244,8 +253,35 @@ func (spec FirewallSpec) localPortExpression() string {
 func (rule FirewallRuleState) managed(spec FirewallSpec) bool {
 	spec = normalizeFirewallSpec(spec)
 	return strings.EqualFold(strings.TrimSpace(rule.Name), spec.RuleName) &&
-		strings.EqualFold(strings.TrimSpace(rule.Group), spec.RuleGroup) &&
+		(strings.TrimSpace(rule.Group) == "" || strings.EqualFold(strings.TrimSpace(rule.Group), spec.RuleGroup)) &&
 		strings.EqualFold(strings.TrimSpace(rule.Description), spec.Description)
+}
+
+// legacyDevLANRule recognizes the narrowly-scoped rule created by DevLAN
+// releases before managed group/description metadata existed. Keeping this
+// predicate strict lets upgrades adopt that rule without taking ownership of
+// an unrelated rule that merely happens to use the same display name.
+func (rule FirewallRuleState) legacyDevLANRule(spec FirewallSpec) bool {
+	spec = normalizeFirewallSpec(spec)
+	return equalsFold(rule.Name, spec.RuleName) &&
+		strings.TrimSpace(rule.Group) == "" &&
+		strings.TrimSpace(rule.Description) == "" &&
+		equalsAnyFold(rule.Enabled, "yes", "sim") &&
+		equalsAnyFold(rule.Direction, "in", "entrada") &&
+		equalsAnyFold(rule.Action, "allow", "permitir") &&
+		equalsFold(rule.Protocol, "tcp") &&
+		equalsPorts(rule.LocalPorts, "80,443") &&
+		equalsAnyFold(rule.Profile, "private", "privado", "particular") &&
+		equalsAnyFold(rule.RemoteIP, "localsubnet", "sub-rede local", "rede local")
+}
+
+func equalsAnyFold(value string, candidates ...string) bool {
+	for _, candidate := range candidates {
+		if equalsFold(value, candidate) {
+			return true
+		}
+	}
+	return false
 }
 
 func (rule FirewallRuleState) Matches(spec FirewallSpec) bool {
@@ -295,7 +331,10 @@ func (s SystemFirewall) Inspect(ctx context.Context) (FirewallRuleState, error) 
 	}
 	out, err := s.runner().Run(ctx, "advfirewall", "firewall", "show", "rule", "name="+FirewallRuleName, "verbose")
 	if err != nil {
-		if firewallOutputHasNoRules(out) {
+		// ExecRunner preserves native command diagnostics in the returned error
+		// when netsh exits non-zero. Localized "no matching rule" messages are
+		// therefore commonly present in err rather than out.
+		if firewallOutputHasNoRules(out) || firewallOutputHasNoRules(err.Error()) {
 			return FirewallRuleState{}, ErrFirewallNotFound
 		}
 		return FirewallRuleState{}, err
@@ -307,6 +346,14 @@ func (s SystemFirewall) Inspect(ctx context.Context) (FirewallRuleState, error) 
 	managedSpec := DefaultFirewallSpec()
 	for _, rule := range rules {
 		if rule.managed(managedSpec) {
+			return rule, nil
+		}
+	}
+	// Prefer reporting any non-legacy collision. Reconcile may replace legacy
+	// rules by name, so it must never do that when a third-party rule is mixed
+	// into the same display-name set.
+	for _, rule := range rules {
+		if !rule.legacyDevLANRule(managedSpec) {
 			return rule, nil
 		}
 	}
@@ -397,7 +444,14 @@ func (s SystemFirewall) Reconcile(ctx context.Context, spec FirewallSpec) error 
 	current, err := s.Inspect(ctx)
 	if err == nil {
 		if !current.managed(spec) {
-			return fmt.Errorf("%w: nome=%q grupo=%q descrição=%q", ErrFirewallConflict, current.Name, current.Group, current.Description)
+			if !current.legacyDevLANRule(spec) {
+				return fmt.Errorf("%w: nome=%q grupo=%q descrição=%q", ErrFirewallConflict, current.Name, current.Group, current.Description)
+			}
+			if _, err = s.runner().Run(ctx, "advfirewall", "firewall", "delete", "rule", "name="+spec.RuleName); err != nil {
+				return fmt.Errorf("remover regra legada do firewall: %w", err)
+			}
+			_, err = s.runner().Run(ctx, firewallAddArguments(spec)...)
+			return err
 		}
 		if current.Matches(spec) {
 			return nil
@@ -417,7 +471,7 @@ func firewallSetArguments(spec FirewallSpec) []string {
 }
 
 func firewallAddArguments(spec FirewallSpec) []string {
-	return append([]string{"advfirewall", "firewall", "add", "rule"}, firewallProperties(spec)...)
+	return append([]string{"advfirewall", "firewall", "add", "rule", "name=" + spec.RuleName}, firewallProperties(spec)...)
 }
 
 func firewallProperties(spec FirewallSpec) []string {
@@ -429,7 +483,6 @@ func firewallProperties(spec FirewallSpec) []string {
 		"localport=" + spec.localPortExpression(),
 		"profile=" + strings.ToLower(spec.Profile),
 		"remoteip=" + strings.ToLower(spec.RemoteIP),
-		"group=" + spec.RuleGroup,
 		"description=" + spec.Description,
 	}
 }
@@ -448,7 +501,8 @@ func (s SystemFirewall) Remove(ctx context.Context) error {
 	if !rule.managed(DefaultFirewallSpec()) {
 		return fmt.Errorf("%w: regra %q não é gerenciada pelo DevLAN", ErrFirewallConflict, rule.Name)
 	}
-	_, err = s.runner().Run(ctx, "advfirewall", "firewall", "delete", "rule", "name="+FirewallRuleName, "group="+FirewallRuleGroup)
+	_, err = s.runner().Run(ctx, "advfirewall", "firewall", "delete", "rule", "name="+FirewallRuleName,
+		"dir=in", "protocol=TCP", "localport="+rule.LocalPorts, "profile=private", "remoteip=localsubnet")
 	return err
 }
 
