@@ -28,6 +28,11 @@ import (
 	"github.com/dougkusanagi/dev-lan/internal/telemetry"
 )
 
+// ErrPasswordHashUnavailable is returned before any configuration write when
+// Caddy cannot produce a password hash. A runtime failure must never cause a
+// plaintext credential to be stored as a fallback.
+var ErrPasswordHashUnavailable = errors.New("não foi possível gerar o hash da senha; credencial não persistida")
+
 type App struct {
 	Store     config.Store
 	Detector  detect.Detector
@@ -42,9 +47,9 @@ type App struct {
 	Caddy        platform.CaddyClient
 	WindowsCaddy platform.CaddyClient
 	WSLCaddy     platform.CaddyClient
-	// Firewall accepts both the range-aware FirewallReconciler and the legacy
-	// FirewallManager so tests and older integrations can inject either adapter.
-	Firewall any
+	// Firewall is the small compatibility port. Range-aware implementations may
+	// additionally implement platform.FirewallReconciler.
+	Firewall platform.FirewallManager
 	// ExternalListeners is injectable because a port scan is a host concern,
 	// while the allocation policy itself remains pure. Production uses the
 	// platform adapter; tests can provide a deterministic snapshot.
@@ -80,7 +85,19 @@ func (a *App) edgeCaddy() platform.CaddyClient {
 
 type mockRunner struct{}
 
-func (mockRunner) Run(context.Context, ...string) (string, error) { return "", nil }
+func (mockRunner) Run(context.Context, ...string) (string, error) {
+	// Returning a non-secret sentinel also lets auth characterization tests
+	// exercise the successful hash path without starting Caddy.
+	return "$2a$10$devlan-test-hash", nil
+}
+
+// mockFirewall is selected only by DEVLAN_TEST_MOCK. Keeping this adapter in
+// the composition root prevents unit tests from invoking netsh or PowerShell,
+// which otherwise causes an interactive Windows Defender Firewall prompt.
+type mockFirewall struct{}
+
+func (mockFirewall) Ensure(context.Context, ...int) error { return nil }
+func (mockFirewall) Remove(context.Context) error         { return nil }
 
 func New(dataDir string) *App {
 	distribution := ""
@@ -92,6 +109,10 @@ func New(dataDir string) *App {
 	wslCaddy := platform.NewWSLCaddy(wsl)
 	if os.Getenv("DEVLAN_TEST_MOCK") == "1" {
 		wslCaddy = platform.CaddyClient{Runner: mockRunner{}, WSL: true}
+	}
+	var firewall platform.FirewallManager = platform.CompositeFirewall{}
+	if os.Getenv("DEVLAN_TEST_MOCK") == "1" {
+		firewall = mockFirewall{}
 	}
 	return &App{
 		Store:     config.NewStore(dataDir),
@@ -110,7 +131,7 @@ func New(dataDir string) *App {
 		// explicitly testing or rolling back a migration.
 		WindowsCaddy:      platform.CaddyClient{},
 		WSLCaddy:          platform.CaddyClient{},
-		Firewall:          platform.CompositeFirewall{},
+		Firewall:          firewall,
 		ExternalListeners: platform.ListeningTCPPorts,
 		Now:               time.Now,
 		WSLConfigPath:     platform.UserWSLConfigPath(),
@@ -134,11 +155,7 @@ func (a *App) ensureFirewall(ctx context.Context, ports ...int) error {
 	if a.Firewall == nil {
 		return platform.SystemFirewall{}.Ensure(ctx, ports...)
 	}
-	manager, ok := a.Firewall.(platform.FirewallManager)
-	if !ok {
-		return fmt.Errorf("adapter de firewall legado não configurado")
-	}
-	return manager.Ensure(ctx, ports...)
+	return a.Firewall.Ensure(ctx, ports...)
 }
 
 func (a *App) ensureFirewallSpec(ctx context.Context, cfg domain.Config) error {
@@ -3081,52 +3098,6 @@ func (a *App) UnexposeProject(ctx context.Context, selector string) (ApplyResult
 	return result, name, err
 }
 
-func (a *App) SetAuth(ctx context.Context, selector string, enabled bool, username, password string) (ApplyResult, error) {
-	cfg, err := a.Store.Load()
-	if err != nil {
-		return ApplyResult{}, err
-	}
-	var hash string
-	if password != "" {
-		if caddyClient := a.edgeCaddy(); caddyClient.Runner != nil {
-			h, err := caddyClient.HashPassword(ctx, password)
-			if err == nil && h != "" {
-				hash = strings.TrimSpace(h)
-			}
-		}
-		if hash == "" {
-			hash = password
-		}
-	}
-	user := domain.AuthUser{Username: username, PasswordHash: hash}
-	if selector == "default" || selector == "" {
-		if username != "" {
-			cfg.AuthUsers = []domain.AuthUser{user}
-		}
-	} else {
-		cfg, name, index, err := a.materializeProject(ctx, cfg, selector)
-		if err != nil {
-			return ApplyResult{}, err
-		}
-		cfg.Projects[index].AuthEnabled = &enabled
-		if username != "" {
-			cfg.Projects[index].AuthUsers = []domain.AuthUser{user}
-		}
-		selector = name
-	}
-	result, err := a.saveAndApply(ctx, cfg, true)
-	if err == nil {
-		_ = a.appendLog("auth %s enabled=%t user=%s", selector, enabled, username)
-		_ = a.Store.AppendSecurityAudit("AUTH_SET", fmt.Sprintf("target=%s enabled=%t user=%s", selector, enabled, username))
-	}
-	return result, err
-}
-
-func (a *App) DisableAuth(ctx context.Context, selector string) (ApplyResult, error) {
-	disabled := false
-	return a.SetAuth(ctx, selector, disabled, "", "")
-}
-
 func (a *App) CAInfo(ctx context.Context) (map[string]string, error) {
 	path := a.Store.Paths().CARootExport
 	if _, err := os.Stat(path); err != nil {
@@ -3289,39 +3260,12 @@ func (a *App) DiagnosticBundle(ctx context.Context, targetPath string) (string, 
 	if err != nil {
 		return "", fmt.Errorf("serializar inventário WSL: %w", err)
 	}
-	compatibility := a.WSLCompatibility(ctx)
-	topologySnapshot := map[string]any{
-		"topology":      a.CaddyTopologyStatus(ctx),
-		"caddy":         a.CaddyStatus(ctx),
-		"compatibility": compatibility,
-	}
-	firewallHealthy, firewallErr := a.FirewallHealthy(ctx, cfg)
-	firewallSnapshot := map[string]any{
-		"spec":    platform.FirewallSpecForConfig(cfg),
-		"healthy": firewallHealthy,
-	}
-	if firewallErr != nil {
-		firewallSnapshot["detail"] = firewallErr.Error()
-	}
-	topologySnapshot["firewall"] = firewallSnapshot
-	switch composite := a.Firewall.(type) {
-	case platform.CompositeFirewall:
-		topologySnapshot["hyperv"] = composite.HyperVStatus(ctx, platform.FirewallSpecForConfig(cfg))
-	case *platform.CompositeFirewall:
-		if composite != nil {
-			topologySnapshot["hyperv"] = composite.HyperVStatus(ctx, platform.FirewallSpecForConfig(cfg))
-		}
-	}
-	if caInfo, caErr := a.CAInfo(ctx); caErr == nil {
-		topologySnapshot["ca"] = caInfo
-	} else {
-		topologySnapshot["ca"] = map[string]any{"error": caErr.Error()}
-	}
+	topologySnapshot := a.Topology(ctx)
 	topologyData, err := json.MarshalIndent(topologySnapshot, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("serializar topologia M8: %w", err)
 	}
-	firewallData, err := json.MarshalIndent(firewallSnapshot, "", "  ")
+	firewallData, err := json.MarshalIndent(topologySnapshot.Firewall, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("serializar estado de firewall: %w", err)
 	}

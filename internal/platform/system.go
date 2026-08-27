@@ -72,7 +72,25 @@ func isPrivateIPv4(ip net.IP) bool {
 }
 
 func IsPortAvailable(port int) bool {
-	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
+	if port < 1 || port > 65535 {
+		return false
+	}
+	// Binding 0.0.0.0, even momentarily, makes Windows classify the test
+	// executable as a public listener and can display an interactive Defender
+	// Firewall prompt. netstat is read-only and reports listeners on every host
+	// interface, so it is both safer and more accurate for the Windows control
+	// plane.
+	if ports, err := ListeningTCPPorts(context.Background()); err == nil {
+		for _, occupied := range ports {
+			if occupied == port {
+				return false
+			}
+		}
+		return true
+	}
+	// A loopback-only fallback cannot cause a LAN firewall prompt. It is used
+	// only if querying the OS listener table is unavailable.
+	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	if err != nil {
 		return false
 	}

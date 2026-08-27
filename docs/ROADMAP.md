@@ -11,8 +11,6 @@ Plano: [Refatoração Go orientada a testes](plans/GO-REFACTORING.md).
 
 - [ ] `R-01` Congelar contratos observáveis com testes de caracterização para
   CLI, HTTP, persistência, Caddy e fluxos críticos de `app.App`.
-- [ ] `R-02` Impedir qualquer persistência de senha em texto puro quando o
-  hashing do Caddy falhar; adicionar teste de falha e migração segura. **P0**
 - [ ] `R-03` Dividir `internal/app`, `internal/api`, `cmd/devlan` e arquivos de
   domínio por responsabilidade sem mudar pacotes ou comportamento.
 - [ ] `R-04` Substituir `any`, campos públicos de compatibilidade e estado global

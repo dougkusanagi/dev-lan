@@ -372,34 +372,8 @@ func buildSystemStatusView(cfg domain.Config, phpVersions []app.PHPVersionStatus
 // BuildTopologyView is the explicit M8 diagnostic boundary. The aggregate
 // status remains compact for polling; this endpoint carries the detailed,
 // independently observable state needed by doctor/repair and support tools.
-func BuildTopologyView(ctx context.Context, service *app.App) map[string]any {
-	cfg, cfgErr := service.Store.Load()
-	if cfgErr != nil {
-		return map[string]any{"error": cfgErr.Error()}
-	}
-	firewallSpec := platform.FirewallSpecForConfig(cfg)
-	firewallOK, firewallErr := service.FirewallHealthy(ctx, cfg)
-	result := map[string]any{
-		"topology":      service.CaddyTopologyStatus(ctx),
-		"caddy":         service.CaddyStatus(ctx),
-		"compatibility": service.WSLCompatibility(ctx),
-		"firewall": map[string]any{
-			"healthy": firewallOK,
-			"spec":    firewallSpec,
-		},
-	}
-	if firewallErr != nil {
-		result["firewall"].(map[string]any)["detail"] = firewallErr.Error()
-	}
-	if composite, ok := service.Firewall.(platform.CompositeFirewall); ok {
-		result["hyperv"] = composite.HyperVStatus(ctx, firewallSpec)
-	} else if composite, ok := service.Firewall.(*platform.CompositeFirewall); ok && composite != nil {
-		result["hyperv"] = composite.HyperVStatus(ctx, firewallSpec)
-	}
-	if ca, caErr := service.CAInfo(ctx); caErr == nil {
-		result["ca"] = ca
-	}
-	return result
+func BuildTopologyView(ctx context.Context, service *app.App) app.TopologySnapshot {
+	return service.Topology(ctx)
 }
 
 func serviceCaddyStatus(ctx context.Context, service *app.App) platform.CaddyServiceStatus {

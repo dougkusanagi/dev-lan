@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"strings"
@@ -11,8 +12,8 @@ import (
 )
 
 // OperationState is the transport-neutral progress record used by HTTP and
-// Wails. ProjectState is intentionally any so the application layer does not
-// import the API read model and create a package cycle.
+// Wails. ProjectState is JSON at the transport boundary so the application
+// layer does not import the API read model and create a package cycle.
 type OperationState struct {
 	OperationID  string
 	Operation    string
@@ -21,7 +22,7 @@ type OperationState struct {
 	Phase        string
 	Status       string
 	Revision     uint64
-	ProjectState any
+	ProjectState json.RawMessage
 	Warnings     []string
 	Error        string
 	StartedAt    time.Time
@@ -96,7 +97,7 @@ func (a *App) BeginOperation(id, operation, project string) (OperationState, boo
 	return cloneOperationState(state), false, nil
 }
 
-func (a *App) UpdateOperation(id, phase, status string, revision uint64, projectState any, warnings []string, operationErr error) OperationState {
+func (a *App) UpdateOperation(id, phase, status string, revision uint64, projectState json.RawMessage, warnings []string, operationErr error) OperationState {
 	a.operationMu.Lock()
 	defer a.operationMu.Unlock()
 	state, ok := a.operations[normalizeOperationID(id)]
@@ -123,8 +124,8 @@ func (a *App) UpdateOperation(id, phase, status string, revision uint64, project
 	if revision > state.Revision {
 		state.Revision = revision
 	}
-	if projectState != nil {
-		state.ProjectState = projectState
+	if len(projectState) > 0 {
+		state.ProjectState = append(json.RawMessage(nil), projectState...)
 	}
 	if warnings != nil {
 		state.Warnings = append([]string(nil), warnings...)

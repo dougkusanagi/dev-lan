@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -17,7 +18,7 @@ func TestOperationIDsAreIdempotentAndRetainTerminalState(t *testing.T) {
 		t.Fatalf("repetição não foi idempotente: %#v existed=%t err=%v", second, existed, err)
 	}
 
-	terminal := service.UpdateOperation("same-operation", "ready", "ready", 9, map[string]string{"state": "authoritative"}, []string{"aviso"}, nil)
+	terminal := service.UpdateOperation("same-operation", "ready", "ready", 9, json.RawMessage(`{"state":"authoritative"}`), []string{"aviso"}, nil)
 	if terminal.Revision != 9 || terminal.FinishedAt.IsZero() || terminal.ProjectState == nil {
 		t.Fatalf("estado terminal incompleto: %#v", terminal)
 	}

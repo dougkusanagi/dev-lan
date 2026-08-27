@@ -491,6 +491,15 @@ type CompositeFirewall struct {
 	HyperV  HyperVFirewall
 }
 
+// Ensure preserves the legacy port while routing normal callers through the
+// complete range-aware reconciliation path. Callers that need exact desired
+// state should use FirewallReconciler.Reconcile.
+func (f CompositeFirewall) Ensure(ctx context.Context, ports ...int) error {
+	spec := DefaultFirewallSpec()
+	spec.Ports = append([]int(nil), ports...)
+	return f.Reconcile(ctx, spec)
+}
+
 func (f CompositeFirewall) Reconcile(ctx context.Context, spec FirewallSpec) error {
 	if err := f.Windows.Reconcile(ctx, spec); err != nil && runtime.GOOS == "windows" {
 		return err

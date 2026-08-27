@@ -13,11 +13,7 @@ import (
 type operationWork func(context.Context) (revision uint64, warnings []string, workErr error)
 
 func currentRevision(service *app.App) uint64 {
-	cfg, err := service.Store.Load()
-	if err != nil {
-		return 0
-	}
-	return cfg.Revision
+	return service.Revision()
 }
 
 func operationIDOrNew(id string) string {

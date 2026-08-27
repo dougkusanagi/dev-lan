@@ -19,6 +19,9 @@ jobs:
           go-version-file: go.mod
       - run: go test ./...
       - run: go vet ./...
+      - name: Check dependency boundaries
+        shell: pwsh
+        run: ./scripts/check-dependencies.ps1
       - if: matrix.os == 'ubuntu-latest'
         env:
           CGO_ENABLED: 1

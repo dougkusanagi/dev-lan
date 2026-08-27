@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,6 +67,8 @@ func TestParkDiscoversOnlyLaravelChildren(t *testing.T) {
 	service.Detector = detect.Detector{Inspector: inspector}
 	service.WindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
 	service.WSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
+	service.Caddy = platform.CaddyClient{Runner: hashingRunner{}, WSL: true}
+	service.Caddy = platform.CaddyClient{Runner: hashingRunner{}, WSL: true}
 	if _, _, err := service.Park(context.Background(), "/home/dev"); err != nil {
 		t.Fatal(err)
 	}
@@ -83,6 +86,75 @@ func TestParkDiscoversOnlyLaravelChildren(t *testing.T) {
 	if _, err := effective.Resolve("financeiro"); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestSetAuthNeverPersistsPlaintextWhenHashingFails(t *testing.T) {
+	t.Setenv("DEVLAN_TEST_MOCK", "1")
+	service := New(t.TempDir())
+	service.Caddy = platform.CaddyClient{Runner: failingRunner{}, WSL: true}
+	ctx := context.Background()
+	if _, err := service.SetAuth(ctx, "default", true, "admin", "plain-secret"); !errors.Is(err, ErrPasswordHashUnavailable) {
+		t.Fatalf("esperava falha de hashing segura, obtive %v", err)
+	}
+	cfg, err := service.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.AuthUsers) != 0 {
+		t.Fatalf("credencial foi persistida após falha de hashing: %#v", cfg.AuthUsers)
+	}
+}
+
+func TestMigrateLegacyAuthIsAtomicAndHashesEveryCredential(t *testing.T) {
+	t.Setenv("DEVLAN_TEST_MOCK", "1")
+	service := New(t.TempDir())
+	service.Caddy = platform.CaddyClient{Runner: hashingRunner{}, WSL: true}
+	cfg := domain.NewConfig()
+	cfg.AuthUsers = []domain.AuthUser{{Username: "global", PasswordHash: "legacy-global"}}
+	cfg.Projects = []domain.Project{{Name: "site", Path: t.TempDir(), AuthUsers: []domain.AuthUser{{Username: "site", PasswordHash: "legacy-site"}}}}
+	if err := service.Store.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.MigrateLegacyAuth(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := service.Config()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, user := range append(loaded.AuthUsers, loaded.Projects[0].AuthUsers...) {
+		if !isCaddyPasswordHash(user.PasswordHash) || strings.Contains(user.PasswordHash, "legacy-") {
+			t.Fatalf("credencial não migrada: %#v", user)
+		}
+	}
+
+	service.Caddy = platform.CaddyClient{Runner: failingRunner{}, WSL: true}
+	loaded.AuthUsers[0].PasswordHash = "still-plain"
+	if err := service.Store.Save(loaded); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.MigrateLegacyAuth(context.Background()); !errors.Is(err, ErrPasswordHashUnavailable) {
+		t.Fatalf("esperava falha segura de migração: %v", err)
+	}
+	afterFailure, err := service.Config()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterFailure.AuthUsers[0].PasswordHash != "still-plain" {
+		t.Fatalf("migração parcial persistiu estado inesperado: %#v", afterFailure.AuthUsers)
+	}
+}
+
+type failingRunner struct{}
+
+func (failingRunner) Run(context.Context, ...string) (string, error) {
+	return "", errors.New("caddy indisponível")
+}
+
+type hashingRunner struct{}
+
+func (hashingRunner) Run(context.Context, ...string) (string, error) {
+	return "$2a$10$characterization-hash", nil
 }
 
 func TestNewLoadsConfiguredWSLDistribution(t *testing.T) {
@@ -412,6 +484,7 @@ func TestPhase4AppMethods(t *testing.T) {
 	t.Setenv("DEVLAN_TEST_MOCK", "1")
 	ctx := context.Background()
 	service := New(t.TempDir())
+	service.Caddy = platform.CaddyClient{Runner: hashingRunner{}, WSL: true}
 	service.Detector = detect.Detector{Inspector: detect.StaticInspector{
 		Files: map[string]bool{
 			"/home/dev/app/dist/index.html": true,

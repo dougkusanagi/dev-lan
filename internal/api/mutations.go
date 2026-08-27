@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/dougkusanagi/dev-lan/internal/app"
@@ -26,11 +27,10 @@ func operationResult(ctx context.Context, service *app.App, state app.OperationS
 	} else {
 		result.ObservedAt = formatTime(state.UpdatedAt)
 	}
-	if state.ProjectState != nil {
-		if project, ok := state.ProjectState.(ProjectView); ok {
+	if len(state.ProjectState) > 0 {
+		var project ProjectView
+		if err := json.Unmarshal(state.ProjectState, &project); err == nil {
 			result.ProjectState = &project
-		} else if project, ok := state.ProjectState.(*ProjectView); ok {
-			result.ProjectState = project
 		}
 	}
 	// A terminal result always tries to include a fresh authoritative project

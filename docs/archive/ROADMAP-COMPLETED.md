@@ -10,6 +10,13 @@ Baseline em 26/08/2026: `go test ./...`, `go vet ./...` e `npm run build`
 passavam. Decisões substituídas por marcos posteriores não devem ser reescritas
 retroativamente.
 
+## Refatoração incremental da arquitetura
+
+- [x] `R-02` Impedir persistência de senha em texto puro se o hashing do Caddy
+  falhar. `SetAuth` falha fechado quando Caddy está ausente, falha ou devolve
+  hash vazio. `MigrateLegacyAuth` converte todas as credenciais legadas antes
+  de gravar e mantém o estado inalterado se qualquer hash falhar.
+
 ## Marco 0 — Decisão e rede de segurança (P0)
 
 - [x] `M0-01` Registrar ADR: todo projeto tem `.localhost` local e porta LAN;

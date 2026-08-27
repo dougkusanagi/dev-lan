@@ -1,0 +1,79 @@
+openapi: 3.0.3
+info:
+  title: DevLAN Local API
+  version: "1"
+  description: Contrato HTTP autenticado do control plane local.
+servers:
+  - url: http://127.0.0.1
+security:
+  - devlanToken: []
+paths:
+  /api/v1/health:
+    get:
+      operationId: health
+      security: []
+      responses:
+        '200':
+          description: API disponível
+  /api/v1/overview:
+    get:
+      operationId: getOverview
+      responses:
+        '200': {description: Overview consolidado, content: {application/json: {schema: {$ref: '#/components/schemas/Overview'}}}}
+  /api/v1/projects:
+    get:
+      operationId: getProjects
+      responses:
+        '200': {description: Projetos, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/ProjectInfo'}}}}}
+  /api/v1/status:
+    get:
+      operationId: getStatus
+      responses:
+        '200': {description: Status, content: {application/json: {schema: {$ref: '#/components/schemas/SystemStatus'}}}}
+  /api/v1/config:
+    get:
+      operationId: getGlobalConfig
+      responses:
+        '200': {description: Configuração global, content: {application/json: {schema: {$ref: '#/components/schemas/GlobalConfig'}}}}
+    post:
+      operationId: saveGlobalConfig
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/GlobalConfig'}}}}
+      responses: {'200': {description: Configuração salva}}
+  /api/v1/operations/{operationId}:
+    get:
+      operationId: getOperation
+      parameters:
+        - {name: operationId, in: path, required: true, schema: {type: string}}
+      responses:
+        '200': {description: Operação, content: {application/json: {schema: {$ref: '#/components/schemas/MutationResult'}}}}
+  /api/v1/topology: {get: {operationId: getTopology, responses: {'200': {description: Topologia}}}}
+  /api/v1/metrics: {get: {operationId: getMetrics, responses: {'200': {description: Métricas}}}}
+  /api/v1/php/versions: {get: {operationId: getPHPVersions, responses: {'200': {description: PHP}}}}
+  /api/v1/projects/config: {post: {operationId: saveProjectConfig, responses: {'200': {description: Configuração salva}}}}
+  /api/v1/projects/link: {post: {operationId: linkProject, responses: {'200': {description: Projeto vinculado}}}}
+  /api/v1/projects/unlink: {post: {operationId: unlinkProject, responses: {'200': {description: Projeto desvinculado}}}}
+  /api/v1/projects/hide: {post: {operationId: hideProject, responses: {'200': {description: Projeto oculto}}}}
+  /api/v1/projects/start: {post: {operationId: startDev, responses: {'200': {description: Operação aceita}}}}
+  /api/v1/projects/stop: {post: {operationId: stopDev, responses: {'200': {description: Operação aceita}}}}
+  /api/v1/projects/restart: {post: {operationId: restartDev, responses: {'200': {description: Operação aceita}}}}
+  /api/v1/projects/build: {post: {operationId: buildProject, responses: {'200': {description: Build concluído}}}}
+  /api/v1/projects/deps: {post: {operationId: installDeps, responses: {'200': {description: Dependências instaladas}}}}
+  /api/v1/projects/logs: {get: {operationId: getProjectLogs, responses: {'200': {description: Logs}}}}
+  /api/v1/parks/park: {post: {operationId: parkDir, responses: {'200': {description: Diretório estacionado}}}}
+  /api/v1/parks/unpark: {post: {operationId: unparkDir, responses: {'200': {description: Diretório reativado}}}}
+  /api/v1/events: {get: {operationId: events, responses: {'200': {description: SSE}}}}
+  /api/v1/doctor: {get: {operationId: runDoctor, responses: {'200': {description: Diagnóstico}}}}
+  /api/v1/doctor/fix: {post: {operationId: applyDoctorFix, responses: {'200': {description: Correção aplicada}}}}
+  /api/v1/reload: {post: {operationId: reload, responses: {'200': {description: Recarregado}}}}
+  /api/v1/config/export: {post: {operationId: exportConfigJSON, responses: {'200': {description: Exportação}}}}
+  /api/v1/security/trust: {post: {operationId: trustCA, responses: {'200': {description: CA confiável}}}}
+  /api/v1/security/audit: {get: {operationId: getSecurityAudit, responses: {'200': {description: Auditoria}}}}
+components:
+  securitySchemes:
+    devlanToken: {type: apiKey, in: header, name: Authorization}
+  schemas:
+    ProjectInfo: {type: object, required: [name, path, kind, mode, effectiveMode, framework, url, lanUrl, localDevUrl, localDevState, lanPreviewState, tlsEnabled, status, devRunning], properties: {name: {type: string}, path: {type: string}, kind: {type: string}, mode: {type: string}, effectiveMode: {type: string}, framework: {type: string}, url: {type: string}, lanUrl: {type: string}, localDevUrl: {type: string}, localDevState: {type: string}, lanPreviewState: {type: string}, tlsEnabled: {type: boolean}, status: {type: string}, devRunning: {type: boolean}}}
+    SystemStatus: {type: object, properties: {lanIp: {type: string}, uiPort: {type: integer}, tlsEnabled: {type: boolean}, protocolVersion: {type: integer}}}
+    Overview: {type: object, required: [projects, status, phpVersions], properties: {projects: {type: array, items: {$ref: '#/components/schemas/ProjectInfo'}}, status: {$ref: '#/components/schemas/SystemStatus'}, phpVersions: {type: array, items: {type: object}}}}
+    GlobalConfig: {type: object, properties: {defaultMode: {type: string}, windowsPort: {type: integer}, httpsPort: {type: integer}, tlsEnabled: {type: boolean}, phpDefaultVersion: {type: string}, allowlist: {type: array, items: {type: string}}}}
+    MutationResult: {type: object, properties: {operationId: {type: string}, operation: {type: string}, phase: {type: string}, status: {type: string}, revision: {type: integer}}}

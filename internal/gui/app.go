@@ -47,7 +47,7 @@ func (a *App) Startup(ctx context.Context) {
 	if _, err := a.api.Start(); err == nil {
 		a.ownsAPI = true
 	} else if !errors.Is(err, localapi.ErrAlreadyRunning) {
-		_ = a.service.Store.AppendSecurityAudit("API_GUI_WARN", "UI não iniciou a API local: "+err.Error())
+		a.service.Audit("API_GUI_WARN", "UI não iniciou a API local: "+err.Error())
 	}
 	go func() {
 		startupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -119,7 +119,7 @@ func (a *App) GetStatus() (SystemStatusView, error) {
 
 // GetTopology exposes the detailed single-edge diagnostic model to the Wails
 // shell. It delegates to the same read boundary as the HTTP API.
-func (a *App) GetTopology() (map[string]any, error) {
+func (a *App) GetTopology() (app.TopologySnapshot, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	return localapi.BuildTopologyView(ctx, a.service), nil
@@ -179,31 +179,14 @@ func (a *App) SaveGlobalConfig(view GlobalConfigView) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	cfg, err := a.service.Store.Load()
-	if err != nil {
-		return err
-	}
-
-	if view.DefaultMode != "" {
-		m, err := domain.ParseMode(view.DefaultMode)
-		if err != nil {
-			return err
-		}
-		cfg.DefaultMode = m
-	}
-	if view.WindowsPort > 0 {
-		cfg.WindowsPort = view.WindowsPort
-	}
-	if view.HTTPSPort > 0 {
-		cfg.HTTPSPort = view.HTTPSPort
-	}
-	cfg.TLSEnabled = view.TLSEnabled
-	if view.PHPDefaultVersion != "" {
-		cfg.PHPDefaultVersion = view.PHPDefaultVersion
-	}
-	cfg.Allowlist = view.Allowlist
-
-	_, err = a.service.SaveConfigAndApply(ctx, cfg, true)
+	_, err := a.service.SaveGlobalSettings(ctx, app.GlobalSettings{
+		DefaultMode:       view.DefaultMode,
+		WindowsPort:       view.WindowsPort,
+		HTTPSPort:         view.HTTPSPort,
+		TLSEnabled:        view.TLSEnabled,
+		PHPDefaultVersion: view.PHPDefaultVersion,
+		Allowlist:         view.Allowlist,
+	})
 	if err == nil {
 		localapi.InvalidateReadModelCache(a.service)
 	}
@@ -379,11 +362,7 @@ func (a *App) resultForCompleted(operation, project, operationID string, ctx con
 }
 
 func guiCurrentRevision(service *app.App) uint64 {
-	cfg, err := service.Store.Load()
-	if err != nil {
-		return 0
-	}
-	return cfg.Revision
+	return service.Revision()
 }
 
 func (a *App) LinkProject(name, path string) error {
