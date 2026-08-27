@@ -9,7 +9,9 @@ export type {
   LocalDevState,
   MetricsRange,
   MetricsSnapshot,
+  MutationResult,
   Overview,
+  OverviewMeta,
   PHPVersion,
   ProjectConfigUpdate,
   ProjectFramework,
@@ -21,6 +23,16 @@ export type {
   SystemStatus,
   TrafficPoint,
 } from './generated/api-contract';
+
+export type MutationPhase =
+  | 'accepted'
+  | 'applying'
+  | 'starting'
+  | 'ready'
+  | 'stopping'
+  | 'stopped'
+  | 'failed'
+  | 'rolled_back';
 
 export type OperationKey =
   | 'tls'
@@ -39,6 +51,7 @@ export type OperationKey =
 
 export interface PendingOperation {
   id: number;
+  operationId: string;
   key: OperationKey;
   projectName?: string;
   targetState?: boolean;

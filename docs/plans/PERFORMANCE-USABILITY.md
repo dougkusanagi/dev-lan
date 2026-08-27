@@ -1,5 +1,12 @@
 # Plano de performance e usabilidade do dashboard
 
+**Estado:** fundações assíncronas implementadas; coordenação frontend, budgets e
+matriz real acompanhados por `H-01` a `H-06` no [roadmap](../ROADMAP.md).
+
+> Esta análise preserva o diagnóstico anterior às operações com ID, polling e
+> SSE. Use-a para critérios e contexto; confirme toda afirmação sobre o estado
+> atual no código e em [STATUS.md](../STATUS.md).
+
 ## Objetivo e escopo
 
 Este documento analisa o fluxo atual do dashboard, com foco nas mutações que
@@ -355,4 +362,3 @@ O trabalho estará concluído quando TLS, start, stop e restart:
 5. não dependerem de reload manual;
 6. tiverem latência e custo WSL medidos contra budgets;
 7. possuírem cobertura de UI, contrato, concorrência e matriz Windows + WSL.
-

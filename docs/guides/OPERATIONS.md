@@ -1,7 +1,7 @@
 # Operação, recuperação e suporte
 
-Este documento descreve os recursos operacionais da Fase 6 que já estão no
-binário. O estado autoritativo continua em `%LOCALAPPDATA%/DevLAN` (ou no
+Este documento descreve os recursos operacionais disponíveis no binário. O
+estado autoritativo continua em `%LOCALAPPDATA%/DevLAN` (ou no
 valor de `DEVLAN_HOME`); os diretórios dos projetos nunca fazem parte de um
 backup ou diagnóstico automático.
 
@@ -177,8 +177,8 @@ O download é gravado em arquivo temporário, validado integralmente por
 SHA-256 e só depois publicado no destino. O comando não substitui o executável
 em execução: essa troca precisa ser feita por um instalador/serviço assinado.
 O repositório ainda não contém certificado de assinatura nem pipeline de
-release; portanto a assinatura do instalador e a substituição automática são
-explicitamente pendências da Fase 6.
+release; portanto a assinatura do instalador e a substituição automática
+continuam pendentes.
 
 ### Recuperação manual
 
@@ -190,11 +190,19 @@ explicitamente pendências da Fase 6.
 5. Se o serviço estiver corrompido, remova e instale novamente:
    `devlan service remove`, `devlan service install`.
 
-`devlan uninstall` remove firewall e arquivos gerenciados, incluindo token da
-API e fila de telemetria, mas preserva diretórios dos projetos. Em caso de
-interrupção durante a remoção, `devlan service remove` e uma nova execução de
+`devlan uninstall` desfaz as integrações e arquivos de propriedade registrada,
+incluindo firewall, token da API e fila de telemetria, restaura configurações
+compartilhadas quando não houve alteração posterior e preserva diretórios dos
+projetos. Use `devlan uninstall --dry-run` para revisar o plano; `--keep-data`
+conserva o estado para uma reinstalação, `--keep-dependencies` mantém Caddy/PHP/
+Composer/toolchains e `--purge --yes` trata resíduos legados selecionados.
+Recursos sem proveniência são preservados por segurança. Em caso de interrupção
+durante a remoção, `devlan service remove` e uma nova execução de
 `devlan uninstall` são seguros; não remova manualmente a raiz de dados antes
-de confirmar que os projetos estão fora dela.
+de confirmar que os projetos estão fora dela. A restauração de `.wslconfig` ou
+`/etc/wsl.conf` é acompanhada de instrução para executar `wsl --shutdown` ou
+reiniciar a distribuição, pois o uninstall não interrompe outras distros sem
+confirmação explícita.
 
 ## Matriz de validação
 

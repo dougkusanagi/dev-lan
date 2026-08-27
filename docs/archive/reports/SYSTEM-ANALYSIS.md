@@ -1,5 +1,8 @@
 # Relatório de Análise Técnica e Arquitetural — DevLAN
 
+> Relatório histórico. Para o estado vigente, consulte
+> [STATUS.md](../../STATUS.md) e [ARCHITECTURE.md](../../ARCHITECTURE.md).
+
 **Data:** 26 de Agosto de 2026  
 **Versão do Sistema:** DevLAN Core (Marco 8 implementado / smoke real opt-in)  
 **Ambiente Operacional:** Windows 11 + WSL 2 (Mirrored Networking) + Caddy + PHP-FPM / JS Dev Server

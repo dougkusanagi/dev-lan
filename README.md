@@ -12,7 +12,8 @@ http://192.168.1.50:8080/
 O núcleo PHP suporta Laravel, Symfony e aplicações genéricas, inclusive com
 múltiplas versões de PHP em paralelo. Sites estáticos, servidores JavaScript
 sob demanda, dashboard e menu na área de notificação já estão disponíveis; a
-operação persistente e a recuperação evoluem na Fase 6.
+operação persistente, recuperação e desinstalação conservadora também estão
+implementadas e seguem em hardening.
 
 ## Princípios
 
@@ -39,7 +40,7 @@ PHP-FPM ── projeto Laravel
 Projetos JavaScript são atendidos por um supervisor no WSL, que inicia o
 script `dev` sob demanda e encerra o processo depois de um período ocioso.
 
-## Experiência esperada no MVP
+## Fluxo principal
 
 ```powershell
 devlan install
@@ -65,13 +66,14 @@ inspecionadas ou limpas explicitamente com `devlan route allocations`.
 
 ## Documentos
 
+- [Índice e fontes de verdade](docs/README.md)
+- [Estado atual](docs/STATUS.md)
 - [Arquitetura](docs/ARCHITECTURE.md)
-- [CLI e configuração](docs/CLI-AND-CONFIG.md)
-- [Instalação](docs/INSTALL.md)
+- [CLI e configuração](docs/reference/CLI-AND-CONFIG.md)
+- [Instalação](docs/guides/INSTALL.md)
 - [Roadmap](docs/ROADMAP.md)
-- [Operação, recuperação e suporte](docs/OPERATIONS.md)
-- [Plano de reimplementação da interface Wails](docs/UI-REIMPLEMENTATION-PLAN.md)
-- [Decisões técnicas](docs/DECISIONS.md)
+- [Operação, recuperação e suporte](docs/guides/OPERATIONS.md)
+- [Decisões técnicas](docs/adr/README.md)
 
 ## Fora do escopo da primeira instalação
 
@@ -104,14 +106,14 @@ O núcleo está implementado como uma CLI Go em `cmd/devlan`. Ele cobre:
 - preparação de updates `stable`/`preview` com validação SHA-256.
 
 `devlan install` prepara os arquivos gerenciados e tenta criar as regras de
-firewall. Para uma máquina limpa, use o [bootstrap de instalação](docs/INSTALL.md):
+firewall. Para uma máquina limpa, use o [bootstrap de instalação](docs/guides/INSTALL.md):
 ele instala Go, WSL/Ubuntu, Caddy no WSL, PHP-FPM 8.5, extensões Laravel e
 Composer, compila a CLI e executa `devlan install`. Depois de salvar o trabalho
 nas distribuições, aplique `devlan topology migrate --yes`; o comando encerra
 todas as distribuições WSL. Dependências dos projetos continuam explícitas; o
 bootstrap não executa `composer install` automaticamente.
 
-Os procedimentos da Fase 6 estão em [docs/OPERATIONS.md](docs/OPERATIONS.md).
+Os procedimentos vigentes estão no [guia de operações](docs/guides/OPERATIONS.md).
 
 ## Instalação rápida via curl
 
@@ -126,7 +128,7 @@ O script de bootstrap instala o executável e suas dependências; ao final ele
 executa `devlan install`, que cria ou reconcilia a configuração gerenciada. Com
 a CLI já instalada, `devlan install` é o comando padrão e idempotente para
 configurar novamente o ambiente. O fluxo completo e as opções estão em
-[docs/INSTALL.md](docs/INSTALL.md).
+[guia de instalação](docs/guides/INSTALL.md).
 
 ## Desenvolvimento
 

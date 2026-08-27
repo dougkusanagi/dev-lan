@@ -1,5 +1,8 @@
 # Plano de desinstalação reversível
 
+**Estado:** núcleo implementado; fechamento de proveniência, rollback e matriz
+real acompanhado por `U-01` a `U-05` no [roadmap](../ROADMAP.md).
+
 ## Objetivo
 
 `devlan uninstall` deve desfazer a instalação do produto, e não apenas limpar
@@ -7,16 +10,17 @@ seu estado operacional. Ao terminar, tudo que o DevLAN criou ou modificou deve
 ter sido removido ou restaurado, enquanto projetos, distribuições WSL e recursos
 que já existiam permanecem intactos.
 
-O comando atual para o Caddy, remove regras de firewall e apaga arquivos
-gerenciados, mas não reverte `.wslconfig`/`wsl.conf`, não remove dependências
-instaladas pelo bootstrap e não retira completamente binário/PATH e artefatos do
-execution plane. O plano abaixo substitui esse contrato incompleto.
+O código já possui manifesto versionado, planner/dry-run, políticas keep/purge,
+fingerprints, restauração conservadora e helpers de trust store, PATH e
+autolimpeza. O trabalho restante é capturar toda a proveniência em instalações
+novas/legadas, fechar rollback idempotente e validar o fluxo em hosts reais. O
+contrato abaixo orienta esse fechamento.
 
 ## Contrato da CLI
 
 ```text
-devlan uninstall [--dry-run] [--keep-data] [--keep-dependencies] [--yes]
-devlan uninstall --purge --yes
+devlan uninstall [--dry-run] [--keep-data] [--keep-dependencies] [--yes] [--json]
+devlan uninstall --purge --yes [--json]
 ```
 
 - O comportamento padrão remove integrações, estado e dependências cuja
@@ -86,10 +90,11 @@ preservada para não sobrescrever uma alteração posterior do usuário.
   criada pelo DevLAN; preservar uma instalação Caddy adotada/preexistente;
 - nunca remover nem desregistrar a distribuição WSL automaticamente.
 
-Alterar `.wslconfig` pode exigir `wsl --shutdown`. O comando prepara a
-restauração, informa que todas as distribuições serão interrompidas e só aplica
-o shutdown com confirmação. Sem confirmação, termina com a etapa `pending` e
-instrução acionável, sem declarar limpeza completa.
+Alterar `.wslconfig` pode exigir `wsl --shutdown`. O uninstall restaura o
+arquivo, mas não interrompe silenciosamente todas as distribuições: o resumo
+emite um aviso acionável para executar `wsl --shutdown` (e reiniciar a distro
+quando `/etc/wsl.conf` for restaurado). Enquanto isso, a limpeza do arquivo é
+concluída, mas a aplicação da topologia fica pendente no runtime WSL.
 
 ## Ordem e recuperação
 

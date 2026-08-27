@@ -1,4 +1,4 @@
-# ADR 0004 — Interface web canônica e shell desktop opcional
+# ADR 0005 — Interface web canônica e shell desktop opcional
 
 ## Status
 

@@ -23,6 +23,7 @@ type ProjectView struct {
 	DevRunning        bool   `json:"devRunning"`
 	DevPid            int    `json:"devPid,omitempty"`
 	DevPort           int    `json:"devPort,omitempty"`
+	Revision          uint64 `json:"revision,omitempty"`
 }
 
 type SystemStatusView struct {
@@ -54,6 +55,8 @@ type SystemStatusView struct {
 	PHPVersions        []string `json:"phpVersions"`
 	TotalProjects      int      `json:"totalProjects"`
 	ProtocolVersion    int      `json:"protocolVersion"`
+	Revision           uint64   `json:"revision,omitempty"`
+	ObservedAt         string   `json:"observedAt,omitempty"`
 }
 
 // OverviewView is the single read model used by the browser polling loop. It
@@ -63,6 +66,40 @@ type OverviewView struct {
 	Projects    []ProjectView    `json:"projects"`
 	Status      SystemStatusView `json:"status"`
 	PHPVersions []PHPVersionView `json:"phpVersions"`
+	Revision    uint64           `json:"revision,omitempty"`
+	ObservedAt  string           `json:"observedAt,omitempty"`
+	Meta        *OverviewMeta    `json:"meta,omitempty"`
+}
+
+// OverviewMeta is operational read-model metadata. It contains no command
+// arguments or paths and makes stale-while-revalidate behavior measurable.
+type OverviewMeta struct {
+	Cache              string `json:"cache"`
+	HotAgeMs           int64  `json:"hotAgeMs"`
+	ColdAgeMs          int64  `json:"coldAgeMs"`
+	DurationMs         int64  `json:"durationMs"`
+	WSLCalls           uint64 `json:"wslCalls"`
+	WSLCallsDelta      uint64 `json:"wslCallsDelta"`
+	WSLDurationMs      int64  `json:"wslDurationMs"`
+	WSLDurationDeltaMs int64  `json:"wslDurationDeltaMs"`
+}
+
+// MutationResult is shared by HTTP and Wails. An accepted asynchronous
+// operation can be followed using OperationID until a terminal Phase arrives.
+type MutationResult struct {
+	OperationID  string           `json:"operationId"`
+	Operation    string           `json:"operation"`
+	Phase        string           `json:"phase"`
+	Status       string           `json:"status"`
+	Revision     uint64           `json:"revision,omitempty"`
+	ProjectState *ProjectView     `json:"projectState,omitempty"`
+	Warnings     []string         `json:"warnings,omitempty"`
+	Error        string           `json:"error,omitempty"`
+	ObservedAt   string           `json:"observedAt,omitempty"`
+	StartedAt    string           `json:"startedAt,omitempty"`
+	UpdatedAt    string           `json:"updatedAt,omitempty"`
+	DurationMs   int64            `json:"durationMs,omitempty"`
+	PhaseMs      map[string]int64 `json:"phaseMs,omitempty"`
 }
 
 type PHPVersionView struct {
@@ -91,6 +128,7 @@ type GlobalConfigView struct {
 
 type ProjectConfigUpdate struct {
 	Name          string `json:"name"`
+	OperationID   string `json:"operationId,omitempty"`
 	Mode          string `json:"mode,omitempty"`
 	PHPVersion    string `json:"phpVersion,omitempty"`
 	PHPPreset     string `json:"phpPreset,omitempty"`

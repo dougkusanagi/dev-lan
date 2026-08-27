@@ -1,4 +1,4 @@
-# ADR 0005 — Caddy único no WSL com rede espelhada
+# ADR 0006 — Caddy único no WSL com rede espelhada
 
 - Status: aceito para o Marco 8
 - Substitui: [ADR 0001 — duas origens sempre](0001-duas-origens-sempre.md), somente na fronteira de execução da borda

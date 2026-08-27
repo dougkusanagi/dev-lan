@@ -122,6 +122,53 @@ func TestDevProxyColdStartsAndReapsIdleProcess(t *testing.T) {
 	t.Fatal("servidor não foi encerrado após idle timeout")
 }
 
+func TestDevProxyReconcilesPortChangesAndRemovedProjects(t *testing.T) {
+	manager := &proxyTestManager{}
+	proxy := NewDevProxy(manager)
+	defer proxy.Close()
+	project := domain.Project{Name: "vite", Path: t.TempDir()}
+	first, second := freeTCPPort(t), freeTCPPort(t)
+	if err := proxy.Ensure(context.Background(), project, first, "npm run dev", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	oldEntry := proxy.entryFor(project.Name)
+	if err := proxy.Ensure(context.Background(), project, second, "npm run dev", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if current := proxy.entryFor(project.Name); current == nil || current == oldEntry || current.listen != second {
+		t.Fatalf("troca de porta não reconciliada: %#v", current)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(first))
+	if err != nil {
+		t.Fatalf("listener antigo permaneceu aberto: %v", err)
+	}
+	_ = listener.Close()
+	if err := proxy.Prune(map[string]struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	if proxy.Has(project.Name) {
+		t.Fatal("projeto removido manteve gateway")
+	}
+	listener, err = net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(second))
+	if err != nil {
+		t.Fatalf("listener removido permaneceu aberto: %v", err)
+	}
+	_ = listener.Close()
+}
+
+func TestDevProxyReusesReverseProxyAndTransport(t *testing.T) {
+	proxy := NewDevProxy(&proxyTestManager{})
+	defer proxy.Close()
+	project := domain.Project{Name: "vite", Path: t.TempDir()}
+	if err := proxy.Ensure(context.Background(), project, freeTCPPort(t), "npm run dev", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	entry := proxy.entryFor(project.Name)
+	if entry == nil || entry.proxy == nil || entry.proxy.Transport != proxy.transport {
+		t.Fatal("reverse proxy/transporte não foram pré-construídos")
+	}
+}
+
 func freeTCPPort(t *testing.T) int {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

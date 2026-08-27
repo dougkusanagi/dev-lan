@@ -83,9 +83,16 @@ type Paths struct {
 	WindowsPrevious string
 	WSLPrevious     string
 	LogsDir         string
+	BackupsDir      string
+	BinDir          string
+	Binary          string
+	ToolchainsDir   string
+	ToolchainMarker string
+	Distribution    string
 	SecurityLog     string
 	Lock            string
 	Manifest        string
+	InstallManifest string
 	Journal         string
 	PreviousConfig  string
 	PreviousState   string
@@ -122,9 +129,16 @@ func (s Store) Paths() Paths {
 		WindowsPrevious: filepath.Join(generated, "Caddyfile.windows.previous"),
 		WSLPrevious:     filepath.Join(generated, "Caddyfile.wsl.previous"),
 		LogsDir:         filepath.Join(s.Dir, "logs"),
+		BackupsDir:      filepath.Join(s.Dir, "backups"),
+		BinDir:          filepath.Join(s.Dir, "bin"),
+		Binary:          filepath.Join(s.Dir, "bin", "devlan.exe"),
+		ToolchainsDir:   filepath.Join(s.Dir, "toolchains"),
+		ToolchainMarker: filepath.Join(s.Dir, "toolchains", "go", ".devlan-managed"),
+		Distribution:    filepath.Join(s.Dir, "wsl-distribution"),
 		SecurityLog:     filepath.Join(s.Dir, "logs", "security.log"),
 		Lock:            filepath.Join(s.Dir, ".lock"),
 		Manifest:        filepath.Join(s.Dir, "manifest.json"),
+		InstallManifest: filepath.Join(s.Dir, "install-manifest.json"),
 		Journal:         filepath.Join(s.Dir, "journal.jsonl"),
 		PreviousConfig:  filepath.Join(s.Dir, "config.toml.previous"),
 		PreviousState:   filepath.Join(s.Dir, "state.json.previous"),
@@ -772,9 +786,22 @@ func (s Store) RemoveManagedFiles() error {
 	return s.WithLock(context.Background(), s.RemoveManagedFilesLocked)
 }
 
+// RemoveManagedFilesWithOptions preserves the entire DevLAN data root when
+// requested. The normal path removes only files owned by the Store; project
+// directories are never located below this root by contract.
+func (s Store) RemoveManagedFilesWithOptions(keepData bool) error {
+	if keepData {
+		return nil
+	}
+	return s.RemoveManagedFiles()
+}
+
 func (s Store) RemoveManagedFilesLocked() error {
 	paths := s.Paths()
-	files := []string{paths.Config, paths.State, paths.Manifest, paths.Journal, paths.PreviousConfig, paths.PreviousState, paths.APIToken, paths.APIEndpoint, paths.Telemetry, paths.TelemetryQueue, paths.CARootExport}
+	// The executable and its containing bin directory are removed by the app's
+	// deferred self-cleanup helper. Removing them here would fail while the
+	// running Windows process still has the executable open.
+	files := []string{paths.Config, paths.State, paths.Manifest, paths.InstallManifest, paths.Journal, paths.PreviousConfig, paths.PreviousState, paths.APIToken, paths.APIEndpoint, paths.Telemetry, paths.TelemetryQueue, paths.CARootExport, paths.Distribution}
 	for _, file := range files {
 		if err := os.Remove(file); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remover %s: %w", file, err)
@@ -785,6 +812,9 @@ func (s Store) RemoveManagedFilesLocked() error {
 	}
 	if err := os.RemoveAll(paths.LogsDir); err != nil {
 		return fmt.Errorf("remover logs gerenciados: %w", err)
+	}
+	if err := os.RemoveAll(paths.BackupsDir); err != nil {
+		return fmt.Errorf("remover backups gerenciados: %w", err)
 	}
 	return nil
 }

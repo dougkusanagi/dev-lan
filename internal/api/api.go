@@ -136,11 +136,12 @@ func (s *Server) Start() (Endpoint, error) {
 	}
 
 	server := &http.Server{
-		Handler:        s.Handler(token),
-		ReadTimeout:    30 * time.Second,
-		WriteTimeout:   60 * time.Second,
-		IdleTimeout:    120 * time.Second,
-		MaxHeaderBytes: 1 << 20,
+		Handler:           s.Handler(token),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 
 	if err := writeEndpoint(s.store.Paths().APIEndpoint, endpoint); err != nil {
@@ -219,6 +220,10 @@ func (s *Server) Handler(token ...string) http.Handler {
 	apiMux.HandleFunc("/v1/topology", s.handleTopology)
 	apiMux.HandleFunc("/api/v1/overview", s.handleOverview)
 	apiMux.HandleFunc("/v1/overview", s.handleOverview)
+	apiMux.HandleFunc("/api/v1/operations/", s.handleOperation)
+	apiMux.HandleFunc("/v1/operations/", s.handleOperation)
+	apiMux.HandleFunc("/api/v1/events", s.handleEvents)
+	apiMux.HandleFunc("/v1/events", s.handleEvents)
 
 	// Projects
 	apiMux.HandleFunc("/api/v1/projects", s.handleProjects)
@@ -541,6 +546,74 @@ func (s *Server) handleOverview(writer http.ResponseWriter, request *http.Reques
 	writeJSON(writer, http.StatusOK, view)
 }
 
+func (s *Server) handleOperation(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		methodNotAllowed(writer, http.MethodGet)
+		return
+	}
+	id := strings.TrimPrefix(path.Clean(request.URL.Path), "/api/v1/operations/")
+	if strings.HasPrefix(request.URL.Path, "/v1/") {
+		id = strings.TrimPrefix(path.Clean(request.URL.Path), "/v1/operations/")
+	}
+	if id == "" || id == "." {
+		writeJSONError(writer, http.StatusBadRequest, "operationId ausente")
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), 10*time.Second)
+	defer cancel()
+	result, ok := s.operationResponse(ctx, id)
+	if !ok {
+		writeJSONError(writer, http.StatusNotFound, "operação não encontrada")
+		return
+	}
+	writeJSON(writer, http.StatusOK, result)
+}
+
+func (s *Server) handleEvents(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		methodNotAllowed(writer, http.MethodGet)
+		return
+	}
+	flusher, ok := writer.(http.Flusher)
+	if !ok {
+		writeJSONError(writer, http.StatusInternalServerError, "SSE não suportado pelo servidor")
+		return
+	}
+	writer.Header().Set("Content-Type", "text/event-stream")
+	writer.Header().Set("Cache-Control", "no-cache, no-store")
+	writer.Header().Set("Connection", "keep-alive")
+	_, _ = writer.Write([]byte(": devlan events\n\n"))
+	flusher.Flush()
+	updates, stop := s.service.SubscribeOperations(request.Context())
+	defer stop()
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+	for {
+		select {
+		case <-request.Context().Done():
+			return
+		case state, open := <-updates:
+			if !open {
+				return
+			}
+			result := operationResult(request.Context(), s.service, state)
+			eventName := "operation-progress"
+			if isTerminalPhase(state.Phase) && state.ProjectName != "" {
+				eventName = "project-state-changed"
+			}
+			data, err := json.Marshal(result)
+			if err != nil {
+				continue
+			}
+			_, _ = fmt.Fprintf(writer, "event: %s\ndata: %s\n\n", eventName, data)
+			flusher.Flush()
+		case <-heartbeat.C:
+			_, _ = writer.Write([]byte(": heartbeat\n\n"))
+			flusher.Flush()
+		}
+	}
+}
+
 func (s *Server) handleProjects(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodGet {
 		methodNotAllowed(writer, http.MethodGet)
@@ -599,6 +672,7 @@ func (s *Server) handleProjectLink(writer http.ResponseWriter, request *http.Req
 		"message":  fmt.Sprintf("Projeto %s vinculado.", proj.Name),
 		"warnings": res.Warnings,
 	})
+	InvalidateReadModelCache(s.service)
 }
 
 func (s *Server) handleProjectUnlink(writer http.ResponseWriter, request *http.Request) {
@@ -622,6 +696,7 @@ func (s *Server) handleProjectUnlink(writer http.ResponseWriter, request *http.R
 		"message":  fmt.Sprintf("Projeto %s desvinculado.", proj.Name),
 		"warnings": res.Warnings,
 	})
+	InvalidateReadModelCache(s.service)
 }
 
 func (s *Server) handleProjectHide(writer http.ResponseWriter, request *http.Request) {
@@ -645,6 +720,7 @@ func (s *Server) handleProjectHide(writer http.ResponseWriter, request *http.Req
 		"message":  fmt.Sprintf("Projeto %s ocultado.", input.Name),
 		"warnings": res.Warnings,
 	})
+	InvalidateReadModelCache(s.service)
 }
 
 func (s *Server) handleProjectUnhide(writer http.ResponseWriter, request *http.Request) {
@@ -668,6 +744,7 @@ func (s *Server) handleProjectUnhide(writer http.ResponseWriter, request *http.R
 		"message":  fmt.Sprintf("Projeto %s restaurado.", input.Path),
 		"warnings": res.Warnings,
 	})
+	InvalidateReadModelCache(s.service)
 }
 
 func (s *Server) handleProjectConfig(writer http.ResponseWriter, request *http.Request) {
@@ -681,6 +758,16 @@ func (s *Server) handleProjectConfig(writer http.ResponseWriter, request *http.R
 		return
 	}
 	ctx := request.Context()
+	if update.TLSEnabled != nil && update.Mode == "" && update.PHPVersion == "" && update.PHPPreset == "" &&
+		update.RoutePort == nil && !update.RoutePortAuto && update.StaticDir == "" && update.DevCommand == "" && update.DevPort == 0 {
+		target := *update.TLSEnabled
+		s.startAsyncOperation(writer, request, "tls", update.Name, update.OperationID, 90*time.Second,
+			func(workCtx context.Context) (uint64, []string, error) {
+				result, _, err := s.service.SetProjectTLS(workCtx, update.Name, target)
+				return result.Revision, result.Warnings, err
+			})
+		return
+	}
 	if update.Mode != "" {
 		m, err := domain.ParseMode(update.Mode)
 		if err != nil {
@@ -726,6 +813,7 @@ func (s *Server) handleProjectConfig(writer http.ResponseWriter, request *http.R
 			"revision": result.Revision,
 			"warnings": result.Warnings,
 		})
+		InvalidateReadModelCache(s.service)
 		return
 	}
 	if update.StaticDir != "" {
@@ -746,6 +834,7 @@ func (s *Server) handleProjectConfig(writer http.ResponseWriter, request *http.R
 			return
 		}
 	}
+	InvalidateReadModelCache(s.service)
 	writeJSON(writer, http.StatusOK, map[string]string{"message": "Configuração do projeto salva."})
 }
 
@@ -764,17 +853,18 @@ func (s *Server) handleProjectStart(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	var input struct {
-		Name string `json:"name"`
+		Name        string `json:"name"`
+		OperationID string `json:"operationId"`
 	}
 	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
 		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
 		return
 	}
-	if err := s.service.StartDev(request.Context(), input.Name); err != nil {
-		writeJSONError(writer, http.StatusConflict, err.Error())
-		return
-	}
-	writeJSON(writer, http.StatusOK, map[string]string{"message": "Servidor dev iniciado."})
+	s.startAsyncOperation(writer, request, "start", input.Name, input.OperationID, 90*time.Second,
+		func(ctx context.Context) (uint64, []string, error) {
+			err := s.service.StartDev(ctx, input.Name)
+			return currentRevision(s.service), nil, err
+		})
 }
 
 func (s *Server) handleProjectStop(writer http.ResponseWriter, request *http.Request) {
@@ -783,17 +873,18 @@ func (s *Server) handleProjectStop(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	var input struct {
-		Name string `json:"name"`
+		Name        string `json:"name"`
+		OperationID string `json:"operationId"`
 	}
 	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
 		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
 		return
 	}
-	if err := s.service.StopDev(request.Context(), input.Name); err != nil {
-		writeJSONError(writer, http.StatusConflict, err.Error())
-		return
-	}
-	writeJSON(writer, http.StatusOK, map[string]string{"message": "Servidor dev parado."})
+	s.startAsyncOperation(writer, request, "stop", input.Name, input.OperationID, 45*time.Second,
+		func(ctx context.Context) (uint64, []string, error) {
+			err := s.service.StopDev(ctx, input.Name)
+			return currentRevision(s.service), nil, err
+		})
 }
 
 func (s *Server) handleProjectRestart(writer http.ResponseWriter, request *http.Request) {
@@ -802,17 +893,18 @@ func (s *Server) handleProjectRestart(writer http.ResponseWriter, request *http.
 		return
 	}
 	var input struct {
-		Name string `json:"name"`
+		Name        string `json:"name"`
+		OperationID string `json:"operationId"`
 	}
 	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
 		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
 		return
 	}
-	if err := s.service.RestartDev(request.Context(), input.Name); err != nil {
-		writeJSONError(writer, http.StatusConflict, err.Error())
-		return
-	}
-	writeJSON(writer, http.StatusOK, map[string]string{"message": "Servidor dev reiniciado."})
+	s.startAsyncOperation(writer, request, "restart", input.Name, input.OperationID, 90*time.Second,
+		func(ctx context.Context) (uint64, []string, error) {
+			err := s.service.RestartDev(ctx, input.Name)
+			return currentRevision(s.service), nil, err
+		})
 }
 
 func (s *Server) handleProjectBuild(writer http.ResponseWriter, request *http.Request) {
@@ -861,22 +953,19 @@ func (s *Server) handleProjectTLS(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	var input struct {
-		Name    string `json:"name"`
-		Enabled bool   `json:"enabled"`
+		Name        string `json:"name"`
+		Enabled     bool   `json:"enabled"`
+		OperationID string `json:"operationId"`
 	}
 	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
 		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
 		return
 	}
-	res, name, err := s.service.SetProjectTLS(request.Context(), input.Name, input.Enabled)
-	if err != nil {
-		writeJSONError(writer, http.StatusConflict, err.Error())
-		return
-	}
-	writeJSON(writer, http.StatusOK, map[string]any{
-		"message":  fmt.Sprintf("TLS de %s atualizado.", name),
-		"warnings": res.Warnings,
-	})
+	s.startAsyncOperation(writer, request, "tls", input.Name, input.OperationID, 90*time.Second,
+		func(ctx context.Context) (uint64, []string, error) {
+			result, _, err := s.service.SetProjectTLS(ctx, input.Name, input.Enabled)
+			return result.Revision, result.Warnings, err
+		})
 }
 
 func (s *Server) handlePark(writer http.ResponseWriter, request *http.Request) {
@@ -900,6 +989,7 @@ func (s *Server) handlePark(writer http.ResponseWriter, request *http.Request) {
 		"message":  fmt.Sprintf("Pasta %s estacionada.", park.Path),
 		"warnings": res.Warnings,
 	})
+	InvalidateReadModelCache(s.service)
 }
 
 func (s *Server) handleUnpark(writer http.ResponseWriter, request *http.Request) {
@@ -923,6 +1013,7 @@ func (s *Server) handleUnpark(writer http.ResponseWriter, request *http.Request)
 		"message":  fmt.Sprintf("Pasta %s desestacionada.", park.Path),
 		"warnings": res.Warnings,
 	})
+	InvalidateReadModelCache(s.service)
 }
 
 func (s *Server) handleConfig(writer http.ResponseWriter, request *http.Request) {
@@ -969,6 +1060,7 @@ func (s *Server) handleConfig(writer http.ResponseWriter, request *http.Request)
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
 		}
+		InvalidateReadModelCache(s.service)
 		writeJSON(writer, http.StatusOK, map[string]string{"message": "Configuração global salva."})
 		return
 	}
@@ -1021,6 +1113,7 @@ func (s *Server) handleReload(writer http.ResponseWriter, request *http.Request)
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
 	}
+	InvalidateReadModelCache(s.service)
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"message": "Configurações recarregadas com sucesso.",
 		"result":  result,
@@ -1062,6 +1155,7 @@ func (s *Server) handlePHPInstall(writer http.ResponseWriter, request *http.Requ
 		"message":  fmt.Sprintf("PHP %s instalado.", input.Version),
 		"warnings": res.Warnings,
 	})
+	InvalidateColdReadModelCache(s.service)
 }
 
 func (s *Server) handlePHPRemove(writer http.ResponseWriter, request *http.Request) {
@@ -1085,6 +1179,7 @@ func (s *Server) handlePHPRemove(writer http.ResponseWriter, request *http.Reque
 		"message":  fmt.Sprintf("PHP %s removido.", input.Version),
 		"warnings": res.Warnings,
 	})
+	InvalidateColdReadModelCache(s.service)
 }
 
 func (s *Server) handlePHPDefault(writer http.ResponseWriter, request *http.Request) {
@@ -1108,6 +1203,7 @@ func (s *Server) handlePHPDefault(writer http.ResponseWriter, request *http.Requ
 		"message":  fmt.Sprintf("PHP padrão alterado para %s.", input.Version),
 		"warnings": res.Warnings,
 	})
+	InvalidateColdReadModelCache(s.service)
 }
 
 func (s *Server) handleMetrics(writer http.ResponseWriter, request *http.Request) {
@@ -1188,6 +1284,7 @@ func (s *Server) handleDoctorFix(writer http.ResponseWriter, request *http.Reque
 	default:
 		_, _ = s.service.Reload(ctx)
 	}
+	InvalidateReadModelCache(s.service)
 	writeJSON(writer, http.StatusOK, map[string]string{"message": "Correção aplicada."})
 }
 
@@ -1218,6 +1315,7 @@ func (s *Server) handleSecurityTrust(writer http.ResponseWriter, request *http.R
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
 	}
+	InvalidateReadModelCache(s.service)
 	writeJSON(writer, http.StatusOK, map[string]string{"message": "Certificado raiz instalado e confiado."})
 }
 

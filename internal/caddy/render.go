@@ -264,6 +264,7 @@ func RenderWSLWithAccessLog(cfg domain.Config, accessLogPath string) (string, er
 		b.WriteString("        header X-DevLAN-Local on\n")
 		b.WriteString("    }\n")
 		fmt.Fprintf(&b, "    handle @devlan_local_%s {\n", name)
+		fmt.Fprintf(&b, "        log_append devlan_project %s\n", name)
 		if cfg.IsExposureExpired(route.Project, now) {
 			b.WriteString("        respond \"Acesso expirado\" 403\n")
 		} else {
@@ -442,6 +443,7 @@ func renderWSLUnifiedAt(cfg domain.Config, accessLogPath string, now time.Time) 
 		b.WriteString("        remote_ip 127.0.0.1 ::1\n")
 		b.WriteString("    }\n")
 		fmt.Fprintf(&b, "    handle @devlan_local_%s {\n", name)
+		fmt.Fprintf(&b, "        log_append devlan_project %s\n", name)
 		if cfg.IsExposureExpired(route.Project, now) {
 			b.WriteString("        respond \"Acesso expirado\" 403\n")
 		} else {
@@ -480,6 +482,7 @@ func renderWSLUnifiedAt(cfg domain.Config, accessLogPath string, now time.Time) 
 		if accessLogPath != "" {
 			b.WriteString("    import devlan_access_log\n")
 		}
+		fmt.Fprintf(&b, "    log_append devlan_project %s\n", route.Project.Name)
 		if cfg.IsExposureExpired(route.Project, now) {
 			b.WriteString("    respond \"Acesso expirado\" 403\n")
 		} else {

@@ -178,11 +178,11 @@ mode                 dev       project
 js.idle-timeout      15m       global
 ```
 
-## Comandos do MVP
+## Comandos principais
 
 ```text
 devlan install [--no-firewall]  prepara Caddy WSL, PHP-FPM e firewalls
-devlan uninstall                remove componentes gerenciados, preserva projetos
+devlan uninstall [OPÇÕES]       desfaz a instalação, restaura configurações e preserva projetos
 devlan link NAME PATH           registra um projeto Laravel
 devlan unlink NAME              remove o registro e a rota
 devlan park PATH                registra uma pasta de projetos
@@ -209,6 +209,16 @@ devlan php info [NAME]          página de informações sanitizada
 devlan composer VERSION|NAME    executa Composer com PHP selecionado
 ```
 
+Para revisar ou repetir uma remoção com segurança, use
+`devlan uninstall --dry-run`. A execução normal remove integrações e
+dependências cuja proveniência esteja registrada, restaura configurações
+compartilhadas sem sobrescrever alterações posteriores e preserva projetos.
+`--keep-data` conserva estado/logs, `--keep-dependencies` mantém
+Caddy/PHP/Composer/toolchains e `--purge --yes` trata resíduos legados
+explicitamente atribuídos. Recursos sem proveniência aparecem como conflito e
+são preservados. Se a restauração alterar `.wslconfig` ou `/etc/wsl.conf`, o
+resumo informa o `wsl --shutdown`/reinício necessário para aplicar a mudança.
+
 ## HTTPS na LAN
 
 ```powershell
@@ -234,7 +244,8 @@ para a infraestrutura da borda; a rota do projeto continua usando sua porta
 LAN dedicada.
 
 Para instalar Go, WSL/Ubuntu, Caddy, PHP-FPM, extensões Laravel e Composer em
-uma máquina limpa, use `scripts/install.ps1` conforme [o guia de instalação](INSTALL.md).
+uma máquina limpa, use `scripts/install.ps1` conforme
+[o guia de instalação](../guides/INSTALL.md).
 O comando `devlan install` é a etapa idempotente do núcleo: cria/atualiza os
 arquivos gerenciados e a regra de firewall, mas não instala dependências de um
 projeto específico.
@@ -349,7 +360,7 @@ devlan security posture
 devlan security audit --lines 50
 ```
 
-## Operação completa (Fase 6)
+## Operação do serviço e API
 
 O serviço Windows opcional mantém a API local ativa sem depender da UI:
 

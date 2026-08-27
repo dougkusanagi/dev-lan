@@ -2,6 +2,7 @@ package platform
 
 import (
 	"context"
+	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
@@ -125,4 +126,24 @@ func ValidateCARootFile(path string) error {
 		return fmt.Errorf("ler certificado raiz %s: %w", path, err)
 	}
 	return ValidateCARootPEM(data)
+}
+
+// CARootThumbprint returns the SHA-1 certificate thumbprint used by
+// certutil's -delstore selector. It is an identity only, not a security hash
+// for validating certificate contents.
+func CARootThumbprint(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return "", errors.New("certificado raiz PEM ausente")
+	}
+	certificate, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return "", err
+	}
+	fingerprint := sha1.Sum(certificate.Raw)
+	return strings.ToUpper(hex.EncodeToString(fingerprint[:])), nil
 }

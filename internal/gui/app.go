@@ -24,12 +24,14 @@ type PHPVersionView = localapi.PHPVersionView
 type DoctorCheckView = localapi.DoctorCheckView
 type GlobalConfigView = localapi.GlobalConfigView
 type ProjectConfigUpdate = localapi.ProjectConfigUpdate
+type MutationResult = localapi.MutationResult
 
 type App struct {
-	service *app.App
-	ctx     context.Context
-	api     *localapi.Server
-	ownsAPI bool
+	service               *app.App
+	ctx                   context.Context
+	api                   *localapi.Server
+	ownsAPI               bool
+	operationEventsCancel context.CancelFunc
 }
 
 func NewApp(service *app.App) *App {
@@ -41,6 +43,7 @@ func (a *App) Startup(ctx context.Context) {
 	if os.Getenv("DEVLAN_TEST_MOCK") == "1" {
 		return
 	}
+	a.startOperationEvents()
 	if _, err := a.api.Start(); err == nil {
 		a.ownsAPI = true
 	} else if !errors.Is(err, localapi.ErrAlreadyRunning) {
@@ -54,10 +57,51 @@ func (a *App) Startup(ctx context.Context) {
 }
 
 func (a *App) Shutdown(ctx context.Context) {
+	if a.operationEventsCancel != nil {
+		a.operationEventsCancel()
+		a.operationEventsCancel = nil
+	}
 	_ = a.service.CloseDevProxies()
 	if a.ownsAPI {
 		_ = a.api.Close(ctx)
 		a.ownsAPI = false
+	}
+}
+
+func (a *App) startOperationEvents() {
+	if a.ctx == nil || a.operationEventsCancel != nil {
+		return
+	}
+	eventCtx, cancel := context.WithCancel(context.Background())
+	a.operationEventsCancel = cancel
+	updates, stop := a.service.SubscribeOperations(eventCtx)
+	go func() {
+		defer stop()
+		for {
+			select {
+			case <-eventCtx.Done():
+				return
+			case state, open := <-updates:
+				if !open {
+					return
+				}
+				result := localapi.BuildOperationResult(context.Background(), a.service, state)
+				eventName := "devlan:operation-progress"
+				if guiTerminalPhase(state.Phase) && state.ProjectName != "" {
+					eventName = "devlan:project-state-changed"
+				}
+				wailsruntime.EventsEmit(a.ctx, eventName, result)
+			}
+		}
+	}()
+}
+
+func guiTerminalPhase(phase string) bool {
+	switch phase {
+	case "ready", "stopped", "failed", "rolled_back":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -105,6 +149,9 @@ func (a *App) InstallPHPVersion(version string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	_, err := a.service.PHPInstall(ctx, version, nil)
+	if err == nil {
+		localapi.InvalidateColdReadModelCache(a.service)
+	}
 	return err
 }
 
@@ -112,6 +159,9 @@ func (a *App) RemovePHPVersion(version string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	_, err := a.service.PHPRemove(ctx, version)
+	if err == nil {
+		localapi.InvalidateColdReadModelCache(a.service)
+	}
 	return err
 }
 
@@ -119,6 +169,9 @@ func (a *App) SetDefaultPHPVersion(version string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	_, err := a.service.SetDefaultPHPVersion(ctx, version)
+	if err == nil {
+		localapi.InvalidateColdReadModelCache(a.service)
+	}
 	return err
 }
 
@@ -151,6 +204,9 @@ func (a *App) SaveGlobalConfig(view GlobalConfigView) error {
 	cfg.Allowlist = view.Allowlist
 
 	_, err = a.service.SaveConfigAndApply(ctx, cfg, true)
+	if err == nil {
+		localapi.InvalidateReadModelCache(a.service)
+	}
 	return err
 }
 
@@ -209,13 +265,134 @@ func (a *App) SaveProjectConfig(update ProjectConfigUpdate) error {
 			return err
 		}
 	}
+	localapi.InvalidateReadModelCache(a.service)
 	return nil
+}
+
+// SaveProjectConfigResult is the Wails mutation contract used by the modern
+// shell. The legacy SaveProjectConfig method remains for CLI-compatible
+// callers and older generated bindings.
+func (a *App) SaveProjectConfigResult(update ProjectConfigUpdate, operationID string) (MutationResult, error) {
+	if update.TLSEnabled != nil && update.Mode == "" && update.PHPVersion == "" && update.PHPPreset == "" &&
+		update.RoutePort == nil && !update.RoutePortAuto && update.StaticDir == "" && update.DevCommand == "" && update.DevPort == 0 {
+		return a.acceptProjectOperation("tls", update.Name, operationID, 90*time.Second,
+			func(ctx context.Context) (uint64, []string, error) {
+				result, _, err := a.service.SetProjectTLS(ctx, update.Name, *update.TLSEnabled)
+				return result.Revision, result.Warnings, err
+			})
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	if err := a.SaveProjectConfig(update); err != nil {
+		return MutationResult{}, err
+	}
+	return a.resultForCompleted("config", update.Name, operationID, ctx, nil), nil
+}
+
+func (a *App) GetOperation(operationID string) (MutationResult, error) {
+	state, ok := a.service.Operation(operationID)
+	if !ok {
+		return MutationResult{}, fmt.Errorf("operação não encontrada: %s", operationID)
+	}
+	return localapi.BuildOperationResult(context.Background(), a.service, state), nil
+}
+
+func (a *App) StartDevOperation(name, operationID string) (MutationResult, error) {
+	return a.acceptProjectOperation("start", name, operationID, 90*time.Second,
+		func(ctx context.Context) (uint64, []string, error) {
+			err := a.service.StartDev(ctx, name)
+			return guiCurrentRevision(a.service), nil, err
+		})
+}
+
+func (a *App) StopDevOperation(name, operationID string) (MutationResult, error) {
+	return a.acceptProjectOperation("stop", name, operationID, 45*time.Second,
+		func(ctx context.Context) (uint64, []string, error) {
+			err := a.service.StopDev(ctx, name)
+			return guiCurrentRevision(a.service), nil, err
+		})
+}
+
+func (a *App) RestartDevOperation(name, operationID string) (MutationResult, error) {
+	return a.acceptProjectOperation("restart", name, operationID, 90*time.Second,
+		func(ctx context.Context) (uint64, []string, error) {
+			err := a.service.RestartDev(ctx, name)
+			return guiCurrentRevision(a.service), nil, err
+		})
+}
+
+type guiOperationWork func(context.Context) (uint64, []string, error)
+
+func (a *App) acceptProjectOperation(operation, project, operationID string, timeout time.Duration, work guiOperationWork) (MutationResult, error) {
+	if strings.TrimSpace(operationID) == "" {
+		operationID = app.NewOperationID()
+	} else if len(operationID) > 96 {
+		operationID = operationID[:96]
+	}
+	state, existed, err := a.service.BeginOperation(operationID, operation, project)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	if !existed {
+		a.service.SetOperationTransport(operationID, "wails")
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+			phase := "applying"
+			if operation == "start" || operation == "restart" {
+				phase = "starting"
+			} else if operation == "stop" {
+				phase = "stopping"
+			}
+			a.service.UpdateOperation(operationID, phase, phase, 0, nil, nil, nil)
+			revision, warnings, workErr := work(ctx)
+			terminal := "ready"
+			if operation == "stop" {
+				terminal = "stopped"
+			}
+			if workErr != nil {
+				terminal = "failed"
+				if errors.Is(workErr, context.DeadlineExceeded) || strings.Contains(strings.ToLower(workErr.Error()), "rolled_back") {
+					terminal = "rolled_back"
+				}
+			}
+			if operation == "start" || operation == "stop" || operation == "restart" {
+				localapi.InvalidateHotReadModelCache(a.service)
+			} else {
+				localapi.InvalidateReadModelCache(a.service)
+			}
+			a.service.UpdateOperation(operationID, terminal, terminal, revision, nil, warnings, workErr)
+		}()
+	}
+	return localapi.BuildOperationResult(context.Background(), a.service, state), nil
+}
+
+func (a *App) resultForCompleted(operation, project, operationID string, ctx context.Context, warnings []string) MutationResult {
+	if strings.TrimSpace(operationID) == "" {
+		operationID = app.NewOperationID()
+	}
+	state, _, _ := a.service.BeginOperation(operationID, operation, project)
+	a.service.SetOperationTransport(operationID, "wails")
+	state = a.service.UpdateOperation(operationID, "ready", "ready", guiCurrentRevision(a.service), nil, warnings, nil)
+	localapi.InvalidateReadModelCache(a.service)
+	return localapi.BuildOperationResult(ctx, a.service, state)
+}
+
+func guiCurrentRevision(service *app.App) uint64 {
+	cfg, err := service.Store.Load()
+	if err != nil {
+		return 0
+	}
+	return cfg.Revision
 }
 
 func (a *App) LinkProject(name, path string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	_, _, err := a.service.Link(ctx, name, path)
+	if err == nil {
+		localapi.InvalidateReadModelCache(a.service)
+	}
 	return err
 }
 
@@ -223,6 +400,9 @@ func (a *App) UnlinkProject(name string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	_, _, err := a.service.Unlink(ctx, name)
+	if err == nil {
+		localapi.InvalidateReadModelCache(a.service)
+	}
 	return err
 }
 
@@ -230,6 +410,9 @@ func (a *App) HideProject(name string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	_, err := a.service.IgnoreProject(ctx, name)
+	if err == nil {
+		localapi.InvalidateReadModelCache(a.service)
+	}
 	return err
 }
 
@@ -237,6 +420,9 @@ func (a *App) ParkDir(path string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	_, _, err := a.service.Park(ctx, path)
+	if err == nil {
+		localapi.InvalidateReadModelCache(a.service)
+	}
 	return err
 }
 
@@ -244,25 +430,40 @@ func (a *App) UnparkDir(path string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	_, _, err := a.service.Unpark(ctx, path)
+	if err == nil {
+		localapi.InvalidateReadModelCache(a.service)
+	}
 	return err
 }
 
 func (a *App) StartDev(name string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	return a.service.StartDev(ctx, name)
+	err := a.service.StartDev(ctx, name)
+	if err == nil {
+		localapi.InvalidateHotReadModelCache(a.service)
+	}
+	return err
 }
 
 func (a *App) StopDev(name string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	return a.service.StopDev(ctx, name)
+	err := a.service.StopDev(ctx, name)
+	if err == nil {
+		localapi.InvalidateHotReadModelCache(a.service)
+	}
+	return err
 }
 
 func (a *App) RestartDev(name string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	return a.service.RestartDev(ctx, name)
+	err := a.service.RestartDev(ctx, name)
+	if err == nil {
+		localapi.InvalidateHotReadModelCache(a.service)
+	}
+	return err
 }
 
 func (a *App) BuildProject(name string) (string, error) {
@@ -305,26 +506,27 @@ func (a *App) ApplyDoctorFix(action, target string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	var err error
 	switch action {
 	case "reload":
-		_, err := a.service.Reload(ctx)
-		return err
+		_, err = a.service.Reload(ctx)
 	case "firewall":
-		return a.service.ReconcileFirewall(ctx)
+		err = a.service.ReconcileFirewall(ctx)
 	case "topology", "topology-repair":
-		_, err := a.service.RepairM8(ctx)
-		return err
+		_, err = a.service.RepairM8(ctx)
 	case "trust":
-		return a.service.Trust(ctx)
+		err = a.service.Trust(ctx)
 	case "restart-dev":
 		if target != "" {
-			return a.service.RestartDev(ctx, target)
+			err = a.service.RestartDev(ctx, target)
 		}
-		return nil
 	default:
-		_, err := a.service.Reload(ctx)
-		return err
+		_, err = a.service.Reload(ctx)
 	}
+	if err == nil {
+		localapi.InvalidateReadModelCache(a.service)
+	}
+	return err
 }
 
 func (a *App) OpenURL(rawURL string) error {
@@ -346,6 +548,9 @@ func (a *App) Reload() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	_, err := a.service.Reload(ctx)
+	if err == nil {
+		localapi.InvalidateReadModelCache(a.service)
+	}
 	return err
 }
 
@@ -366,7 +571,11 @@ func (a *App) ExportDiagnostic() (string, error) {
 func (a *App) TrustCA() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	return a.service.Trust(ctx)
+	err := a.service.Trust(ctx)
+	if err == nil {
+		localapi.InvalidateColdReadModelCache(a.service)
+	}
+	return err
 }
 
 func (a *App) GetSecurityAudit(lines int) (string, error) {

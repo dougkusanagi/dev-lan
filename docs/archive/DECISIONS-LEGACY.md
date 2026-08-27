@@ -1,4 +1,7 @@
-# Decisões técnicas
+# Decisões técnicas — histórico
+
+> Documento substituído por [Arquitetura](../ARCHITECTURE.md) e
+> [ADRs](../adr/README.md). Preserve somente para contexto histórico.
 
 ## Go como núcleo
 
@@ -84,7 +87,7 @@ Se for necessário iniciar antes do login ou manter supervisão contínua, será
 ## Caddy único no WSL com rede espelhada
 
 A decisão anterior de manter dois Caddys foi substituída pelo
-[ADR 0005](adr/0005-caddy-unico-wsl-mirrored.md). Em Windows 11 22H2+ com WSL 2
+[ADR 0006](../adr/0006-caddy-unico-wsl-mirrored.md). Em Windows 11 22H2+ com WSL 2
 e `networkingMode=mirrored`, um único Caddy systemd no WSL é dono da borda
 HTTP/HTTPS/LAN. O Windows continua dono do estado, control plane, API local e
 coordenação de firewall; o dashboard é o único upstream para

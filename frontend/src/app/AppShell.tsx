@@ -1,6 +1,6 @@
 import { X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { DevLANClient } from '../api';
+import type { DevLANClient, MutationResponse } from '../api';
 import { APIError, api } from '../api';
 import { EmptyState } from '../components/feedback/EmptyState';
 import { ErrorState } from '../components/feedback/ErrorState';
@@ -12,6 +12,7 @@ import { ProjectSidebar } from '../components/sidebar/ProjectSidebar';
 import { LogsPanel } from '../features/logs/LogsPanel';
 import type {
   DoctorCheck,
+  MutationResult,
   OperationKey,
   PendingOperation,
   PHPVersion,
@@ -28,6 +29,7 @@ export interface AppShellProps {
 export default function AppShell({ client = api, pollIntervalMs = 5000 }: AppShellProps = {}) {
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [system, setSystem] = useState<SystemStatus | null>(null);
+  const systemRef = useRef<SystemStatus | null>(null);
   const [phpVersions, setPHPVersions] = useState<PHPVersion[]>([]);
   const [selected, setSelected] = useState<string>(
     () => localStorage.getItem('devlan_project') || '',
@@ -48,13 +50,17 @@ export default function AppShell({ client = api, pollIntervalMs = 5000 }: AppShe
   const [doctor, setDoctor] = useState<DoctorCheck[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
+  systemRef.current = system;
   const searchRef = useRef<HTMLInputElement>(null);
   const refreshVersion = useRef(0);
   const initialLoad = useRef(true);
   const mutationVersion = useRef(0);
   const refreshInFlight = useRef<Promise<void> | null>(null);
+  const refreshController = useRef<AbortController | null>(null);
+  const refreshPriority = useRef(false);
   const refreshQueued = useRef(false);
   const optimisticProjects = useRef<Record<string, Partial<ProjectInfo>>>({});
+  const lastAppliedRevision = useRef(0);
   const notify = useCallback((m: string) => {
     setToast(m);
     window.setTimeout(() => setToast((current) => (current === m ? '' : current)), 3800);
@@ -62,30 +68,56 @@ export default function AppShell({ client = api, pollIntervalMs = 5000 }: AppShe
   const refresh = useCallback(
     async (priority = false) => {
       if (refreshInFlight.current) {
-        if (priority) refreshQueued.current = true;
+        if (priority) {
+          refreshQueued.current = true;
+          refreshPriority.current = true;
+          // HTTP requests are abortable. Wails ignores the signal, so the
+          // revision/epoch checks below remain the second line of defense.
+          refreshController.current?.abort();
+        }
         const current = refreshInFlight.current;
-        await current;
-        // A priority refresh requested during an existing poll is included by
-        // the current run. This await also makes mutation handlers deterministic.
+        await current.catch(() => undefined);
+        if (priority && refreshQueued.current && !refreshInFlight.current) {
+          refreshQueued.current = false;
+          refreshPriority.current = false;
+          await refresh(true);
+        }
         return;
       }
 
       const run = async () => {
+        const controller = new AbortController();
+        refreshController.current = controller;
         const version = ++refreshVersion.current;
         const mutationAtStart = mutationVersion.current;
         if (initialLoad.current) setLoading(true);
         try {
           const overview = client.getOverview
-            ? await client.getOverview()
+            ? await client.getOverview('', { signal: controller.signal })
             : await Promise.all([
                 client.getProjects(),
                 client.getStatus(),
                 client.getPHPVersions(),
-              ]).then(([projects, status, phpVersions]) => ({ projects, status, phpVersions }));
+              ]).then(([projects, status, phpVersions]) => ({
+                projects,
+                status,
+                phpVersions,
+                revision: status.revision,
+              }));
           // A poll that started before a mutation must never put the old
           // snapshot back over the optimistic/current state.
-          if (version !== refreshVersion.current || mutationAtStart !== mutationVersion.current)
+          const receivedRevision = Math.max(
+            overview.revision || 0,
+            overview.status.revision || 0,
+            ...overview.projects.map((item) => item.revision || 0),
+          );
+          if (
+            version !== refreshVersion.current ||
+            mutationAtStart !== mutationVersion.current ||
+            (receivedRevision > 0 && receivedRevision < lastAppliedRevision.current)
+          )
             return;
+          if (receivedRevision > 0) lastAppliedRevision.current = receivedRevision;
           const mergedProjects = overview.projects.map((item) => ({
             ...item,
             ...(optimisticProjects.current[item.name] ?? {}),
@@ -100,6 +132,9 @@ export default function AppShell({ client = api, pollIntervalMs = 5000 }: AppShe
               : mergedProjects[0]?.name || '',
           );
         } catch (e) {
+          if (controller.signal.aborted || (e instanceof DOMException && e.name === 'AbortError')) {
+            return;
+          }
           if (version === refreshVersion.current && mutationAtStart === mutationVersion.current) {
             const message =
               e instanceof APIError && e.status === 0 ? 'API indisponível.' : String(e);
@@ -111,6 +146,7 @@ export default function AppShell({ client = api, pollIntervalMs = 5000 }: AppShe
             setLoading(false);
             initialLoad.current = false;
           }
+          if (refreshController.current === controller) refreshController.current = null;
         }
       };
 
@@ -120,13 +156,7 @@ export default function AppShell({ client = api, pollIntervalMs = 5000 }: AppShe
         await promise;
       } finally {
         refreshInFlight.current = null;
-        // A mutation can arrive during the request. Run exactly one fresh read
-        // before releasing its loading state instead of starting a request per
-        // event/poll tick.
-        if (refreshQueued.current) {
-          refreshQueued.current = false;
-          await refresh();
-        }
+        if (priority) refreshPriority.current = false;
       }
     },
     [client, notify],
@@ -141,6 +171,7 @@ export default function AppShell({ client = api, pollIntervalMs = 5000 }: AppShe
       if (conflicts) return undefined;
       const operation: PendingOperation = {
         id: ++operationSequence.current,
+        operationId: `ui-${Date.now().toString(36)}-${operationSequence.current.toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
         key,
         projectName,
         targetState,
@@ -156,6 +187,8 @@ export default function AppShell({ client = api, pollIntervalMs = 5000 }: AppShe
   const endOperation = useCallback((operation: PendingOperation) => {
     operationsRef.current = operationsRef.current.filter((item) => item.id !== operation.id);
     setOperations(operationsRef.current);
+    mutationVersion.current += 1;
+    refreshVersion.current += 1;
   }, []);
   const patchProject = useCallback((name: string, patch: Partial<ProjectInfo>) => {
     optimisticProjects.current[name] = { ...(optimisticProjects.current[name] ?? {}), ...patch };
@@ -171,6 +204,71 @@ export default function AppShell({ client = api, pollIntervalMs = 5000 }: AppShe
   const clearProjectPatch = useCallback((name: string) => {
     delete optimisticProjects.current[name];
   }, []);
+  const restoreProject = useCallback((snapshot: ProjectInfo) => {
+    delete optimisticProjects.current[snapshot.name];
+    setProjects((current) =>
+      current.map((item) => (item.name === snapshot.name ? snapshot : item)),
+    );
+  }, []);
+  const applyMutationResult = useCallback(
+    (
+      result: MutationResult | undefined,
+      projectName: string,
+      fallback: Partial<ProjectInfo> = {},
+    ) => {
+      if (!result) return;
+      const revision = result.revision || result.projectState?.revision || 0;
+      if (revision > 0 && revision < lastAppliedRevision.current) return;
+      if (revision > 0) lastAppliedRevision.current = revision;
+      if (result.projectState) {
+        const next = { ...result.projectState };
+        optimisticProjects.current[projectName] = next;
+        setProjects((current) => current.map((item) => (item.name === projectName ? next : item)));
+      } else if (Object.keys(fallback).length) {
+        optimisticProjects.current[projectName] = {
+          ...optimisticProjects.current[projectName],
+          ...fallback,
+        };
+        setProjects((current) =>
+          current.map((item) => (item.name === projectName ? { ...item, ...fallback } : item)),
+        );
+      }
+    },
+    [],
+  );
+  const waitForOperation = useCallback(
+    async (
+      response: MutationResponse,
+      operationId: string,
+    ): Promise<MutationResult | undefined> => {
+      let result = response && typeof response === 'object' ? response : undefined;
+      if (
+        !result ||
+        !client.getOperation ||
+        ['ready', 'stopped', 'failed', 'rolled_back'].includes(result.phase)
+      ) {
+        return result;
+      }
+      const delays = [250, 750, 1500, 2500, 4000, 5000];
+      const deadline = Date.now() + 95_000;
+      let attempt = 0;
+      while (Date.now() < deadline) {
+        const delay = delays[Math.min(attempt, delays.length - 1)];
+        attempt += 1;
+        await new Promise<void>((resolve) => window.setTimeout(resolve, delay));
+        try {
+          result = await client.getOperation(operationId);
+        } catch {
+          continue;
+        }
+        if (['ready', 'stopped', 'failed', 'rolled_back'].includes(result.phase)) return result;
+      }
+      throw new Error(
+        `Tempo excedido aguardando a operação ${operationId}; estado será revalidado.`,
+      );
+    },
+    [client],
+  );
   const reconcileProject = useCallback(
     async (name: string, finalPatch: Partial<ProjectInfo> = {}) => {
       await refresh(true);
@@ -183,19 +281,59 @@ export default function AppShell({ client = api, pollIntervalMs = 5000 }: AppShe
     [clearProjectPatch, refresh, setProjectFields],
   );
   useEffect(() => {
-    let running = false;
-    const tick = () => {
-      if (running) return;
-      running = true;
-      void refresh().finally(() => {
-        running = false;
-      });
+    let stopped = false;
+    let timer = 0;
+    let failures = 0;
+    const baseDelay = Math.max(1000, pollIntervalMs);
+    const schedule = (delay: number) => {
+      if (!stopped && pollIntervalMs > 0) timer = window.setTimeout(tick, delay);
     };
-    tick();
-    if (pollIntervalMs <= 0) return undefined;
-    const id = window.setInterval(tick, pollIntervalMs);
-    return () => clearInterval(id);
+    const tick = async () => {
+      if (stopped) return;
+      if (document.visibilityState === 'hidden') {
+        schedule(baseDelay);
+        return;
+      }
+      try {
+        await refresh();
+        failures = 0;
+        // WSL unavailable is a recoverable condition, so avoid hammering the
+        // execution plane while retaining a short recovery backoff.
+        const unavailable = systemRef.current?.wslAvailable === false;
+        schedule(unavailable ? Math.min(30000, baseDelay * 4) : baseDelay);
+      } catch {
+        failures += 1;
+        schedule(Math.min(30000, baseDelay * 2 ** Math.min(failures, 4)));
+      }
+    };
+    const onFocus = () => {
+      if (document.visibilityState === 'hidden') return;
+      window.clearTimeout(timer);
+      void refresh(true).finally(() => schedule(baseDelay));
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') onFocus();
+    };
+    void tick();
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [pollIntervalMs, refresh]);
+  useEffect(() => {
+    if (!client.subscribeEvents) return undefined;
+    return client.subscribeEvents((event) => {
+      const pending = operationsRef.current.find(
+        (operation) => operation.operationId === event.result.operationId,
+      );
+      const projectName = event.result.projectState?.name || pending?.projectName;
+      if (projectName) applyMutationResult(event.result, projectName);
+    });
+  }, [applyMutationResult, client]);
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark);
     localStorage.setItem('devlan_theme', dark ? 'dark' : 'light');
@@ -230,6 +368,7 @@ export default function AppShell({ client = api, pollIntervalMs = 5000 }: AppShe
   const project = projects.find((p) => p.name === selected);
   const operate = async (action: 'start' | 'stop' | 'restart' | 'build' | 'deps' | 'doctor') => {
     if (!project) return;
+    const snapshot = structuredClone(project);
     const operation = beginOperation(action, project.name);
     if (!operation) return;
     const healthyStatus = project.status === 'degraded' ? 'degraded' : 'ready';
@@ -268,23 +407,47 @@ export default function AppShell({ client = api, pollIntervalMs = 5000 }: AppShe
           : {};
     if (Object.keys(expectedPatch).length) patchProject(project.name, expectedPatch);
     try {
-      if (action === 'start') await client.startDev(project.name);
-      else if (action === 'stop') await client.stopDev(project.name);
-      else if (action === 'restart') await client.restartDev(project.name);
-      else if (action === 'build') await client.buildProject(project.name);
-      else if (action === 'deps') await client.installDeps(project.name);
-      else {
+      let response: MutationResponse;
+      if (action === 'start') response = await client.startDev(project.name, operation.operationId);
+      else if (action === 'stop')
+        response = await client.stopDev(project.name, operation.operationId);
+      else if (action === 'restart')
+        response = await client.restartDev(project.name, operation.operationId);
+      else if (action === 'build') {
+        await client.buildProject(project.name);
+        response = undefined;
+      } else if (action === 'deps') {
+        await client.installDeps(project.name);
+        response = undefined;
+      } else {
         setView('doctor');
         setDoctor(await client.runDoctor(project.name));
+        response = undefined;
       }
-      if (Object.keys(successPatch).length) setProjectFields(project.name, successPatch);
-      void reconcileProject(project.name, successPatch);
-      notify(action === 'doctor' ? 'Diagnóstico concluído.' : 'Operação concluída.');
+      const result = await waitForOperation(response, operation.operationId);
+      if (result?.phase === 'failed' || result?.phase === 'rolled_back') {
+        restoreProject(snapshot);
+        notify(
+          result.phase === 'rolled_back'
+            ? 'A operação falhou e foi restaurada.'
+            : `Falha na operação: ${result.error || 'estado rejeitado'}`,
+        );
+      } else {
+        applyMutationResult(result, project.name, successPatch);
+        await reconcileProject(project.name, successPatch);
+        notify(
+          result?.warnings?.length
+            ? `${action === 'doctor' ? 'Diagnóstico concluído' : 'Operação concluída'}: ${result.warnings[0]}`
+            : action === 'doctor'
+              ? 'Diagnóstico concluído.'
+              : 'Operação concluída.',
+        );
+      }
     } catch (e) {
-      clearProjectPatch(project.name);
+      restoreProject(snapshot);
       // A timeout can happen after the backend committed. Revalidate once in
       // the background so an ambiguous result does not require F5.
-      void refresh(true);
+      await refresh(true);
       notify(`Falha na operação: ${String(e)}`);
     } finally {
       endOperation(operation);
@@ -307,6 +470,7 @@ export default function AppShell({ client = api, pollIntervalMs = 5000 }: AppShe
   };
   const toggleTLS = async (target: ProjectInfo) => {
     const tlsEnabled = !target.tlsEnabled;
+    const snapshot = structuredClone(target);
     const operation = beginOperation('tls', target.name, tlsEnabled);
     if (!operation) return;
     const protocol = tlsEnabled ? 'https:' : 'http:';
@@ -316,21 +480,39 @@ export default function AppShell({ client = api, pollIntervalMs = 5000 }: AppShe
       lanUrl: target.lanUrl.replace(/^https?:/, protocol),
     });
     try {
-      await client.saveProjectConfig({ name: target.name, tlsEnabled });
-      setProjectFields(target.name, {
+      const response = await client.saveProjectConfig({
+        name: target.name,
+        tlsEnabled,
+        operationId: operation.operationId,
+      });
+      const result = await waitForOperation(response, operation.operationId);
+      if (result?.phase === 'failed' || result?.phase === 'rolled_back') {
+        restoreProject(snapshot);
+        notify(
+          result.phase === 'rolled_back'
+            ? 'TLS falhou e a configuração anterior foi restaurada.'
+            : `Não foi possível alterar o TLS: ${result.error || 'operação rejeitada'}`,
+        );
+        return;
+      }
+      applyMutationResult(result, target.name, {
         tlsEnabled,
         url: target.url.replace(/^https?:/, protocol),
         lanUrl: target.lanUrl.replace(/^https?:/, protocol),
       });
-      void reconcileProject(target.name, {
+      await reconcileProject(target.name, {
         tlsEnabled,
         url: target.url.replace(/^https?:/, protocol),
         lanUrl: target.lanUrl.replace(/^https?:/, protocol),
       });
-      notify(`TLS ${tlsEnabled ? 'ativado' : 'desativado'} em ${target.name}.`);
+      notify(
+        result?.warnings?.length
+          ? `TLS aplicado com aviso: ${result.warnings[0]}`
+          : `TLS ${tlsEnabled ? 'ativado' : 'desativado'} em ${target.name}.`,
+      );
     } catch (e) {
-      clearProjectPatch(target.name);
-      void refresh(true);
+      restoreProject(snapshot);
+      await refresh(true);
       notify(`Não foi possível alterar o TLS: ${String(e)}`);
     } finally {
       endOperation(operation);

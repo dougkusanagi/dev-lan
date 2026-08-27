@@ -210,6 +210,10 @@ function Install-Go {
             Remove-Item -LiteralPath $goRoot -Recurse -Force
         }
         Expand-Archive -LiteralPath $archive -DestinationPath $toolchainRoot -Force
+        # This marker is the provenance proof used by uninstall. A Go
+        # installation already present under the user's chosen root is not
+        # removed unless this installer created it.
+        New-Item -ItemType File -LiteralPath (Join-Path $goRoot '.devlan-managed') -Force | Out-Null
     }
     Add-UserPath (Split-Path -Parent $goExe)
     & $goExe version | Write-Host

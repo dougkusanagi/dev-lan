@@ -34,6 +34,7 @@ export interface ProjectInfo {
   devRunning: boolean;
   devPid?: number;
   devPort?: number;
+  revision?: number;
 }
 
 export interface SystemStatus {
@@ -62,12 +63,44 @@ export interface SystemStatus {
   phpVersions: string[];
   totalProjects: number;
   protocolVersion: number;
+  revision?: number;
+  observedAt?: string;
 }
 
 export interface Overview {
   projects: ProjectInfo[];
   status: SystemStatus;
   phpVersions: PHPVersion[];
+  revision?: number;
+  observedAt?: string;
+  meta?: OverviewMeta;
+}
+
+export interface OverviewMeta {
+  cache: string;
+  hotAgeMs: number;
+  coldAgeMs: number;
+  durationMs: number;
+  wslCalls: number;
+  wslCallsDelta: number;
+  wslDurationMs: number;
+  wslDurationDeltaMs: number;
+}
+
+export interface MutationResult {
+  operationId: string;
+  operation: string;
+  phase: string;
+  status: string;
+  revision?: number;
+  projectState?: ProjectInfo;
+  warnings?: string[];
+  error?: string;
+  observedAt?: string;
+  startedAt?: string;
+  updatedAt?: string;
+  durationMs?: number;
+  phaseMs?: Record<string, number>;
 }
 
 export interface PHPVersion {
@@ -96,6 +129,7 @@ export interface GlobalConfig {
 
 export interface ProjectConfigUpdate {
   name: string;
+  operationId?: string;
   mode?: ProjectMode;
   phpVersion?: string;
   phpPreset?: string;
@@ -196,8 +230,8 @@ export const DEVLAN_API_CONTRACT = {
     "saveProjectConfig": {
       "method": "POST",
       "path": "/api/v1/projects/config",
-      "wails": "SaveProjectConfig",
-      "response": "void"
+      "wails": "SaveProjectConfigResult",
+      "response": "MutationResult"
     },
     "linkProject": {
       "method": "POST",
@@ -232,20 +266,32 @@ export const DEVLAN_API_CONTRACT = {
     "startDev": {
       "method": "POST",
       "path": "/api/v1/projects/start",
-      "wails": "StartDev",
-      "response": "void"
+      "wails": "StartDevOperation",
+      "response": "MutationResult"
     },
     "stopDev": {
       "method": "POST",
       "path": "/api/v1/projects/stop",
-      "wails": "StopDev",
-      "response": "void"
+      "wails": "StopDevOperation",
+      "response": "MutationResult"
     },
     "restartDev": {
       "method": "POST",
       "path": "/api/v1/projects/restart",
-      "wails": "RestartDev",
-      "response": "void"
+      "wails": "RestartDevOperation",
+      "response": "MutationResult"
+    },
+    "getOperation": {
+      "method": "GET",
+      "path": "/api/v1/operations/{operationId}",
+      "wails": "GetOperation",
+      "response": "MutationResult"
+    },
+    "events": {
+      "method": "GET",
+      "path": "/api/v1/events",
+      "wails": "EventsOn",
+      "response": "SSE"
     },
     "buildProject": {
       "method": "POST",

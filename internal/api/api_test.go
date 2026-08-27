@@ -25,6 +25,9 @@ func TestLoopbackAPIHealthAndStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer server.Close(context.Background())
+	if server.httpServer.ReadHeaderTimeout <= 0 || server.httpServer.ReadTimeout <= server.httpServer.ReadHeaderTimeout || server.httpServer.MaxHeaderBytes > 1<<20 {
+		t.Fatalf("limites HTTP inseguros: %#v", server.httpServer)
+	}
 	if _, err := New(service).Start(); !errors.Is(err, ErrAlreadyRunning) {
 		t.Fatalf("segunda API deveria ser rejeitada: %v", err)
 	}

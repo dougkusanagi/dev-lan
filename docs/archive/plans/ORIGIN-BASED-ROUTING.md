@@ -2,8 +2,8 @@
 
 > Documento histórico anterior ao Marco 8. A fronteira de execução foi
 > consolidada em um único Caddy WSL com rede espelhada; consulte
-> [ADR 0005](adr/0005-caddy-unico-wsl-mirrored.md),
-> [ARCHITECTURE.md](ARCHITECTURE.md) e [ROADMAP.md](ROADMAP.md) para o contrato
+> [ADR 0006](../../adr/0006-caddy-unico-wsl-mirrored.md),
+> [ARCHITECTURE.md](../../ARCHITECTURE.md) e [ROADMAP.md](../../ROADMAP.md) para o contrato
 > vigente. Este plano permanece apenas como registro das decisões que levaram
 > à remoção de subpath/host.
 
@@ -11,8 +11,8 @@
 
 Este documento registra o contrato vigente e as decisões que o antecederam.
 O smoke real dependente de Windows/WSL continua opt-in. A tasklist canônica
-está em [ROADMAP.md](ROADMAP.md) e os achados transversais em
-[ENGINEERING-HARDENING-PLAN.md](ENGINEERING-HARDENING-PLAN.md).
+está em [ROADMAP.md](../../ROADMAP.md) e os achados transversais em
+[ENGINEERING-HARDENING.md](ENGINEERING-HARDENING.md).
 
 ## Decisão final
 

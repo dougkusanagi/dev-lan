@@ -1,5 +1,8 @@
 # Plano de endurecimento de engenharia
 
+> Plano histórico. Itens ainda relevantes foram migrados para o
+> [roadmap vigente](../../ROADMAP.md).
+
 ## Escopo da revisão
 
 Revisão estática em 26/08/2026 sobre domínio, persistência, aplicação/reload,
@@ -18,7 +21,7 @@ parou corretamente ao detectar que o listener LAN de teste não estava ativo.
 Os achados são dívidas verificáveis ou lacunas de teste, não uma afirmação de
 que todo fluxo esteja quebrado. O Marco 8 consolidou a borda em um Caddy WSL
 único; referências abaixo a dois Caddys são achados históricos da revisão
-anterior. A tasklist/prioridade canônicas ficam em [ROADMAP.md](ROADMAP.md).
+anterior. A tasklist/prioridade canônicas ficam em [ROADMAP.md](../../ROADMAP.md).
 
 ## 1. Consistência de estado e concorrência — crítico
 
@@ -91,7 +94,7 @@ reload, doctor e repair.
 
 O renderer ativo já define a matriz de headers por origem, valida nomes antes
 de gerar e mantém `.localhost` local e porta como única origem LAN, conforme o
-[plano de roteamento](ORIGIN-BASED-ROUTING-PLAN.md). O protocolo legado fica
+[plano de roteamento](ORIGIN-BASED-ROUTING.md). O protocolo legado fica
 restrito a fixtures e leitura/rollback de upgrades.
 
 ### Testes
@@ -233,7 +236,7 @@ Wails fica como shell opcional e não possui backend divergente. Adicionar
 Vitest + React Testing Library, validação/geração do contrato e E2E nas origens
 por porta e `devlan.localhost`. Priorizar duas URLs de projeto, override de
 porta, degraded, confirmações e erros. Seguir o
-[plano da UI](UI-REIMPLEMENTATION-PLAN.md) sem duplicar lógica do núcleo.
+[plano da UI](UI-REIMPLEMENTATION.md) sem duplicar lógica do núcleo.
 
 ### Testes
 

@@ -59,7 +59,10 @@ func (d Detector) DetectJS(ctx context.Context, projectPath string) (JSResult, e
 	}
 
 	// Check package.json
-	hasPkg, _ := d.Inspector.Exists(ctx, projectPath, "package.json")
+	hasPkg, existsErr := d.Inspector.Exists(ctx, projectPath, "package.json")
+	if existsErr != nil {
+		return result, wrapDiscovery("markers", projectPath, existsErr)
+	}
 	result.HasPackageJSON = hasPkg
 
 	var pkg packageJSON
@@ -161,7 +164,7 @@ func (d Detector) DetectJS(ctx context.Context, projectPath string) (JSResult, e
 	}
 
 	if !hasPkg && !result.HasStaticBuild && !result.IsSPA {
-		return result, fmt.Errorf("projeto JavaScript ou estático não reconhecido")
+		return result, invalidDiscovery("javascript", projectPath, fmt.Errorf("projeto JavaScript ou estático não reconhecido"))
 	}
 
 	return result, nil
@@ -232,7 +235,7 @@ func (d Detector) DetectProject(ctx context.Context, projectPath string) (Detect
 		}, nil
 	}
 
-	return DetectedProject{ProjectPath: projectPath}, fmt.Errorf("tipo de projeto não identificado para: %s", projectPath)
+	return DetectedProject{ProjectPath: projectPath}, invalidDiscovery("project", projectPath, fmt.Errorf("tipo de projeto não identificado para: %s", projectPath))
 }
 
 type BatchAllInspector interface {
@@ -249,7 +252,7 @@ func (d Detector) BatchDiscoverProjects(ctx context.Context, parentPath string) 
 	}
 	children, err := d.Inspector.ListDirectories(ctx, parentPath)
 	if err != nil {
-		return nil, err
+		return nil, wrapDiscovery("list", parentPath, err)
 	}
 	results := make([]DetectedProject, 0, len(children))
 	for _, child := range children {

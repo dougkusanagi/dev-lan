@@ -52,9 +52,12 @@ type App struct {
 	Now               func() time.Time
 	// WSLConfigPath is injectable for migration tests; empty means the user's
 	// host-level .wslconfig.
-	WSLConfigPath string
-	mutationMu    sync.Mutex
-	topologyMu    sync.Mutex
+	WSLConfigPath        string
+	mutationMu           sync.Mutex
+	topologyMu           sync.Mutex
+	operationMu          sync.Mutex
+	operations           map[string]OperationState
+	operationSubscribers map[*operationSubscriber]struct{}
 }
 
 func (a *App) edgeCaddy() platform.CaddyClient {
@@ -316,6 +319,9 @@ func (a *App) InstallWithOptions(ctx context.Context, configureFirewall bool) (A
 
 func (a *App) InstallWithPort(ctx context.Context, configureFirewall bool, windowsPort int) (ApplyResult, error) {
 	ctx = platform.WithWSLOperation(ctx, platform.WSLOperationInstall)
+	if err := a.ensureInstallationManifest(ctx); err != nil {
+		return ApplyResult{}, err
+	}
 	cfg, err := a.Store.Load()
 	if err != nil {
 		return ApplyResult{}, err
@@ -326,6 +332,15 @@ func (a *App) InstallWithPort(ctx context.Context, configureFirewall bool, windo
 	result, err := a.saveAndApplyMode(ctx, cfg, false, BootstrapTolerant)
 	if err != nil {
 		return result, err
+	}
+	// Caddy may have created its WSL provenance marker while applying the
+	// generated config. Refresh the manifest after that side effect as well as
+	// before the transaction, so a direct `devlan install` is uninstallable.
+	if manifestErr := a.ensureInstallationManifest(ctx); manifestErr != nil {
+		result.Warnings = append(result.Warnings, "não foi possível atualizar o manifesto de instalação: "+manifestErr.Error())
+	}
+	if fingerprintErr := a.refreshWSLManagedFingerprints(ctx, "wsl.caddy-config"); fingerprintErr != nil {
+		result.Warnings = append(result.Warnings, "não foi possível atualizar a fingerprint do Caddy WSL: "+fingerprintErr.Error())
 	}
 	if configureFirewall {
 		if err := a.ensureFirewallSpec(ctx, cfg); err != nil && runtime.GOOS == "windows" {
@@ -351,24 +366,6 @@ func (a *App) InstallWithPort(ctx context.Context, configureFirewall bool, windo
 	result.Status = statusFor(result)
 	_ = a.appendLog("install concluído")
 	a.recordTelemetry("install", map[string]string{"result": "ok"})
-	return result, nil
-}
-
-func (a *App) Uninstall(ctx context.Context) (ApplyResult, error) {
-	result := ApplyResult{}
-	_ = a.appendLog("uninstall iniciado")
-	if caddyClient := a.edgeCaddy(); caddyClient.Runner != nil {
-		if err := caddyClient.Stop(ctx); err != nil && runtime.GOOS == "windows" {
-			result.Warnings = append(result.Warnings, "não foi possível parar o serviço Caddy WSL único: "+err.Error())
-		}
-	}
-	if err := a.removeFirewall(ctx); err != nil && runtime.GOOS == "windows" {
-		result.Warnings = append(result.Warnings, "não foi possível remover a regra de firewall DevLAN; execute uninstall como administrador")
-	}
-	if err := a.Store.RemoveManagedFiles(); err != nil {
-		return result, err
-	}
-	a.recordTelemetry("uninstall", map[string]string{"result": "ok"})
 	return result, nil
 }
 
@@ -996,6 +993,9 @@ func (a *App) SetTLS(ctx context.Context, enabled bool) (ApplyResult, error) {
 }
 
 func (a *App) Trust(ctx context.Context) error {
+	if err := a.ensureInstallationManifest(ctx); err != nil {
+		return err
+	}
 	caddyClient := a.edgeCaddy()
 	if caddyClient.Runner == nil {
 		return fmt.Errorf("Caddy WSL não configurado")
@@ -1012,7 +1012,29 @@ func (a *App) Trust(ctx context.Context) error {
 			}
 			return err
 		}
-		return platform.InstallCARoot(ctx, paths.CARootExport)
+		trustedBefore := false
+		if runtime.GOOS == "windows" {
+			trustedBefore, _ = platform.CARootTrusted(ctx, paths.CARootExport)
+		}
+		if err := platform.InstallCARoot(ctx, paths.CARootExport); err != nil {
+			return err
+		}
+		if runtime.GOOS == "windows" {
+			if thumbprint, thumbprintErr := platform.CARootThumbprint(paths.CARootExport); thumbprintErr == nil {
+				ownership := config.OwnershipCreated
+				if trustedBefore {
+					ownership = config.OwnershipPreexisting
+				}
+				if updateErr := a.Store.UpdateManifestResource("windows.ca-trust", func(resource *config.ManifestResource) {
+					resource.Ownership = ownership
+					resource.Fingerprint = thumbprint
+					resource.Target = thumbprint
+				}); updateErr != nil {
+					return updateErr
+				}
+			}
+		}
+		return nil
 	}
 	// Compatibility for a pre-M8 controller that has not been migrated yet.
 	return caddyClient.Trust(ctx)
@@ -1061,9 +1083,9 @@ func (a *App) SetProjectTLS(ctx context.Context, selector string, enabled bool) 
 		if err := a.ensureFirewallSpec(ctx, cfg); err != nil && runtime.GOOS == "windows" {
 			result.Warnings = append(result.Warnings, "não foi possível atualizar o firewall; execute o comando em PowerShell como Administrador")
 		}
-		if err := a.Trust(ctx); err != nil {
-			result.Warnings = append(result.Warnings, "não foi possível confiar na CA local automaticamente; execute `caddy trust` como Administrador")
-		}
+		// Trust is machine state, not project state. It is intentionally kept out
+		// of the TLS toggle critical path; the explicit Trust operation remains
+		// available from the security/doctor UI.
 	}
 	return result, cfg.Projects[projectIndex].Name, nil
 }
@@ -1191,6 +1213,17 @@ func (a *App) saveAndApplyMode(ctx context.Context, cfg domain.Config, reload bo
 	if err != nil {
 		return result, err
 	}
+	// Publishing a new Caddy/WSL configuration is itself a managed mutation.
+	// Refresh the post-apply fingerprints after releasing the Store lock so a
+	// later uninstall distinguishes DevLAN's own reloads from user edits.
+	if manifestErr := a.ensureInstallationManifest(ctx); manifestErr != nil {
+		result.Warnings = append(result.Warnings, "não foi possível atualizar a proveniência após aplicar a configuração: "+manifestErr.Error())
+		result.Status = statusFor(result)
+	}
+	if fingerprintErr := a.refreshWSLManagedFingerprints(ctx, "wsl.caddy-config"); fingerprintErr != nil {
+		result.Warnings = append(result.Warnings, "não foi possível atualizar a fingerprint do Caddy WSL: "+fingerprintErr.Error())
+		result.Status = statusFor(result)
+	}
 	return result, nil
 }
 
@@ -1239,14 +1272,19 @@ func (a *App) reloadApplied(ctx context.Context, cfg domain.Config, result Apply
 		result.Warnings = append(result.Warnings, "Caddy WSL único não disponível; reload ignorado")
 	}
 	if a.DevProxy != nil && os.Getenv("DEVLAN_TEST_MOCK") != "1" {
+		activeDev := make(map[string]struct{})
 		for _, project := range cfg.Projects {
 			resolved, resolveErr := cfg.Resolve(project.Name)
 			if resolveErr != nil || resolved.Mode != domain.ModeDev {
 				continue
 			}
+			activeDev[project.Name] = struct{}{}
 			if proxyErr := a.DevProxy.Ensure(ctx, project, cfg.DevPort(project), cfg.DevCommand(project), cfg.ProjectIdleTimeout(project)); proxyErr != nil {
 				result.Warnings = append(result.Warnings, fmt.Sprintf("proxy dev %s não iniciado: %v", project.Name, proxyErr))
 			}
+		}
+		if proxyErr := a.DevProxy.Prune(activeDev); proxyErr != nil {
+			result.Warnings = append(result.Warnings, "listeners dev obsoletos não removidos: "+proxyErr.Error())
 		}
 	}
 	return result, nil
@@ -1347,14 +1385,19 @@ func (a *App) apply(ctx context.Context, cfg domain.Config, validate, reload boo
 			}
 		}
 		if a.DevProxy != nil && os.Getenv("DEVLAN_TEST_MOCK") != "1" {
+			activeDev := make(map[string]struct{})
 			for _, project := range cfg.Projects {
 				resolved, resolveErr := cfg.Resolve(project.Name)
 				if resolveErr != nil || resolved.Mode != domain.ModeDev {
 					continue
 				}
+				activeDev[project.Name] = struct{}{}
 				if proxyErr := a.DevProxy.Ensure(ctx, project, cfg.DevPort(project), cfg.DevCommand(project), cfg.ProjectIdleTimeout(project)); proxyErr != nil {
 					result.Warnings = append(result.Warnings, fmt.Sprintf("proxy dev %s não iniciado: %v", project.Name, proxyErr))
 				}
+			}
+			if proxyErr := a.DevProxy.Prune(activeDev); proxyErr != nil {
+				result.Warnings = append(result.Warnings, "listeners dev obsoletos não removidos: "+proxyErr.Error())
 			}
 		}
 	}
@@ -2160,6 +2203,9 @@ func (a *App) MigrateToSingleCaddy(ctx context.Context, confirmed bool) (platfor
 	}
 	a.topologyMu.Lock()
 	defer a.topologyMu.Unlock()
+	if err := a.ensureInstallationManifest(ctx); err != nil {
+		return platform.MigrationResult{}, err
+	}
 	cfg, err := a.Store.Load()
 	if err != nil {
 		return platform.MigrationResult{}, err
@@ -2396,6 +2442,12 @@ func (a *App) MigrateToSingleCaddy(ctx context.Context, confirmed bool) (platfor
 		return result, err
 	}
 	_ = a.Store.AppendSecurityAudit("CADDY_TOPOLOGY_MIGRATE", "topologia única WSL ativada")
+	if recordErr := a.Store.RecordManagedState("windows.wslconfig"); recordErr != nil {
+		return result, fmt.Errorf("registrar proveniência de .wslconfig após migração: %w", recordErr)
+	}
+	if fingerprintErr := a.refreshWSLManagedFingerprints(ctx, "wsl.systemd-config", "wsl.caddy-config"); fingerprintErr != nil {
+		return result, fmt.Errorf("registrar proveniência dos arquivos WSL após migração: %w", fingerprintErr)
+	}
 	a.recordTelemetry("topology.migrate", map[string]string{"component": "caddy_wsl", "result": "ok"})
 	return result, nil
 }
@@ -2408,6 +2460,9 @@ func (a *App) RepairM8(ctx context.Context) (ApplyResult, error) {
 	result := ApplyResult{}
 	a.topologyMu.Lock()
 	defer a.topologyMu.Unlock()
+	if err := a.ensureInstallationManifest(ctx); err != nil {
+		return result, err
+	}
 	cfg, err := a.Store.Load()
 	if err != nil {
 		return result, err
@@ -2423,6 +2478,12 @@ func (a *App) RepairM8(ctx context.Context) (ApplyResult, error) {
 		}
 		if update.Changed {
 			result.Warnings = append(result.Warnings, "o .wslconfig foi atualizado; reinicie o WSL pelo fluxo de migração para aplicar networkingMode=mirrored")
+		}
+		if recordErr := a.Store.RecordManagedState("windows.wslconfig"); recordErr != nil {
+			result.Warnings = append(result.Warnings, "não foi possível registrar a proveniência de .wslconfig: "+recordErr.Error())
+		}
+		if fingerprintErr := a.refreshWSLManagedFingerprints(ctx, "wsl.systemd-config"); fingerprintErr != nil {
+			result.Warnings = append(result.Warnings, "não foi possível registrar a fingerprint de /etc/wsl.conf: "+fingerprintErr.Error())
 		}
 	}
 	if err := a.ensureFirewallSpec(ctx, cfg); err != nil && runtime.GOOS == "windows" {

@@ -33,6 +33,8 @@ func TestContractManifestMatchesGoJSONViews(t *testing.T) {
 		"ProjectView":           reflect.TypeOf(ProjectView{}),
 		"SystemStatusView":      reflect.TypeOf(SystemStatusView{}),
 		"OverviewView":          reflect.TypeOf(OverviewView{}),
+		"OverviewMeta":          reflect.TypeOf(OverviewMeta{}),
+		"MutationResult":        reflect.TypeOf(MutationResult{}),
 		"PHPVersionView":        reflect.TypeOf(PHPVersionView{}),
 		"DoctorCheckView":       reflect.TypeOf(DoctorCheckView{}),
 		"GlobalConfigView":      reflect.TypeOf(GlobalConfigView{}),
@@ -117,6 +119,9 @@ func reflectJSONKind(goType reflect.Type) string {
 }
 
 func contractJSONKind(contractType string) string {
+	if strings.Contains(contractType, "Record<") || contractType == "ProjectInfo" {
+		return "object"
+	}
 	if strings.Contains(contractType, "[]") {
 		return "array"
 	}

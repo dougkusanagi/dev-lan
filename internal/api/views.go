@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dougkusanagi/dev-lan/internal/app"
@@ -26,7 +27,19 @@ type projectViewRuntime struct {
 	devStatuses map[string]platform.DevProcessStatus
 }
 
-func loadProjectViewRuntime(ctx context.Context, service *app.App) (*projectViewRuntime, error) {
+type systemHealthSnapshot struct {
+	topology           platform.TopologySnapshot
+	wslAvailable       bool
+	firewallOK         bool
+	hyperVOK           bool
+	caValid            bool
+	caTrusted          bool
+	mirroredConfigured bool
+	mirroredNetworking bool
+	phpVersions        []app.PHPVersionStatus
+}
+
+func loadProjectViewRuntimeUncached(ctx context.Context, service *app.App) (*projectViewRuntime, error) {
 	cfg, err := service.Store.Load()
 	if err != nil {
 		return nil, err
@@ -84,6 +97,64 @@ func loadProjectViewRuntime(ctx context.Context, service *app.App) (*projectView
 		runtime.devStatuses = statuses
 	}
 	return runtime, nil
+}
+
+func loadProjectViewRuntime(ctx context.Context, service *app.App) (*projectViewRuntime, bool, error) {
+	now := time.Now()
+	if service.Now != nil {
+		now = service.Now()
+	}
+	value, hit, err := cachedHot(ctx, service, now)
+	return value, hit, err
+}
+
+func loadSystemHealthSnapshot(ctx context.Context, service *app.App, caddyStatus platform.CaddyServiceStatus) systemHealthSnapshot {
+	cfg, err := service.Store.Load()
+	if err != nil {
+		return systemHealthSnapshot{}
+	}
+	phpVersions, _ := service.PHPVersions(platform.WithWSLOperation(ctx, platform.WSLOperationStatus))
+	firewallOK, _ := service.FirewallHealthy(ctx, cfg)
+	hyperVOK := false
+	if composite, ok := service.Firewall.(platform.CompositeFirewall); ok {
+		status := composite.HyperVStatus(ctx, platform.FirewallSpecForConfig(cfg))
+		hyperVOK = !status.Supported || status.Healthy
+	} else if composite, ok := service.Firewall.(*platform.CompositeFirewall); ok && composite != nil {
+		status := composite.HyperVStatus(ctx, platform.FirewallSpecForConfig(cfg))
+		hyperVOK = !status.Supported || status.Healthy
+	}
+	caValid, caTrusted := false, false
+	if caInfo, caErr := service.CAInfo(ctx); caErr == nil {
+		caValid = caInfo["valid"] == "true"
+		caTrusted = caInfo["trusted"] == "true"
+	}
+	compatibility := platform.WSLCompatibilityReport{}
+	if os.Getenv("DEVLAN_TEST_MOCK") == "1" {
+		configured := mirroredNetworkingConfigured(service)
+		compatibility.MirroredConfigured = configured
+		compatibility.MirroredNetworking = configured
+	} else {
+		compatibility = service.WSLCompatibility(ctx)
+	}
+	return systemHealthSnapshot{
+		topology:           cachedCaddyTopology(service, caddyStatus),
+		wslAvailable:       wslAvailability(ctx, service),
+		firewallOK:         firewallOK,
+		hyperVOK:           hyperVOK,
+		caValid:            caValid,
+		caTrusted:          caTrusted,
+		mirroredConfigured: compatibility.MirroredConfigured,
+		mirroredNetworking: compatibility.MirroredNetworking,
+		phpVersions:        phpVersions,
+	}
+}
+
+func cachedCaddyTopology(service *app.App, status platform.CaddyServiceStatus) platform.TopologySnapshot {
+	paths := service.Store.Paths()
+	_, unifiedErr := os.Stat(paths.Caddy)
+	_, windowsErr := os.Stat(paths.WindowsCaddy)
+	_, wslErr := os.Stat(paths.WSLCaddy)
+	return platform.DetectCaddyTopology(unifiedErr == nil, windowsErr == nil, wslErr == nil, false, status.Running)
 }
 
 func renderProjectViews(runtime *projectViewRuntime, filter string) []ProjectView {
@@ -162,6 +233,7 @@ func renderProjectViews(runtime *projectViewRuntime, filter string) []ProjectVie
 			PackageManager:  pm,
 			StaticDir:       staticDir,
 			DevRunning:      false,
+			Revision:        cfg.Revision,
 		}
 		if project.RoutePort != nil {
 			view.RoutePortOverride = *project.RoutePort
@@ -231,7 +303,7 @@ func renderProjectViews(runtime *projectViewRuntime, filter string) []ProjectVie
 }
 
 func BuildProjectViews(ctx context.Context, service *app.App, filter string) ([]ProjectView, error) {
-	runtime, err := loadProjectViewRuntime(ctx, service)
+	runtime, _, err := loadProjectViewRuntime(ctx, service)
 	if err != nil {
 		return nil, err
 	}
@@ -251,7 +323,7 @@ func wslAvailability(ctx context.Context, service *app.App) bool {
 	return found["bash"] || found["caddy"]
 }
 
-func buildSystemStatusView(ctx context.Context, service *app.App, cfg domain.Config, phpVersions []app.PHPVersionStatus, wslAvailable bool, caddyStatus platform.CaddyServiceStatus) SystemStatusView {
+func buildSystemStatusView(cfg domain.Config, phpVersions []app.PHPVersionStatus, caddyStatus platform.CaddyServiceStatus, health systemHealthSnapshot, observedAt string) SystemStatusView {
 	host := cfg.LANAddress
 	if host == "auto" {
 		var lanErr error
@@ -261,32 +333,6 @@ func buildSystemStatusView(ctx context.Context, service *app.App, cfg domain.Con
 		}
 	}
 
-	topology := service.CaddyTopologyStatus(ctx)
-	firewallOk, _ := service.FirewallHealthy(ctx, cfg)
-	hyperVOk := false
-	if composite, ok := service.Firewall.(platform.CompositeFirewall); ok {
-		hyperVStatus := composite.HyperVStatus(ctx, platform.FirewallSpecForConfig(cfg))
-		hyperVOk = !hyperVStatus.Supported || hyperVStatus.Healthy
-	} else if composite, ok := service.Firewall.(*platform.CompositeFirewall); ok && composite != nil {
-		hyperVStatus := composite.HyperVStatus(ctx, platform.FirewallSpecForConfig(cfg))
-		hyperVOk = !hyperVStatus.Supported || hyperVStatus.Healthy
-	}
-	compatibility := platform.WSLCompatibilityReport{}
-	if os.Getenv("DEVLAN_TEST_MOCK") == "1" {
-		// The mock has no host WSL boundary to probe. Keep the file-backed setting
-		// visible while real builds report configured and effective state from a
-		// fresh capability probe below.
-		configured := mirroredNetworkingConfigured(service)
-		compatibility.MirroredConfigured = configured
-		compatibility.MirroredNetworking = configured
-	} else {
-		compatibility = service.WSLCompatibility(ctx)
-	}
-	caValid, caTrusted := false, false
-	if caInfo, caErr := service.CAInfo(ctx); caErr == nil {
-		caValid = caInfo["valid"] == "true"
-		caTrusted = caInfo["trusted"] == "true"
-	}
 	vers := make([]string, 0, len(phpVersions))
 	for _, version := range phpVersions {
 		vers = append(vers, version.Version)
@@ -305,19 +351,21 @@ func buildSystemStatusView(ctx context.Context, service *app.App, cfg domain.Con
 		WindowsCaddyRunning: false,
 		WSLCaddyRunning:     caddyStatus.Running,
 		CaddyRunning:        caddyStatus.Running,
-		CaddyTopology:       string(topology.Topology),
+		CaddyTopology:       string(health.topology.Topology),
 		CaddySystemd:        caddyStatus.Systemd,
 		CaddyLive:           caddyStatus.Live,
-		MirroredConfigured:  compatibility.MirroredConfigured,
-		MirroredNetworking:  compatibility.MirroredNetworking,
-		HyperVFirewallOk:    hyperVOk,
-		CARootValid:         caValid,
-		CARootTrusted:       caTrusted,
-		WSLAvailable:        wslAvailable,
-		FirewallOk:          firewallOk,
+		MirroredConfigured:  health.mirroredConfigured,
+		MirroredNetworking:  health.mirroredNetworking,
+		HyperVFirewallOk:    health.hyperVOK,
+		CARootValid:         health.caValid,
+		CARootTrusted:       health.caTrusted,
+		WSLAvailable:        health.wslAvailable,
+		FirewallOk:          health.firewallOK,
 		PHPVersions:         vers,
 		TotalProjects:       len(cfg.Projects),
 		ProtocolVersion:     ProtocolVersion,
+		Revision:            cfg.Revision,
+		ObservedAt:          observedAt,
 	}
 }
 
@@ -388,15 +436,44 @@ func phpVersionViews(items []app.PHPVersionStatus) []PHPVersionView {
 // panels that used to issue independent requests.
 func BuildOverviewView(ctx context.Context, service *app.App, filter string) (OverviewView, error) {
 	ctx = platform.WithWSLOperation(ctx, platform.WSLOperationPolling)
-	runtime, err := loadProjectViewRuntime(ctx, service)
+	started := time.Now()
+	beforeStats := service.WSL.StatsSnapshot()
+	runtime, hotHit, err := loadProjectViewRuntime(ctx, service)
 	if err != nil {
 		return OverviewView{}, err
 	}
-	phpItems, _ := service.PHPVersions(platform.WithWSLOperation(ctx, platform.WSLOperationStatus))
+	now := time.Now()
+	if service.Now != nil {
+		now = service.Now()
+	}
+	health, coldHit := cachedCold(ctx, service, now, runtime.caddyStatus)
+	observedAt := now.UTC().Format(time.RFC3339Nano)
+	hotAge, coldAge := readModelCacheAges(service, now)
+	afterStats := service.WSL.StatsSnapshot()
+	cacheStatus := "miss"
+	if hotHit && coldHit {
+		cacheStatus = "hot+cold"
+	} else if hotHit {
+		cacheStatus = "hot"
+	} else if coldHit {
+		cacheStatus = "cold"
+	}
 	return OverviewView{
 		Projects:    renderProjectViews(runtime, filter),
-		Status:      buildSystemStatusView(ctx, service, runtime.cfg, phpItems, wslAvailability(ctx, service), runtime.caddyStatus),
-		PHPVersions: phpVersionViews(phpItems),
+		Status:      buildSystemStatusView(runtime.cfg, health.phpVersions, runtime.caddyStatus, health, observedAt),
+		PHPVersions: phpVersionViews(health.phpVersions),
+		Revision:    runtime.cfg.Revision,
+		ObservedAt:  observedAt,
+		Meta: &OverviewMeta{
+			Cache:              cacheStatus,
+			HotAgeMs:           hotAge,
+			ColdAgeMs:          coldAge,
+			DurationMs:         time.Since(started).Milliseconds(),
+			WSLCalls:           afterStats.TotalCalls,
+			WSLCallsDelta:      afterStats.TotalCalls - beforeStats.TotalCalls,
+			WSLDurationMs:      afterStats.TotalDuration.Milliseconds(),
+			WSLDurationDeltaMs: (afterStats.TotalDuration - beforeStats.TotalDuration).Milliseconds(),
+		},
 	}, nil
 }
 
@@ -405,8 +482,13 @@ func BuildStatusView(ctx context.Context, service *app.App) (SystemStatusView, e
 	if err != nil {
 		return SystemStatusView{}, err
 	}
-	phpVers, _ := service.PHPVersions(platform.WithWSLOperation(ctx, platform.WSLOperationStatus))
-	return buildSystemStatusView(ctx, service, cfg, phpVers, wslAvailability(ctx, service), serviceCaddyStatus(ctx, service)), nil
+	now := time.Now()
+	if service.Now != nil {
+		now = service.Now()
+	}
+	caddyStatus := serviceCaddyStatus(ctx, service)
+	health, _ := cachedCold(ctx, service, now, caddyStatus)
+	return buildSystemStatusView(cfg, health.phpVersions, caddyStatus, health, now.UTC().Format(time.RFC3339Nano)), nil
 }
 
 func BuildGlobalConfigView(service *app.App) (GlobalConfigView, error) {
@@ -425,11 +507,12 @@ func BuildGlobalConfigView(service *app.App) (GlobalConfigView, error) {
 }
 
 func BuildPHPVersionsView(ctx context.Context, service *app.App) ([]PHPVersionView, error) {
-	items, err := service.PHPVersions(platform.WithWSLOperation(ctx, platform.WSLOperationStatus))
-	if err != nil {
-		return nil, err
+	now := time.Now()
+	if service.Now != nil {
+		now = service.Now()
 	}
-	return phpVersionViews(items), nil
+	health, _ := cachedCold(ctx, service, now, serviceCaddyStatus(ctx, service))
+	return phpVersionViews(health.phpVersions), nil
 }
 
 func BuildDoctorChecksView(ctx context.Context, service *app.App, name string) ([]DoctorCheckView, error) {
@@ -477,13 +560,13 @@ func BuildMetricsSnapshot(service *app.App, project, rawRange string) (*metrics.
 	if rangeValue != metrics.Range15m && rangeValue != metrics.Range1h && rangeValue != metrics.Range24h && rangeValue != metrics.Range7d {
 		return nil, fmt.Errorf("intervalo de métricas inválido: %s", rawRange)
 	}
-	data, err := os.ReadFile(filepath.Join(service.Store.Paths().LogsDir, "access.jsonl"))
-	if err != nil {
-		return nil, nil
-	}
 	now := time.Now()
 	if service.Now != nil {
 		now = service.Now()
 	}
-	return metrics.Aggregate(data, project, rangeValue, now), nil
+	accessLog := filepath.Join(service.Store.Paths().LogsDir, "access.jsonl")
+	collector, _ := metricsCollectors.LoadOrStore(accessLog, metrics.NewCollector())
+	return collector.(*metrics.Collector).Snapshot(accessLog, project, rangeValue, now)
 }
+
+var metricsCollectors sync.Map

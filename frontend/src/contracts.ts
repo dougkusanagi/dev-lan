@@ -4,7 +4,9 @@ import type {
   GlobalConfig,
   MetricsRange,
   MetricsSnapshot,
+  MutationResult,
   Overview,
+  OverviewMeta,
   PHPVersion,
   ProjectConfigUpdate,
   ProjectInfo,
@@ -173,6 +175,7 @@ export function parseProjectInfo(value: unknown, path = 'projects[]'): ProjectIn
     devRunning: requiredBoolean(item, 'devRunning', path),
     devPid: optionalNumber(item, 'devPid', path),
     devPort: optionalNumber(item, 'devPort', path),
+    revision: optionalNumber(item, 'revision', path),
   };
 }
 
@@ -186,6 +189,9 @@ export function parseOverview(value: unknown, expectedVersion = DEVLAN_PROTOCOL_
     projects: parseProjects(item.projects),
     status: parseSystemStatus(item.status, expectedVersion),
     phpVersions: parsePHPVersions(item.phpVersions),
+    revision: optionalNumber(item, 'revision', 'overview'),
+    observedAt: optionalString(item, 'observedAt', 'overview'),
+    meta: item.meta === undefined ? undefined : parseOverviewMeta(item.meta),
   };
 }
 
@@ -224,6 +230,22 @@ export function parseSystemStatus(
     phpVersions: stringArray(item, 'phpVersions', 'status'),
     totalProjects: requiredNumber(item, 'totalProjects', 'status'),
     protocolVersion,
+    revision: optionalNumber(item, 'revision', 'status'),
+    observedAt: optionalString(item, 'observedAt', 'status'),
+  };
+}
+
+function parseOverviewMeta(value: unknown): OverviewMeta {
+  const item = record(value, 'overview.meta');
+  return {
+    cache: requiredString(item, 'cache', 'overview.meta'),
+    hotAgeMs: requiredNumber(item, 'hotAgeMs', 'overview.meta'),
+    coldAgeMs: requiredNumber(item, 'coldAgeMs', 'overview.meta'),
+    durationMs: requiredNumber(item, 'durationMs', 'overview.meta'),
+    wslCalls: requiredNumber(item, 'wslCalls', 'overview.meta'),
+    wslCallsDelta: requiredNumber(item, 'wslCallsDelta', 'overview.meta'),
+    wslDurationMs: requiredNumber(item, 'wslDurationMs', 'overview.meta'),
+    wslDurationDeltaMs: requiredNumber(item, 'wslDurationDeltaMs', 'overview.meta'),
   };
 }
 
@@ -342,6 +364,51 @@ export function parseMetricsSnapshot(value: unknown): MetricsSnapshot | null {
 export function parseString(value: unknown, path = 'response'): string {
   if (typeof value !== 'string') return fail(path, 'string', value);
   return value;
+}
+
+export function parseMutationResult(value: unknown): MutationResult | undefined {
+  // Older API/Wails builds returned only {message}. Keep that response
+  // compatible while strictly validating the new envelope when present.
+  if (value === undefined || value === null) return undefined;
+  const item = record(value, 'mutation');
+  if (item.operationId === undefined) return undefined;
+  const warnings = item.warnings;
+  if (
+    warnings !== undefined &&
+    (!Array.isArray(warnings) || warnings.some((entry) => typeof entry !== 'string'))
+  ) {
+    return fail('mutation.warnings', 'array de strings opcional', warnings);
+  }
+  const phaseMs = item.phaseMs;
+  let parsedPhaseMs: Record<string, number> | undefined;
+  if (phaseMs !== undefined) {
+    const phaseRecord = record(phaseMs, 'mutation.phaseMs');
+    parsedPhaseMs = {};
+    for (const [key, phase] of Object.entries(phaseRecord)) {
+      if (typeof phase !== 'number' || !Number.isFinite(phase)) {
+        return fail(`mutation.phaseMs.${key}`, 'número finito', phase);
+      }
+      parsedPhaseMs[key] = phase;
+    }
+  }
+  return {
+    operationId: requiredString(item, 'operationId', 'mutation'),
+    operation: requiredString(item, 'operation', 'mutation'),
+    phase: requiredString(item, 'phase', 'mutation'),
+    status: requiredString(item, 'status', 'mutation'),
+    revision: optionalNumber(item, 'revision', 'mutation'),
+    projectState:
+      item.projectState === undefined
+        ? undefined
+        : parseProjectInfo(item.projectState, 'mutation.projectState'),
+    warnings: warnings as string[] | undefined,
+    error: optionalString(item, 'error', 'mutation'),
+    observedAt: optionalString(item, 'observedAt', 'mutation'),
+    startedAt: optionalString(item, 'startedAt', 'mutation'),
+    updatedAt: optionalString(item, 'updatedAt', 'mutation'),
+    durationMs: optionalNumber(item, 'durationMs', 'mutation'),
+    phaseMs: parsedPhaseMs,
+  };
 }
 
 export function parseProjectConfigUpdate(value: unknown): ProjectConfigUpdate {

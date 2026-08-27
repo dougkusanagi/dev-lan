@@ -26,6 +26,7 @@
         "devRunning": { "type": "boolean", "required": true },
         "devPid": { "type": "number", "required": false },
         "devPort": { "type": "number", "required": false }
+        ,"revision": { "type": "number", "required": false }
       }
     },
     "SystemStatus": {
@@ -55,7 +56,9 @@
         "firewallOk": { "type": "boolean", "required": true },
         "phpVersions": { "type": "string[]", "required": true },
         "totalProjects": { "type": "number", "required": true },
-        "protocolVersion": { "type": "number", "required": true }
+        "protocolVersion": { "type": "number", "required": true },
+        "revision": { "type": "number", "required": false },
+        "observedAt": { "type": "string", "required": false }
       }
     },
     "Overview": {
@@ -64,6 +67,40 @@
         "projects": { "type": "ProjectInfo[]", "required": true },
         "status": { "type": "SystemStatus", "required": true },
         "phpVersions": { "type": "PHPVersion[]", "required": true }
+        ,"revision": { "type": "number", "required": false }
+        ,"observedAt": { "type": "string", "required": false }
+        ,"meta": { "type": "OverviewMeta", "required": false }
+      }
+    },
+    "OverviewMeta": {
+      "goType": "OverviewMeta",
+      "fields": {
+        "cache": { "type": "string", "required": true },
+        "hotAgeMs": { "type": "number", "required": true },
+        "coldAgeMs": { "type": "number", "required": true },
+        "durationMs": { "type": "number", "required": true },
+        "wslCalls": { "type": "number", "required": true },
+        "wslCallsDelta": { "type": "number", "required": true },
+        "wslDurationMs": { "type": "number", "required": true },
+        "wslDurationDeltaMs": { "type": "number", "required": true }
+      }
+    },
+    "MutationResult": {
+      "goType": "MutationResult",
+      "fields": {
+        "operationId": { "type": "string", "required": true },
+        "operation": { "type": "string", "required": true },
+        "phase": { "type": "string", "required": true },
+        "status": { "type": "string", "required": true },
+        "revision": { "type": "number", "required": false },
+        "projectState": { "type": "ProjectInfo", "required": false },
+        "warnings": { "type": "string[]", "required": false },
+        "error": { "type": "string", "required": false },
+        "observedAt": { "type": "string", "required": false },
+        "startedAt": { "type": "string", "required": false },
+        "updatedAt": { "type": "string", "required": false },
+        "durationMs": { "type": "number", "required": false },
+        "phaseMs": { "type": "Record<string, number>", "required": false }
       }
     },
     "PHPVersion": {
@@ -100,6 +137,7 @@
       "goType": "ProjectConfigUpdate",
       "fields": {
         "name": { "type": "string", "required": true },
+        "operationId": { "type": "string", "required": false },
         "mode": { "type": "ProjectMode", "required": false },
         "phpVersion": { "type": "string", "required": false },
         "phpPreset": { "type": "string", "required": false },
@@ -164,15 +202,17 @@
     "getGlobalConfig": { "method": "GET", "path": "/api/v1/config", "wails": "GetGlobalConfig", "response": "GlobalConfig" },
     "getPHPVersions": { "method": "GET", "path": "/api/v1/php/versions", "wails": "GetPHPVersions", "response": "PHPVersion[]" },
     "saveGlobalConfig": { "method": "POST", "path": "/api/v1/config", "wails": "SaveGlobalConfig", "response": "void" },
-    "saveProjectConfig": { "method": "POST", "path": "/api/v1/projects/config", "wails": "SaveProjectConfig", "response": "void" },
+    "saveProjectConfig": { "method": "POST", "path": "/api/v1/projects/config", "wails": "SaveProjectConfigResult", "response": "MutationResult" },
     "linkProject": { "method": "POST", "path": "/api/v1/projects/link", "wails": "LinkProject", "response": "void" },
     "unlinkProject": { "method": "POST", "path": "/api/v1/projects/unlink", "wails": "UnlinkProject", "response": "void" },
     "hideProject": { "method": "POST", "path": "/api/v1/projects/hide", "wails": "HideProject", "response": "void" },
     "parkDir": { "method": "POST", "path": "/api/v1/parks/park", "wails": "ParkDir", "response": "void" },
     "unparkDir": { "method": "POST", "path": "/api/v1/parks/unpark", "wails": "UnparkDir", "response": "void" },
-    "startDev": { "method": "POST", "path": "/api/v1/projects/start", "wails": "StartDev", "response": "void" },
-    "stopDev": { "method": "POST", "path": "/api/v1/projects/stop", "wails": "StopDev", "response": "void" },
-    "restartDev": { "method": "POST", "path": "/api/v1/projects/restart", "wails": "RestartDev", "response": "void" },
+    "startDev": { "method": "POST", "path": "/api/v1/projects/start", "wails": "StartDevOperation", "response": "MutationResult" },
+    "stopDev": { "method": "POST", "path": "/api/v1/projects/stop", "wails": "StopDevOperation", "response": "MutationResult" },
+    "restartDev": { "method": "POST", "path": "/api/v1/projects/restart", "wails": "RestartDevOperation", "response": "MutationResult" },
+    "getOperation": { "method": "GET", "path": "/api/v1/operations/{operationId}", "wails": "GetOperation", "response": "MutationResult" },
+    "events": { "method": "GET", "path": "/api/v1/events", "wails": "EventsOn", "response": "SSE" },
     "buildProject": { "method": "POST", "path": "/api/v1/projects/build", "wails": "BuildProject", "response": "string" },
     "installDeps": { "method": "POST", "path": "/api/v1/projects/deps", "wails": "InstallDeps", "response": "string" },
     "getProjectLogs": { "method": "GET", "path": "/api/v1/projects/logs", "wails": "GetProjectLogs", "response": "string" },

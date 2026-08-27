@@ -63,6 +63,20 @@ func TestOverviewRouteUsesOneReadModelAndBatchedWSLCalls(t *testing.T) {
 	if stats.TotalCalls != 2 || stats.Operations[platform.WSLOperationDiscovery].Calls != 1 || stats.Operations[platform.WSLOperationStatus].Calls != 1 {
 		t.Fatalf("poll agregado abriu spawns inesperados: %#v", stats)
 	}
+
+	// A second poll inside the hot/cold TTLs is served from the materialized
+	// snapshots and must not cross the WSL boundary again.
+	second := httptest.NewRecorder()
+	New(service).Handler().ServeHTTP(second, request.Clone(request.Context()))
+	if second.Code != http.StatusOK {
+		t.Fatalf("segundo overview rejeitado: %d", second.Code)
+	}
+	if secondStats := service.WSL.StatsSnapshot(); secondStats.TotalCalls != stats.TotalCalls {
+		t.Fatalf("snapshot quente abriu spawns adicionais: antes=%#v depois=%#v", stats, secondStats)
+	}
+	if !strings.Contains(second.Body.String(), `"cache":"hot+cold"`) {
+		t.Fatalf("overview não informou cache quente/frio: %s", second.Body.String())
+	}
 }
 
 type overviewTestInvoker struct {

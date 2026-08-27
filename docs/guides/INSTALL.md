@@ -92,11 +92,11 @@ permitir a porta 443 no Windows Firewall/Hyper-V Firewall e instalar no Windows
 o certificado raiz público emitido pelo Caddy WSL. O uso normal da CLI continua
 sem elevação. Outros dispositivos precisam importar o certificado raiz
 exportado por `devlan ca export`; a chave privada nunca é exportada. Consulte
-[CLI e configuração](CLI-AND-CONFIG.md#https-na-lan).
+[CLI e configuração](../reference/CLI-AND-CONFIG.md#https-na-lan).
 
 O script não executa `composer install` nos projetos e não instala bancos,
 Node ou dependências de aplicação. Esses passos continuam explícitos e fora do
-MVP.
+escopo do bootstrap.
 
 ## Operação após a instalação
 
@@ -150,7 +150,7 @@ em execução para receber os comandos.
 
 PHP não possui uma categoria oficial chamada “LTS”: cada branch recebe dois
 anos de suporte ativo e dois anos de correções críticas de segurança. O
-bootstrap usa PHP 8.5 por padrão por ser a branch ativa mais recente do MVP;
+bootstrap usa PHP 8.5 por padrão como versão selecionada pelo produto;
 8.3 e 8.4 também podem ser escolhidos:
 
 ```powershell

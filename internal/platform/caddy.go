@@ -257,6 +257,9 @@ func (c CaddyClient) copyConfigToService(ctx context.Context, configPath string)
 	if _, err := c.runWSL(ctx, true, "/bin/mkdir", "-p", pathpkg.Dir(target)); err != nil {
 		return fmt.Errorf("preparar diretório da configuração Caddy: %w", err)
 	}
+	if err := c.backupLiveConfig(ctx, target); err != nil {
+		return err
+	}
 	temporary := target + ".devlan.tmp"
 	defer func() { _, _ = c.runWSL(ctx, true, "/bin/rm", "-f", "--", temporary) }()
 	if _, err := c.runWSL(ctx, true, "/bin/cp", "--", source, temporary); err != nil {
@@ -267,6 +270,23 @@ func (c CaddyClient) copyConfigToService(ctx context.Context, configPath string)
 	}
 	if _, err := c.runWSL(ctx, true, "/bin/mv", "-f", "--", temporary, target); err != nil {
 		return fmt.Errorf("publicar configuração Caddy atomicamente: %w", err)
+	}
+	return nil
+}
+
+func (c CaddyClient) backupLiveConfig(ctx context.Context, target string) error {
+	// The bootstrap creates /etc/devlan and owns these marker names. A fixed
+	// shell program plus positional arguments avoids interpolating a path into
+	// shell source while preserving a pre-existing Caddyfile exactly once.
+	const script = `set -eu
+/bin/mkdir -p /etc/devlan
+if [ -e "$1" ]; then
+    if [ ! -e /etc/devlan/caddyfile.before ]; then /bin/cp -- "$1" /etc/devlan/caddyfile.before; fi
+elif [ ! -e /etc/devlan/caddyfile.missing ]; then
+    /bin/touch /etc/devlan/caddyfile.missing
+fi`
+	if _, err := c.runWSL(ctx, true, "/bin/sh", "-c", script, "devlan", target); err != nil {
+		return fmt.Errorf("salvar backup do Caddyfile WSL: %w", err)
 	}
 	return nil
 }

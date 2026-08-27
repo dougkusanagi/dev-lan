@@ -2,6 +2,7 @@ import {
   parseDoctorChecks,
   parseGlobalConfig,
   parseMetricsSnapshot,
+  parseMutationResult,
   parseOverview,
   parsePHPVersions,
   parseProjects,
@@ -13,6 +14,7 @@ import type {
   GlobalConfig,
   MetricsRange,
   MetricsSnapshot,
+  MutationResult,
   Overview,
   PHPVersion,
   ProjectConfigUpdate,
@@ -35,14 +37,19 @@ export interface WailsApp {
   SetDefaultPHPVersion: (version: string) => Promise<void>;
   SaveGlobalConfig: (cfg: GlobalConfig) => Promise<void>;
   SaveProjectConfig: (update: ProjectConfigUpdate) => Promise<void>;
+  SaveProjectConfigResult?: (update: ProjectConfigUpdate, operationId: string) => Promise<unknown>;
   LinkProject: (name: string, path: string) => Promise<void>;
   UnlinkProject: (name: string) => Promise<void>;
   HideProject: (name: string) => Promise<void>;
   ParkDir: (path: string) => Promise<void>;
   UnparkDir: (path: string) => Promise<void>;
   StartDev: (name: string) => Promise<void>;
+  StartDevOperation?: (name: string, operationId: string) => Promise<unknown>;
   StopDev: (name: string) => Promise<void>;
+  StopDevOperation?: (name: string, operationId: string) => Promise<unknown>;
   RestartDev: (name: string) => Promise<void>;
+  RestartDevOperation?: (name: string, operationId: string) => Promise<unknown>;
+  GetOperation?: (operationId: string) => Promise<unknown>;
   BuildProject: (name: string) => Promise<string>;
   InstallDeps: (name: string) => Promise<string>;
   GetProjectLogs: (name: string, lines: number) => Promise<string>;
@@ -60,6 +67,22 @@ export interface WailsApp {
 export interface WailsRuntime {
   ClipboardSetText?: (text: string) => Promise<boolean>;
   BrowserOpenURL?: (url: string) => void;
+  EventsOn?: (eventName: string, callback: (...data: unknown[]) => void) => unknown;
+  EventsOff?: (eventName: string) => void;
+}
+
+export interface OverviewRequestOptions {
+  signal?: AbortSignal;
+}
+
+// Legacy Wails and test doubles return Promise<void>; keep that transport
+// shape compatible while new transports return the authoritative envelope.
+// biome-ignore lint/suspicious/noConfusingVoidType: legacy mutation adapters intentionally return void
+export type MutationResponse = MutationResult | void;
+
+export interface DevLANEvent {
+  type: 'operation-progress' | 'project-state-changed' | string;
+  result: MutationResult;
 }
 
 declare global {
@@ -71,7 +94,7 @@ declare global {
 }
 
 export interface DevLANClient {
-  getOverview?: (filter?: string) => Promise<Overview>;
+  getOverview?: (filter?: string, options?: OverviewRequestOptions) => Promise<Overview>;
   getProjects(filter?: string): Promise<ProjectInfo[]>;
   getStatus(): Promise<SystemStatus>;
   getTopology(): Promise<Record<string, unknown>>;
@@ -82,15 +105,17 @@ export interface DevLANClient {
   removePHPVersion(version: string): Promise<void>;
   setDefaultPHPVersion(version: string): Promise<void>;
   saveGlobalConfig(cfg: GlobalConfig): Promise<void>;
-  saveProjectConfig(update: ProjectConfigUpdate): Promise<void>;
+  saveProjectConfig(update: ProjectConfigUpdate): Promise<MutationResponse>;
   linkProject(name: string, path: string): Promise<void>;
   unlinkProject(name: string): Promise<void>;
   hideProject(name: string): Promise<void>;
   parkDir(path: string): Promise<void>;
   unparkDir(path: string): Promise<void>;
-  startDev(name: string): Promise<void>;
-  stopDev(name: string): Promise<void>;
-  restartDev(name: string): Promise<void>;
+  startDev(name: string, operationId?: string): Promise<MutationResponse>;
+  stopDev(name: string, operationId?: string): Promise<MutationResponse>;
+  restartDev(name: string, operationId?: string): Promise<MutationResponse>;
+  getOperation?(operationId: string): Promise<MutationResult>;
+  subscribeEvents?(onEvent: (event: DevLANEvent) => void): () => void;
   buildProject(name: string): Promise<string>;
   installDeps(name: string): Promise<string>;
   getProjectLogs(name: string, lines?: number): Promise<string>;
@@ -168,6 +193,7 @@ export class HttpDevLANClient implements DevLANClient {
     path: string,
     body?: unknown,
     decode?: Decoder<T>,
+    signal?: AbortSignal,
   ): Promise<T> {
     const headers: Record<string, string> = { Accept: 'application/json' };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -183,8 +209,12 @@ export class HttpDevLANClient implements DevLANClient {
         headers,
         credentials: 'same-origin',
         body: body === undefined ? undefined : JSON.stringify(body),
+        signal,
       });
     } catch (error) {
+      if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+        throw error;
+      }
       throw new APIError(0, 'Network Error', `API indisponível: ${String(error)}`);
     }
 
@@ -222,9 +252,15 @@ export class HttpDevLANClient implements DevLANClient {
     return this.request('GET', `/api/v1/projects${query}`, undefined, parseProjects);
   }
 
-  getOverview(filter = ''): Promise<Overview> {
+  getOverview(filter = '', options: OverviewRequestOptions = {}): Promise<Overview> {
     const query = filter ? `?filter=${encodeURIComponent(filter)}` : '';
-    return this.request('GET', `/api/v1/overview${query}`, undefined, parseOverview);
+    return this.request(
+      'GET',
+      `/api/v1/overview${query}`,
+      undefined,
+      parseOverview,
+      options.signal,
+    );
   }
 
   getStatus(): Promise<SystemStatus> {
@@ -268,8 +304,8 @@ export class HttpDevLANClient implements DevLANClient {
     await this.request('POST', '/api/v1/config', cfg);
   }
 
-  async saveProjectConfig(update: ProjectConfigUpdate): Promise<void> {
-    await this.request('POST', '/api/v1/projects/config', update);
+  async saveProjectConfig(update: ProjectConfigUpdate): Promise<MutationResponse> {
+    return this.request('POST', '/api/v1/projects/config', update, parseMutationResult);
   }
 
   async linkProject(name: string, path: string): Promise<void> {
@@ -292,16 +328,40 @@ export class HttpDevLANClient implements DevLANClient {
     await this.request('POST', '/api/v1/parks/unpark', { path });
   }
 
-  async startDev(name: string): Promise<void> {
-    await this.request('POST', '/api/v1/projects/start', { name });
+  async startDev(name: string, operationId?: string): Promise<MutationResponse> {
+    return this.request(
+      'POST',
+      '/api/v1/projects/start',
+      {
+        name,
+        ...(operationId ? { operationId } : {}),
+      },
+      parseMutationResult,
+    );
   }
 
-  async stopDev(name: string): Promise<void> {
-    await this.request('POST', '/api/v1/projects/stop', { name });
+  async stopDev(name: string, operationId?: string): Promise<MutationResponse> {
+    return this.request(
+      'POST',
+      '/api/v1/projects/stop',
+      {
+        name,
+        ...(operationId ? { operationId } : {}),
+      },
+      parseMutationResult,
+    );
   }
 
-  async restartDev(name: string): Promise<void> {
-    await this.request('POST', '/api/v1/projects/restart', { name });
+  async restartDev(name: string, operationId?: string): Promise<MutationResponse> {
+    return this.request(
+      'POST',
+      '/api/v1/projects/restart',
+      {
+        name,
+        ...(operationId ? { operationId } : {}),
+      },
+      parseMutationResult,
+    );
   }
 
   async buildProject(name: string): Promise<string> {
@@ -376,6 +436,33 @@ export class HttpDevLANClient implements DevLANClient {
     );
     return objectField(result, 'logs');
   }
+
+  async getOperation(operationId: string): Promise<MutationResult> {
+    const result = await this.request(
+      'GET',
+      `/api/v1/operations/${encodeURIComponent(operationId)}`,
+      undefined,
+      parseMutationResult,
+    );
+    if (!result) throw new APIError(502, 'Bad Gateway', 'API não retornou o estado da operação.');
+    return result;
+  }
+
+  subscribeEvents(onEvent: (event: DevLANEvent) => void): () => void {
+    if (typeof EventSource === 'undefined') return () => undefined;
+    const source = new EventSource(this.url('/api/v1/events'), { withCredentials: true });
+    const receive = (event: MessageEvent<string>) => {
+      try {
+        const parsed = parseMutationResult(JSON.parse(event.data));
+        if (parsed) onEvent({ type: event.type, result: parsed });
+      } catch {
+        // SSE is an optimization; the operation poll remains authoritative.
+      }
+    };
+    source.addEventListener('operation-progress', receive);
+    source.addEventListener('project-state-changed', receive);
+    return () => source.close();
+  }
 }
 
 export class WailsDevLANClient implements DevLANClient {
@@ -384,7 +471,7 @@ export class WailsDevLANClient implements DevLANClient {
     private readonly runtime?: WailsRuntime,
   ) {}
 
-  async getOverview(filter = ''): Promise<Overview> {
+  async getOverview(filter = '', _options: OverviewRequestOptions = {}): Promise<Overview> {
     if (this.app.GetOverview) return parseOverview(await this.app.GetOverview(filter));
     const [projects, status, phpVersions] = await Promise.all([
       this.getProjects(filter),
@@ -432,7 +519,12 @@ export class WailsDevLANClient implements DevLANClient {
   saveGlobalConfig(cfg: GlobalConfig) {
     return this.app.SaveGlobalConfig(cfg);
   }
-  saveProjectConfig(update: ProjectConfigUpdate) {
+  saveProjectConfig(update: ProjectConfigUpdate): Promise<MutationResponse> {
+    if (this.app.SaveProjectConfigResult) {
+      return this.app
+        .SaveProjectConfigResult(update, update.operationId || '')
+        .then(parseMutationResult);
+    }
     return this.app.SaveProjectConfig(update);
   }
   linkProject(name: string, path: string) {
@@ -450,13 +542,19 @@ export class WailsDevLANClient implements DevLANClient {
   unparkDir(path: string) {
     return this.app.UnparkDir(path);
   }
-  startDev(name: string) {
+  startDev(name: string, operationId?: string): Promise<MutationResponse> {
+    if (this.app.StartDevOperation)
+      return this.app.StartDevOperation(name, operationId || '').then(parseMutationResult);
     return this.app.StartDev(name);
   }
-  stopDev(name: string) {
+  stopDev(name: string, operationId?: string): Promise<MutationResponse> {
+    if (this.app.StopDevOperation)
+      return this.app.StopDevOperation(name, operationId || '').then(parseMutationResult);
     return this.app.StopDev(name);
   }
-  restartDev(name: string) {
+  restartDev(name: string, operationId?: string): Promise<MutationResponse> {
+    if (this.app.RestartDevOperation)
+      return this.app.RestartDevOperation(name, operationId || '').then(parseMutationResult);
     return this.app.RestartDev(name);
   }
   buildProject(name: string) {
@@ -503,6 +601,39 @@ export class WailsDevLANClient implements DevLANClient {
   getSecurityAudit(lines = 100) {
     return this.app.GetSecurityAudit(lines);
   }
+
+  async getOperation(operationId: string): Promise<MutationResult> {
+    if (!this.app.GetOperation) throw new Error('O transporte Wails não expõe operações.');
+    const result = parseMutationResult(await this.app.GetOperation(operationId));
+    if (!result) throw new Error('Wails não retornou o estado da operação.');
+    return result;
+  }
+
+  subscribeEvents(onEvent: (event: DevLANEvent) => void): () => void {
+    if (!this.runtime?.EventsOn) return () => undefined;
+    const eventNames = [
+      ['devlan:operation-progress', 'operation-progress'],
+      ['devlan:project-state-changed', 'project-state-changed'],
+    ] as const;
+    const cleanup: Array<(() => void) | undefined> = [];
+    const receive = (type: DevLANEvent['type'], ...data: unknown[]) => {
+      const candidate = data.length === 1 ? data[0] : data;
+      const result = parseMutationResult(candidate);
+      if (result) onEvent({ type, result });
+    };
+    for (const [eventName, type] of eventNames) {
+      const returned = this.runtime.EventsOn(eventName, (...data) => receive(type, ...data));
+      cleanup.push(typeof returned === 'function' ? () => (returned as () => void)() : undefined);
+    }
+    return () => {
+      cleanup.forEach((cancel) => {
+        cancel?.();
+      });
+      eventNames.forEach(([eventName]) => {
+        this.runtime?.EventsOff?.(eventName);
+      });
+    };
+  }
 }
 
 export interface MockClientOptions {
@@ -521,6 +652,7 @@ export class MockDevLANClient implements DevLANClient {
   private phpVersions: PHPVersion[];
   private globalConfig: GlobalConfig;
   private metrics: MetricsSnapshot | null;
+  private revision = 0;
   private readonly failures: Partial<Record<keyof DevLANClient, Error>>;
 
   constructor(options: MockClientOptions = {}) {
@@ -530,6 +662,24 @@ export class MockDevLANClient implements DevLANClient {
     this.globalConfig = structuredClone(options.globalConfig ?? defaultGlobalConfig);
     this.metrics = structuredClone(options.metrics ?? null);
     this.failures = options.failures ?? {};
+    this.revision = Math.max(...this.projects.map((project) => project.revision || 0), 0);
+  }
+
+  private mutation(operation: string, projectName?: string): MutationResult {
+    this.revision += 1;
+    const project = projectName
+      ? this.projects.find((item) => item.name === projectName)
+      : undefined;
+    if (project) project.revision = this.revision;
+    return {
+      operationId: `mock-${this.revision}`,
+      operation,
+      phase: operation === 'stop' ? 'stopped' : 'ready',
+      status: operation === 'stop' ? 'stopped' : 'ready',
+      revision: this.revision,
+      projectState: project ? structuredClone(project) : undefined,
+      observedAt: new Date().toISOString(),
+    };
   }
 
   private check<K extends keyof DevLANClient>(name: K) {
@@ -599,7 +749,7 @@ export class MockDevLANClient implements DevLANClient {
     this.check('saveGlobalConfig');
     this.globalConfig = structuredClone(cfg);
   }
-  async saveProjectConfig(update: ProjectConfigUpdate) {
+  async saveProjectConfig(update: ProjectConfigUpdate): Promise<MutationResponse> {
     this.check('saveProjectConfig');
     this.projects = this.projects.map((project) => {
       if (project.name !== update.name) return project;
@@ -616,6 +766,7 @@ export class MockDevLANClient implements DevLANClient {
       }
       return next;
     });
+    return this.mutation(update.tlsEnabled === undefined ? 'config' : 'tls', update.name);
   }
   async linkProject() {
     this.check('linkProject');
@@ -634,17 +785,20 @@ export class MockDevLANClient implements DevLANClient {
   async unparkDir() {
     this.check('unparkDir');
   }
-  async startDev(name: string) {
+  async startDev(name: string): Promise<MutationResponse> {
     this.check('startDev');
     this.setDev(name, true);
+    return this.mutation('start', name);
   }
-  async stopDev(name: string) {
+  async stopDev(name: string): Promise<MutationResponse> {
     this.check('stopDev');
     this.setDev(name, false);
+    return this.mutation('stop', name);
   }
-  async restartDev(name: string) {
+  async restartDev(name: string): Promise<MutationResponse> {
     this.check('restartDev');
     this.setDev(name, true);
+    return this.mutation('restart', name);
   }
   async buildProject() {
     this.check('buildProject');

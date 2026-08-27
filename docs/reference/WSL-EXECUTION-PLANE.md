@@ -7,8 +7,8 @@ mas as sondagens agora são agrupadas. O estado de configuração, portas,
 processos desejados e coordenação permanece no Windows. Não existe daemon ou
 segundo banco de estado no Linux.
 
-A decisão foi registrada no [ADR 0004](adr/0004-wsl-batching.md), em conjunto
-com o [ADR 0002](adr/0002-control-plane-windows.md).
+A decisão foi registrada no [ADR 0004](../adr/0004-wsl-batching.md), em conjunto
+com o [ADR 0002](../adr/0002-control-plane-windows.md).
 
 ## Inventário e budgets
 

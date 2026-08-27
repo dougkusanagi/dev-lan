@@ -115,10 +115,30 @@ func run(args []string) error {
 		return nil
 
 	case "uninstall":
-		if len(args) != 0 {
-			return fmt.Errorf("uso: devlan uninstall")
+		uninstallOptions := app.UninstallOptions{}
+		asJSON := false
+		for _, argument := range args {
+			switch argument {
+			case "--dry-run":
+				uninstallOptions.DryRun = true
+			case "--keep-data":
+				uninstallOptions.KeepData = true
+			case "--keep-dependencies":
+				uninstallOptions.KeepDependencies = true
+			case "--purge":
+				uninstallOptions.Purge = true
+			case "--yes":
+				uninstallOptions.Yes = true
+			case "--json":
+				asJSON = true
+			default:
+				return fmt.Errorf("uso: devlan uninstall [--dry-run] [--keep-data] [--keep-dependencies] [--purge --yes] [--json]")
+			}
 		}
-		if runtime.GOOS == "windows" {
+		if err := uninstallOptions.Validate(); err != nil {
+			return err
+		}
+		if !uninstallOptions.DryRun && runtime.GOOS == "windows" {
 			manager := backgroundservice.NewManager()
 			if status, statusErr := manager.Status(ctx); statusErr == nil && status.Installed {
 				if removeErr := manager.Remove(ctx); removeErr != nil {
@@ -129,12 +149,27 @@ func run(args []string) error {
 				fmt.Fprintf(os.Stderr, "[aviso] não foi possível remover a inicialização automática: %v\n", startupErr)
 			}
 		}
-		result, err := service.Uninstall(ctx)
+		if !uninstallOptions.DryRun && runtime.GOOS == "windows" {
+			if desktopErr := desktop.Uninstall(ctx, dataDir); desktopErr != nil {
+				fmt.Fprintf(os.Stderr, "[aviso] não foi possível remover a integração desktop: %v\n", desktopErr)
+			}
+		}
+		result, err := service.UninstallWithOptions(ctx, uninstallOptions)
 		printWarnings(result.Warnings)
 		if err != nil {
 			return err
 		}
-		fmt.Println("Arquivos gerenciados removidos; diretórios dos projetos foram preservados.")
+		if asJSON {
+			return json.NewEncoder(os.Stdout).Encode(result)
+		}
+		printUninstallPlan(result.Plan, uninstallOptions.DryRun)
+		if result.Completed {
+			fmt.Println("DevLAN removido; diretórios dos projetos foram preservados.")
+		} else if result.Plan.Pending && len(result.Plan.Warnings) > 0 {
+			fmt.Println("DevLAN removido; a aplicação de configurações WSL ainda está pendente (consulte os avisos).")
+		} else {
+			fmt.Println("DevLAN removido parcialmente; consulte os avisos e execute novamente após corrigir as etapas pendentes.")
+		}
 		return nil
 
 	case "link":
@@ -492,6 +527,9 @@ func cliCommandTimeout(command string, args []string) time.Duration {
 				return 3 * time.Minute
 			}
 		}
+	}
+	if command == "uninstall" {
+		return 5 * time.Minute
 	}
 	return 45 * time.Second
 }
@@ -1684,6 +1722,24 @@ func printWarnings(warnings []string) {
 	}
 }
 
+func printUninstallPlan(plan app.UninstallPlan, dryRun bool) {
+	if dryRun {
+		fmt.Println("Plano de desinstalação (nenhuma alteração foi feita):")
+	} else {
+		fmt.Println("Resultado da desinstalação:")
+	}
+	counts := map[app.UninstallAction]int{}
+	for _, item := range plan.Items {
+		counts[item.Action]++
+		fmt.Printf("  %-9s %-24s %s\n", item.Action, item.ID, item.Detail)
+	}
+	fmt.Printf("Resumo: remover=%d restaurar=%d preservar=%d conflito=%d pendente=%d falha=%d\n",
+		counts[app.UninstallRemove], counts[app.UninstallRestore], counts[app.UninstallPreserve], counts[app.UninstallConflict], counts[app.UninstallPending], counts[app.UninstallFailed])
+	if plan.ProjectCount > 0 {
+		fmt.Printf("Projetos preservados: %d\n", plan.ProjectCount)
+	}
+}
+
 func printUsage() {
 	fmt.Print(`DevLAN — publicar projetos PHP, JavaScript e estáticos do WSL na rede local
 
@@ -1693,7 +1749,7 @@ Uso:
 Fundação e registro:
   install [--no-firewall] [--windows-port PORT]
                               inicializa arquivos gerenciados (Administrador*)
-  uninstall                  remove arquivos gerenciados, preserva projetos (Administrador*)
+  uninstall [OPÇÕES]         remove o DevLAN, restaura configurações e preserva projetos (Administrador*)
   link NAME PATH             registra um projeto (PHP, Vite, Next, estático)
   unlink NAME                remove registro e rota
   links [FILTRO] [--json]    lista projetos registrados e descobertos
@@ -1796,7 +1852,7 @@ func printCommandUsage(command string) {
 
 	usages := map[string]string{
 		"install":    "uso: devlan install [--no-firewall] [--windows-port PORT]",
-		"uninstall":  "uso: devlan uninstall",
+		"uninstall":  "uso: devlan uninstall [--dry-run] [--keep-data] [--keep-dependencies] [--purge --yes] [--json]",
 		"link":       "uso: devlan link NAME PATH",
 		"unlink":     "uso: devlan unlink NAME",
 		"links":      "uso: devlan links [FILTRO] [--json]",
@@ -1834,7 +1890,7 @@ func printCommandUsage(command string) {
 		fmt.Printf("%s\n\nOpções:\n  -h, --help    mostra esta ajuda\n", usage)
 		switch command {
 		case "install", "uninstall":
-			fmt.Println("\nAdministrador: necessário para criar ou remover a regra de firewall.")
+			fmt.Println("\nAdministrador: necessário para criar/remover a regra de firewall e limpar integrações do sistema.")
 		case "secure":
 			fmt.Println("\nAdministrador: necessário na primeira ativação para liberar a porta HTTPS no firewall e confiar na CA interna.")
 		case "trust":

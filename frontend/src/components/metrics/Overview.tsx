@@ -75,16 +75,15 @@ export function Overview({
   const [metricsRefresh, setMetricsRefresh] = useState(0);
   const canRunDev = project.effectiveMode === 'dev' || project.framework === 'laravel';
   const installedPHP = phpVersions.filter((version) => version.installed);
-  const projectOperations = operations.filter(
-    (operation) => operation.projectName === project.name,
-  );
-  const projectBusy = projectOperations.length > 0;
   const isBusy = (...keys: OperationKey[]) =>
     operations.some(
       (operation) =>
         (operation.projectName === undefined || operation.projectName === project.name) &&
         (keys.length === 0 || keys.includes(operation.key)),
     );
+  const configurationBusy = isBusy('tls', 'php', 'route-port', 'reload', 'remove');
+  const hmrBusy = isBusy('start', 'stop', 'restart', 'build', 'remove', 'reload');
+  const buildBusy = isBusy('build', 'start', 'stop', 'restart', 'remove', 'reload');
   const hmrStarting = isBusy('start', 'restart');
   const hmrStopping = isBusy('stop');
   useEffect(() => {
@@ -122,7 +121,7 @@ export function Overview({
                 aria-label="Versão do PHP"
                 value={project.phpVersion || ''}
                 onChange={(e) => onPHPVersion(e.target.value)}
-                disabled={projectBusy || installedPHP.length === 0}
+                disabled={configurationBusy || installedPHP.length === 0}
               >
                 <option value="">
                   {installedPHP.length ? 'Selecionar versão' : 'Nenhuma instalada'}
@@ -149,7 +148,7 @@ export function Overview({
               </span>
             </div>
           )}
-          <RoutePortControl project={project} busy={projectBusy} onChange={onRoutePort} />
+          <RoutePortControl project={project} busy={configurationBusy} onChange={onRoutePort} />
           <span
             className={`process-pill ${canRunDev ? (project.devRunning ? 'active' : 'stopped') : project.status}`}
             role="status"
@@ -170,7 +169,7 @@ export function Overview({
               (project.devRunning ? (
                 <button
                   type="button"
-                  disabled={projectBusy}
+                  disabled={hmrBusy}
                   aria-busy={hmrStarting || hmrStopping}
                   onClick={() => onAction('stop')}
                 >
@@ -188,7 +187,7 @@ export function Overview({
               ) : (
                 <button
                   type="button"
-                  disabled={projectBusy}
+                  disabled={hmrBusy}
                   aria-busy={hmrStarting || hmrStopping}
                   onClick={() => onAction('start')}
                 >
@@ -206,7 +205,7 @@ export function Overview({
               ))}
             <button
               type="button"
-              disabled={projectBusy}
+              disabled={buildBusy}
               aria-busy={isBusy('build')}
               onClick={() => onAction('build')}
               title="Para o HMR local, gera o build e publica o preview na LAN"
@@ -216,7 +215,7 @@ export function Overview({
             </button>
             <button
               type="button"
-              disabled={projectBusy}
+              disabled={isBusy('deps', 'remove', 'reload')}
               aria-busy={isBusy('deps')}
               onClick={() => onAction('deps')}
               title="Instala as dependências encontradas em package.json e composer.json"
@@ -227,10 +226,10 @@ export function Overview({
             <button
               type="button"
               className="danger-action"
-              disabled={projectBusy}
+              disabled={isBusy('remove', 'reload')}
               onClick={onRemove}
             >
-              {projectBusy ? (
+              {isBusy('remove') ? (
                 <LoaderCircle className="spin" size={14} aria-hidden="true" />
               ) : (
                 <Trash2 size={14} aria-hidden="true" />

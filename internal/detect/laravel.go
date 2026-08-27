@@ -58,7 +58,7 @@ func (d Detector) BatchDetectPHP(ctx context.Context, parentPath string) ([]PHPR
 	}
 	children, err := d.Inspector.ListDirectories(ctx, parentPath)
 	if err != nil {
-		return nil, err
+		return nil, wrapDiscovery("list", parentPath, err)
 	}
 	results := make([]PHPResult, 0, len(children))
 	for _, child := range children {
@@ -78,11 +78,11 @@ func (d Detector) Detect(ctx context.Context, projectPath string) (LaravelResult
 	}
 	artisan, err := d.Inspector.Exists(ctx, projectPath, "artisan")
 	if err != nil {
-		return LaravelResult{}, err
+		return LaravelResult{}, wrapDiscovery("markers", projectPath, err)
 	}
 	index, err := d.Inspector.Exists(ctx, projectPath, "public/index.php")
 	if err != nil {
-		return LaravelResult{}, err
+		return LaravelResult{}, wrapDiscovery("markers", projectPath, err)
 	}
 	result := LaravelResult{ProjectPath: projectPath, Artisan: artisan, PublicIndex: index}
 	if !artisan || !index {
@@ -93,7 +93,7 @@ func (d Detector) Detect(ctx context.Context, projectPath string) (LaravelResult
 		if !index {
 			missing = append(missing, "public/index.php")
 		}
-		return result, fmt.Errorf("projeto não parece Laravel; ausente: %s", strings.Join(missing, ", "))
+		return result, invalidDiscovery("laravel", projectPath, fmt.Errorf("projeto não parece Laravel; ausente: %s", strings.Join(missing, ", ")))
 	}
 	return result, nil
 }
@@ -107,16 +107,16 @@ func (d Detector) DetectPHP(ctx context.Context, projectPath string) (PHPResult,
 	markers := PHPResult{ProjectPath: projectPath}
 	var err error
 	if markers.Artisan, err = d.Inspector.Exists(ctx, projectPath, "artisan"); err != nil {
-		return PHPResult{}, err
+		return PHPResult{}, wrapDiscovery("markers", projectPath, err)
 	}
 	if markers.Console, err = d.Inspector.Exists(ctx, projectPath, "bin/console"); err != nil {
-		return PHPResult{}, err
+		return PHPResult{}, wrapDiscovery("markers", projectPath, err)
 	}
 	if markers.PublicIndex, err = d.Inspector.Exists(ctx, projectPath, "public/index.php"); err != nil {
-		return PHPResult{}, err
+		return PHPResult{}, wrapDiscovery("markers", projectPath, err)
 	}
 	if markers.RootIndex, err = d.Inspector.Exists(ctx, projectPath, "index.php"); err != nil {
-		return PHPResult{}, err
+		return PHPResult{}, wrapDiscovery("markers", projectPath, err)
 	}
 	switch {
 	case markers.Artisan && markers.PublicIndex:
@@ -133,7 +133,7 @@ func (d Detector) DetectPHP(ctx context.Context, projectPath string) (PHPResult,
 		markers.DocumentRoot = projectPath
 	default:
 		missing := []string{"public/index.php ou index.php"}
-		return markers, fmt.Errorf("projeto PHP não reconhecido; ausente: %s", strings.Join(missing, ", "))
+		return markers, invalidDiscovery("php", projectPath, fmt.Errorf("projeto PHP não reconhecido; ausente: %s", strings.Join(missing, ", ")))
 	}
 	return markers, nil
 }
@@ -249,11 +249,11 @@ func (s SmartInspector) BatchDiscoverPHP(ctx context.Context, projectPath string
 				continue
 			}
 			res := PHPResult{
-				ProjectPath:  d.Path,
-				Artisan:      d.Artisan,
-				PublicIndex:  d.PublicIndex,
-				RootIndex:    d.RootIndex,
-				Console:      d.Console,
+				ProjectPath: d.Path,
+				Artisan:     d.Artisan,
+				PublicIndex: d.PublicIndex,
+				RootIndex:   d.RootIndex,
+				Console:     d.Console,
 			}
 			switch {
 			case d.Artisan && d.PublicIndex:
@@ -289,11 +289,11 @@ func (s SmartInspector) BatchDiscoverAll(ctx context.Context, projectPath string
 		for _, r := range raw {
 			if (r.Artisan && r.PublicIndex) || (r.Console && r.PublicIndex) || r.PublicIndex || r.RootIndex {
 				phpRes := PHPResult{
-					ProjectPath:  r.Path,
-					Artisan:      r.Artisan,
-					PublicIndex:  r.PublicIndex,
-					RootIndex:    r.RootIndex,
-					Console:      r.Console,
+					ProjectPath: r.Path,
+					Artisan:     r.Artisan,
+					PublicIndex: r.PublicIndex,
+					RootIndex:   r.RootIndex,
+					Console:     r.Console,
 				}
 				switch {
 				case r.Artisan && r.PublicIndex:

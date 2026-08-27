@@ -106,6 +106,57 @@ required_packages=("${php_packages[@]}" composer acl)
 if [[ "$install_caddy" == "1" ]]; then
     required_packages+=(caddy)
 fi
+provision_candidates=("${required_packages[@]}" php-fpm php-cli php-mbstring php-xml php-curl php-zip php-mysql php-pgsql php-bcmath php-intl php-gd)
+
+# Keep a narrow, append-only ownership ledger for packages that this bootstrap
+# newly installs. It is consumed by `devlan uninstall`; packages that were
+# already present are deliberately never attributed to DevLAN.
+provenance_dir='/etc/devlan'
+provenance_file="$provenance_dir/bootstrap-packages"
+provenance_files="$provenance_dir/bootstrap-files"
+before_packages="$(mktemp)"
+before_sources="$(mktemp)"
+trap 'rm -f "$before_packages" "$before_sources"' EXIT
+"${SUDO[@]}" install -d -m 0755 "$provenance_dir"
+for package in "${provision_candidates[@]}" ca-certificates curl gnupg debian-keyring debian-archive-keyring apt-transport-https lsb-release software-properties-common unzip git acl; do
+    if [[ "$(dpkg-query -W -f='${db:Status-Abbrev}' "$package" 2>/dev/null || true)" == "ii " ]]; then
+        printf '%s\n' "$package" >> "$before_packages"
+    fi
+done
+find /etc/apt/sources.list.d /etc/apt/trusted.gpg.d -maxdepth 1 -type f -print 2>/dev/null | sort > "$before_sources" || true
+
+# Preserve the exact pre-bootstrap systemd setting for a later three-state
+# restore. The marker means that a missing file must be removed on uninstall.
+if [[ -f /etc/wsl.conf ]]; then
+    if [[ ! -f "$provenance_dir/wsl.conf.before" ]]; then
+        "${SUDO[@]}" cp -- /etc/wsl.conf "$provenance_dir/wsl.conf.before"
+    fi
+elif [[ ! -e "$provenance_dir/wsl.conf.missing" ]]; then
+    "${SUDO[@]}" touch "$provenance_dir/wsl.conf.missing"
+fi
+
+caddy_was_available=0
+if [[ "$install_caddy" == "1" ]] && ! command -v caddy >/dev/null 2>&1; then
+    caddy_was_available=1
+fi
+if [[ "$install_caddy" == "1" ]]; then
+    # Record whether the service unit existed before bootstrap. A pre-existing
+    # Caddy must not be disabled merely because DevLAN used it as its edge.
+    if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files caddy.service 2>/dev/null | grep -Eq '^caddy\.service[[:space:]]'; then
+        if [[ ! -e "$provenance_dir/caddy-service.before" && ! -e "$provenance_dir/caddy-service.missing" ]]; then
+            "${SUDO[@]}" touch "$provenance_dir/caddy-service.before"
+        fi
+    elif [[ ! -e "$provenance_dir/caddy-service.before" && ! -e "$provenance_dir/caddy-service.missing" ]]; then
+        "${SUDO[@]}" touch "$provenance_dir/caddy-service.missing"
+    fi
+    if [[ -d /var/lib/caddy ]]; then
+        if [[ ! -e "$provenance_dir/caddy-data.before" && ! -e "$provenance_dir/caddy-data.missing" ]]; then
+            "${SUDO[@]}" touch "$provenance_dir/caddy-data.before"
+        fi
+    elif [[ ! -e "$provenance_dir/caddy-data.before" && ! -e "$provenance_dir/caddy-data.missing" ]]; then
+        "${SUDO[@]}" touch "$provenance_dir/caddy-data.missing"
+    fi
+fi
 
 if packages_installed "${required_packages[@]}"; then
     printf 'WSL packages already installed; skipping apt update/install\n'
@@ -152,6 +203,14 @@ if [[ "$install_caddy" == "1" ]] && ! command -v caddy >/dev/null 2>&1; then
     apt_install caddy
 fi
 
+if [[ "$caddy_was_available" == "1" ]]; then
+    for file in /etc/apt/sources.list.d/caddy-stable.list /usr/share/keyrings/caddy-stable-archive-keyring.gpg; do
+        if [[ -e "$file" ]] && ! grep -Fxq "$file" "$provenance_files" 2>/dev/null; then
+            printf '%s\n' "$file" | "${SUDO[@]}" tee -a "$provenance_files" >/dev/null
+        fi
+    done
+fi
+
 # systemd is required by the single WSL Caddy topology. The edit is
 # idempotent and preserves unrelated sections/comments in /etc/wsl.conf;
 # WSL applies it after the next explicit `wsl --shutdown`.
@@ -159,6 +218,15 @@ ensure_wsl_systemd
 
 pool_file="$(find /etc/php -type f -path '*/fpm/pool.d/www.conf' | sort | head -n1 || true)"
 if [[ -n "$pool_file" ]]; then
+    # Save the exact pool path and bytes before changing the distribution's
+    # pre-existing www pool. The uninstall planner restores it through these
+    # fixed markers rather than deleting an entire PHP configuration tree.
+    if [[ ! -e "$provenance_dir/php-pool.path" ]]; then
+        printf '%s\n' "$pool_file" | "${SUDO[@]}" tee "$provenance_dir/php-pool.path" >/dev/null
+    fi
+    if [[ ! -f "$provenance_dir/php-pool.before" ]]; then
+        "${SUDO[@]}" cp -- "$pool_file" "$provenance_dir/php-pool.before"
+    fi
     "${SUDO[@]}" sed -Ei 's/^[;[:space:]]*pm[[:space:]]*=[[:space:]]*.*/pm = ondemand/' "$pool_file"
     "${SUDO[@]}" sed -Ei 's/^[;[:space:]]*pm\.max_children[[:space:]]*=[[:space:]]*.*/pm.max_children = 10/' "$pool_file"
     "${SUDO[@]}" sed -Ei 's/^[;[:space:]]*pm\.max_requests[[:space:]]*=[[:space:]]*.*/pm.max_requests = 500/' "$pool_file"
@@ -182,3 +250,17 @@ if [[ "$install_caddy" == "1" ]]; then
 else
     printf 'WSL dependencies ready: PHP %s, PHP-FPM socket /run/php/php-fpm.sock and Composer\n' "$php_minor"
 fi
+
+for package in "${provision_candidates[@]}" ca-certificates curl gnupg debian-keyring debian-archive-keyring apt-transport-https lsb-release software-properties-common unzip git acl; do
+    if [[ "$(dpkg-query -W -f='${db:Status-Abbrev}' "$package" 2>/dev/null || true)" == "ii " ]] && ! grep -Fxq "$package" "$before_packages"; then
+        if ! grep -Fxq "$package" "$provenance_file" 2>/dev/null; then
+            printf '%s\n' "$package" | "${SUDO[@]}" tee -a "$provenance_file" >/dev/null
+        fi
+    fi
+done
+
+find /etc/apt/sources.list.d /etc/apt/trusted.gpg.d -maxdepth 1 -type f -print 2>/dev/null | sort | while IFS= read -r file; do
+    if [[ -n "$file" ]] && ! grep -Fxq "$file" "$before_sources" && ! grep -Fxq "$file" "$provenance_files" 2>/dev/null; then
+        printf '%s\n' "$file" | "${SUDO[@]}" tee -a "$provenance_files" >/dev/null
+    fi
+done
