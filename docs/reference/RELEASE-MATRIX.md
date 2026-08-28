@@ -5,6 +5,7 @@
 | Windows | Windows 11 22H2+ x64, PowerShell 5+, Go da versão em `go.mod` | `scripts/smoke-release.ps1` |
 | WSL | Ubuntu 22.04/24.04, WSL 2, Bash, systemd e `networkingMode=mirrored` | `devlan topology check` + cliente WSL |
 | Caddy | uma instância systemd no WSL, com 80/443 e pool LAN | `DEVLAN_REAL_CADDY=1 go test ./internal/caddy -run TestRenderWSLUnifiedWithRealCaddy` + `scripts/test-m8-real.ps1` |
+| Portas da aplicação | fakes e adapters concretos com dependências injetadas | `go test ./...` (hermético); smokes reais permanecem opt-in |
 | PHP | 8.3, 8.4 e 8.5; PHP-FPM correspondente | fixture PHP + `devlan doctor` |
 | Node | Node 20/22 e npm/pnpm conforme lockfile | fixture Vite/SSR + build da SPA |
 

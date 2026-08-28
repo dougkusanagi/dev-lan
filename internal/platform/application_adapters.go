@@ -77,28 +77,43 @@ func flattenNativeFirewallPorts(spec FirewallSpec) []int {
 
 // WindowsTrustStore is the host trust-store adapter. Caddy owns generation
 // and export of the certificate; this adapter owns only installation and
-// observation in the current user's Windows Root store.
-type WindowsTrustStore struct{}
-
-func (WindowsTrustStore) Install(ctx context.Context, certificatePath string) error {
-	if runtime.GOOS != "windows" {
-		return nil
-	}
-	return InstallCARoot(ctx, certificatePath)
+// observation in the current user's Windows Root store. Runner is optional
+// and exists to keep the adapter contract testable without touching a real
+// certificate store.
+type WindowsTrustStore struct {
+	Runner Runner
 }
 
-func (WindowsTrustStore) IsTrusted(ctx context.Context, certificatePath string) (bool, error) {
-	return CARootTrusted(ctx, certificatePath)
+func (s WindowsTrustStore) Install(ctx context.Context, certificatePath string) error {
+	if runtime.GOOS != "windows" && s.Runner == nil {
+		return nil
+	}
+	if s.Runner == nil {
+		return InstallCARoot(ctx, certificatePath)
+	}
+	return InstallCARoot(ctx, certificatePath, s.Runner)
+}
+
+func (s WindowsTrustStore) IsTrusted(ctx context.Context, certificatePath string) (bool, error) {
+	if s.Runner == nil {
+		return CARootTrusted(ctx, certificatePath)
+	}
+	return CARootTrustedWithRunner(ctx, certificatePath, s.Runner)
 }
 
 // HostNetwork is the Windows-side network adapter consumed by application
-// services. The listener callback is injectable for tests and for composition
-// roots that already have a snapshot; production falls back to netstat.
+// services. The callbacks are injectable for tests and for composition roots
+// that already have a snapshot; production falls back to the host probes.
 type HostNetwork struct {
-	Listening func(context.Context) ([]int, error)
+	LANAddressFunc func(context.Context) (string, error)
+	Listening      func(context.Context) ([]int, error)
+	ProfileFunc    func(context.Context) (applicationports.NetworkProfile, error)
 }
 
-func (HostNetwork) LANAddress(context.Context) (string, error) {
+func (n HostNetwork) LANAddress(ctx context.Context) (string, error) {
+	if n.LANAddressFunc != nil {
+		return n.LANAddressFunc(ctx)
+	}
 	return LANAddress()
 }
 
@@ -109,7 +124,10 @@ func (n HostNetwork) ListeningPorts(ctx context.Context) ([]int, error) {
 	return ListeningTCPPorts(ctx)
 }
 
-func (HostNetwork) Profile(ctx context.Context) (applicationports.NetworkProfile, error) {
+func (n HostNetwork) Profile(ctx context.Context) (applicationports.NetworkProfile, error) {
+	if n.ProfileFunc != nil {
+		return n.ProfileFunc(ctx)
+	}
 	public, detail, err := NetworkProfile(ctx)
 	return applicationports.NetworkProfile{Public: public, Detail: detail}, err
 }

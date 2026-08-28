@@ -30,6 +30,9 @@ Wails opcional.
 - implementações de Caddy, WSL, firewall Windows, trust store, rede e relógio
   satisfazem as portas da aplicação em `internal/platform`; `internal/app`
   apenas compõe essas implementações e mantém compatibilidade de testes;
+- suíte reutilizável de contratos de portas em `internal/portcontract`, aplicada
+  a fakes, Store/reconciliador reais e adapters de plataforma com seams
+  determinísticos;
 - reconciliador real de mutações com plan/apply/verify, revisão otimista,
   journal e rollback de configuração, artefatos e runtime;
 - métricas incrementais e limitadas, atribuídas por metadado confiável do Caddy,
@@ -52,8 +55,7 @@ As tarefas e critérios de aceite ficam em [ROADMAP.md](ROADMAP.md).
 - `internal/app.App`, `internal/api` e `cmd/devlan` ainda acumulam responsabilidades;
 - ainda há globais por ponteiro, DTOs duplicados e listas genéricas exigidas por
   integrações de framework;
-- `application.ExtendedCommandPort` permanece transitória; testes de contrato
-  reutilizáveis para adapters fake e reais seguem em R-06d;
+- `application.ExtendedCommandPort` permanece transitória;
 - timeouts HTTP/SSE, permissões do estado, bundles de suporte e lifecycle
   concorrente precisam de testes adicionais;
 - validação completa exige máquinas Windows+WSL reais e não deve ser simulada

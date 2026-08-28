@@ -15,9 +15,6 @@ Subtarefas já entregues estão registradas em
 
 ### R-06 — Portas e adaptadores
 
-- [ ] `R-06d` Criar testes de contrato reutilizáveis para adapters fake e reais;
-  manter integrações dependentes de host como opt-in.
-
 ### R-07 — Contrato OpenAPI
 
 - [ ] `R-07c` Completar schemas, respostas e erros no OpenAPI e torná-lo a

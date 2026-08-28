@@ -255,8 +255,16 @@ func FindCARootCertPath() string {
 // Windows Root store. Caddy can be trusted per-user without elevation or in
 // LocalMachine when elevated, so both stores must be checked.
 func CARootTrusted(ctx context.Context, certificatePath string) (bool, error) {
+	return CARootTrustedWithRunner(ctx, certificatePath, nil)
+}
+
+// CARootTrustedWithRunner is the injectable form used by the trust-store
+// adapter contract. A nil runner preserves the production certutil path.
+func CARootTrustedWithRunner(ctx context.Context, certificatePath string, runners ...Runner) (bool, error) {
 	if runtime.GOOS != "windows" {
-		return false, fmt.Errorf("verificação do repositório de certificados só se aplica ao Windows")
+		if len(runners) == 0 || runners[0] == nil {
+			return false, fmt.Errorf("verificação do repositório de certificados só se aplica ao Windows")
+		}
 	}
 	data, err := os.ReadFile(certificatePath)
 	if err != nil {
@@ -276,7 +284,15 @@ func CARootTrusted(ctx context.Context, certificatePath string) (bool, error) {
 		{"-user", "-store", "Root"},
 		{"-store", "Root"},
 	} {
-		output, commandErr := exec.CommandContext(ctx, "certutil.exe", arguments...).CombinedOutput()
+		var output string
+		var commandErr error
+		if len(runners) > 0 && runners[0] != nil {
+			output, commandErr = runners[0].Run(ctx, arguments...)
+		} else {
+			var data []byte
+			data, commandErr = exec.CommandContext(ctx, "certutil.exe", arguments...).CombinedOutput()
+			output = string(data)
+		}
 		if commandErr != nil {
 			return false, fmt.Errorf("consultar repositório de certificados do Windows: %w", commandErr)
 		}

@@ -436,5 +436,23 @@ fronteira tipada sem alterar os contratos existentes.
 casos de uso continuam sem imports concretos e os testes focados de aplicação,
 plataforma e `internal/app` preservam o comportamento existente.
 
+## R-06d — Contratos reutilizáveis de adapters
+
+- [x] Criar as suítes compartilhadas de Store, Runner, Firewall, Caddy,
+  certificados, trust store, rede, relógio e reconciliador em
+  `internal/portcontract`.
+- [x] Executar os mesmos contratos contra fakes, o Store/reconciliador reais e
+  os adapters concretos de plataforma usando seams determinísticos para não
+  tocar o host na suíte padrão.
+- [x] Completar a injeção das sondagens de rede e do runner do trust store,
+  preservando os defaults de produção e permitindo validar os adapters sem
+  Windows ou WSL reais.
+- [x] Manter os smokes dependentes de Windows/WSL/Caddy como testes opt-in,
+  documentados na matriz de release e nos testes existentes.
+
+**Gate:** `go test ./...`, `go vet ./...` e os contratos focados passam; a
+suíte padrão não altera firewall, certificados, processos, WSL ou Caddy do
+host.
+
 O restante foi migrado para o [roadmap vigente](../ROADMAP.md), sem duplicar
 caixas abertas neste histórico.
