@@ -12,10 +12,36 @@ retroativamente.
 
 ## Refatoração incremental da arquitetura
 
+- [x] `R-01a` Caracterizar contratos HTTP de autenticação, segurança, SPA,
+  rotas, status, overview e operações assíncronas.
+- [x] `R-01b` Caracterizar persistência versionada, export/import, transações,
+  recuperação e fault injection.
+- [x] `R-01c` Fixar renderização Caddy com fixtures, testes de contrato e
+  validação real opt-in.
+- [x] `R-01d` Caracterizar o dispatch global (`version`/`help`) e os erros e
+  código de saída do entrypoint da CLI.
 - [x] `R-02` Impedir persistência de senha em texto puro se o hashing do Caddy
   falhar. `SetAuth` falha fechado quando Caddy está ausente, falha ou devolve
   hash vazio. `MigrateLegacyAuth` converte todas as credenciais legadas antes
   de gravar e mantém o estado inalterado se qualquer hash falhar.
+- [x] `R-03a` Separar comandos de projeto e lifecycle de runtime de
+  `internal/app/app.go`, preservando o pacote e o comportamento.
+- [x] `R-04a` Introduzir views tipadas para topologia, overview, mutações e
+  configuração, verificadas contra o contrato TypeScript.
+- [x] `R-05a` Remover de CLI, HTTP e Wails o acesso direto a `config.Store` no
+  código de produção; preparação de fixtures continua autorizada nos testes.
+- [x] `R-05b` Introduzir uma primitiva tipada e testada de reconciliação
+  `plan → apply → verify`, ainda independente do pipeline legado.
+- [x] `R-06a` Declarar as portas iniciais consumidas pela aplicação para store,
+  relógio, processos, firewall, Caddy e reconciliação.
+- [x] `R-07a` Aceitar o ADR-0007 e versionar `api/openapi.yaml` com teste de
+  paridade das operações HTTP.
+- [x] `R-07b` Gerar e validar os tipos TypeScript a partir do manifesto de
+  contrato durante a transição para OpenAPI.
+- [x] `R-08a` Consolidar o dashboard no browser como GUI canônica, servido pela
+  API loopback e por `devlan.localhost`.
+- [x] `R-09a` Executar no CI uma regra inicial de imports para proteger domínio
+  e aplicação contra dependências de transportes.
 
 ## Marco 0 — Decisão e rede de segurança (P0)
 

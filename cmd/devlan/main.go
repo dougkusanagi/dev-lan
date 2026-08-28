@@ -19,7 +19,6 @@ import (
 
 	localapi "github.com/dougkusanagi/dev-lan/internal/api"
 	"github.com/dougkusanagi/dev-lan/internal/app"
-	"github.com/dougkusanagi/dev-lan/internal/config"
 	"github.com/dougkusanagi/dev-lan/internal/desktop"
 	"github.com/dougkusanagi/dev-lan/internal/domain"
 	"github.com/dougkusanagi/dev-lan/internal/platform"
@@ -256,7 +255,7 @@ func run(args []string) error {
 		if len(args) != 0 {
 			return fmt.Errorf("uso: devlan parked")
 		}
-		cfg, err := service.Store.Load()
+		cfg, err := service.Config()
 		if err != nil {
 			return err
 		}
@@ -680,7 +679,7 @@ func runAPI(ctx context.Context, service *app.App, args []string) error {
 		return server.Close(context.Background())
 	}
 	if args[0] == "status" && len(args) == 1 {
-		client := localapi.Client{Store: service.Store}
+		client := localapi.NewClient(service)
 		response, err := client.Do(ctx, http.MethodGet, "/v1/health", nil)
 		if err != nil {
 			return fmt.Errorf("API local indisponível: %w", err)
@@ -709,7 +708,7 @@ func runGUI(ctx context.Context, service *app.App, dataDir string, args []string
 		}
 	}
 
-	cfg, err := service.Store.Load()
+	cfg, err := service.Config()
 	if err != nil {
 		return err
 	}
@@ -740,7 +739,7 @@ func runGUI(ctx context.Context, service *app.App, dataDir string, args []string
 	}
 
 	// 1. Check if the server is already responsive
-	client := localapi.Client{Store: service.Store}
+	client := localapi.NewClient(service)
 	checkCtx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
 	res, checkErr := client.Do(checkCtx, http.MethodGet, "/v1/health", nil)
 	cancel()
@@ -1112,7 +1111,7 @@ func runWSLClient(ctx context.Context, dataDir, command string, args []string) e
 	if !allowed[command] {
 		return fmt.Errorf("comando %q ainda não está disponível no cliente WSL; use o controlador Windows", command)
 	}
-	client := localapi.Client{Store: configStore(dataDir)}
+	client := localapi.NewClientForDataDir(dataDir)
 	requestContext, cancel := context.WithTimeout(ctx, 50*time.Second)
 	defer cancel()
 	payload, err := client.Command(requestContext, command, args)
@@ -1151,10 +1150,6 @@ func runWSLClient(ctx context.Context, dataDir, command string, args []string) e
 	}
 	return nil
 }
-
-// Kept as a helper to make the WSL transport explicit and easy to substitute
-// in tests without changing the Windows application construction path.
-func configStore(dataDir string) config.Store { return config.NewStore(dataDir) }
 
 func runMode(ctx context.Context, service *app.App, args []string) error {
 	if len(args) != 2 {
@@ -1204,7 +1199,7 @@ func runPHP(ctx context.Context, service *app.App, args []string) error {
 		if err != nil {
 			return err
 		}
-		cfg, err := service.Store.Load()
+		cfg, err := service.Config()
 		if err != nil {
 			return err
 		}
@@ -1277,7 +1272,7 @@ func runPHP(ctx context.Context, service *app.App, args []string) error {
 			return fmt.Errorf("uso: devlan php extensions VERSION [EXT1 EXT2 ...]")
 		}
 		if len(args) == 2 {
-			cfg, err := service.Store.Load()
+			cfg, err := service.Config()
 			if err != nil {
 				return err
 			}
@@ -1377,7 +1372,7 @@ func runPHPPool(ctx context.Context, service *app.App, args []string) error {
 		printWarnings(result.Warnings)
 		return err
 	}
-	cfg, err := service.Store.Load()
+	cfg, err := service.Config()
 	if err != nil {
 		return err
 	}
@@ -1554,7 +1549,7 @@ func runDevCommand(ctx context.Context, service *app.App, args []string) error {
 }
 
 func printProjects(service *app.App, filter string, asJSON bool) error {
-	cfg, err := service.Store.Load()
+	cfg, err := service.Config()
 	if err != nil {
 		return err
 	}
@@ -1683,7 +1678,7 @@ func sslState(enabled bool) string {
 
 func printStatus(ctx context.Context, service *app.App, dataDir string) error {
 	ctx = platform.WithWSLOperation(ctx, platform.WSLOperationStatus)
-	cfg, err := service.Store.Load()
+	cfg, err := service.Config()
 	if err != nil {
 		return err
 	}
@@ -2012,7 +2007,7 @@ func runRoute(ctx context.Context, service *app.App, args []string) error {
 		return runRouteAllocations(ctx, service, args[1:])
 	}
 	if len(args) == 0 {
-		cfg, err := service.Store.Load()
+		cfg, err := service.Config()
 		if err != nil {
 			return err
 		}
@@ -2039,7 +2034,7 @@ func runRoute(ctx context.Context, service *app.App, args []string) error {
 	}
 	name := args[0]
 	if len(args) == 1 {
-		cfg, err := service.Store.Load()
+		cfg, err := service.Config()
 		if err != nil {
 			return err
 		}
@@ -2189,7 +2184,7 @@ func runUnexpose(ctx context.Context, service *app.App, args []string) error {
 
 func runAllowlist(ctx context.Context, service *app.App, args []string) error {
 	if len(args) == 0 {
-		cfg, err := service.Store.Load()
+		cfg, err := service.Config()
 		if err != nil {
 			return err
 		}
@@ -2257,7 +2252,7 @@ func runAllowlist(ctx context.Context, service *app.App, args []string) error {
 		fmt.Printf("Allowlist de %s limpa.\n", args[1])
 		return nil
 	default:
-		cfg, err := service.Store.Load()
+		cfg, err := service.Config()
 		if err != nil {
 			return err
 		}
@@ -2349,7 +2344,7 @@ func runCA(ctx context.Context, service *app.App, args []string) error {
 
 func runSecurity(ctx context.Context, service *app.App, args []string) error {
 	if len(args) == 0 || args[0] == "posture" {
-		cfg, err := service.Store.Load()
+		cfg, err := service.Config()
 		if err != nil {
 			return err
 		}

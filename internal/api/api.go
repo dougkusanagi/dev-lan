@@ -26,7 +26,6 @@ import (
 
 	"github.com/dougkusanagi/dev-lan/frontend"
 	"github.com/dougkusanagi/dev-lan/internal/app"
-	"github.com/dougkusanagi/dev-lan/internal/config"
 	"github.com/dougkusanagi/dev-lan/internal/domain"
 )
 
@@ -53,7 +52,6 @@ type Endpoint struct {
 
 type Server struct {
 	service *app.App
-	store   config.Store
 
 	mu         sync.Mutex
 	listener   net.Listener
@@ -63,7 +61,7 @@ type Server struct {
 }
 
 func New(service *app.App) *Server {
-	return &Server{service: service, store: service.Store}
+	return &Server{service: service}
 }
 
 func (s *Server) Start() (Endpoint, error) {
@@ -72,10 +70,10 @@ func (s *Server) Start() (Endpoint, error) {
 	if s.listener != nil {
 		return s.endpoint, nil
 	}
-	if err := s.store.Ensure(); err != nil {
+	if err := s.service.EnsureState(); err != nil {
 		return Endpoint{}, err
 	}
-	cfg, err := s.store.Load()
+	cfg, err := s.service.Config()
 	if err != nil {
 		return Endpoint{}, fmt.Errorf("validar configuração antes de iniciar a API: %w", err)
 	}
@@ -87,12 +85,13 @@ func (s *Server) Start() (Endpoint, error) {
 	}
 	expectedPort := strconv.Itoa(uiPort)
 
-	if _, err := os.Stat(s.store.Paths().APIEndpoint); err == nil {
-		if endpoint, readErr := ReadEndpoint(s.store); readErr == nil {
+	files := s.service.APIEndpointFiles()
+	if _, err := os.Stat(files.Endpoint); err == nil {
+		if endpoint, readErr := ReadEndpoint(files.Endpoint, files.Token); readErr == nil {
 			_, port, _ := net.SplitHostPort(endpoint.Address)
 			if (expectedPort == "0" && port != "") || port == expectedPort {
 				checkContext, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-				response, requestErr := (Client{Store: s.store}).Do(checkContext, http.MethodGet, "/v1/health", nil)
+				response, requestErr := NewClientFromFiles(files).Do(checkContext, http.MethodGet, "/v1/health", nil)
 				cancel()
 				if response != nil {
 					_ = response.Body.Close()
@@ -102,11 +101,11 @@ func (s *Server) Start() (Endpoint, error) {
 				}
 			}
 		}
-		_ = os.Remove(s.store.Paths().APIEndpoint)
+		_ = os.Remove(files.Endpoint)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return Endpoint{}, err
 	}
-	token, err := ensureToken(s.store.Paths().APIToken)
+	token, err := ensureToken(files.Token)
 	if err != nil {
 		return Endpoint{}, err
 	}
@@ -130,7 +129,7 @@ func (s *Server) Start() (Endpoint, error) {
 	endpoint := Endpoint{
 		Version:   ProtocolVersion,
 		Address:   listener.Addr().String(),
-		TokenFile: s.store.Paths().APIToken,
+		TokenFile: files.Token,
 		PID:       os.Getpid(),
 		StartedAt: time.Now().UTC().Format(time.RFC3339),
 	}
@@ -144,7 +143,7 @@ func (s *Server) Start() (Endpoint, error) {
 		MaxHeaderBytes:    1 << 20,
 	}
 
-	if err := writeEndpoint(s.store.Paths().APIEndpoint, endpoint); err != nil {
+	if err := writeEndpoint(files.Endpoint, endpoint); err != nil {
 		for _, item := range listeners {
 			_ = item.Close()
 		}
@@ -159,12 +158,12 @@ func (s *Server) Start() (Endpoint, error) {
 	for _, item := range listeners {
 		go func(current net.Listener) {
 			if err := server.Serve(current); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				_ = s.service.Store.AppendSecurityAudit("API_STOP", "servidor local encerrado: "+err.Error())
+				s.service.Audit("API_STOP", "servidor local encerrado: "+err.Error())
 			}
 		}(item)
 	}
 
-	_ = s.service.Store.AppendSecurityAudit("API_START", "API local autenticada em "+endpoint.Address)
+	s.service.Audit("API_START", "API local autenticada em "+endpoint.Address)
 	return endpoint, nil
 }
 
@@ -180,7 +179,7 @@ func (s *Server) Close(ctx context.Context) error {
 	s.mu.Lock()
 	server := s.httpServer
 	listeners := s.listeners
-	endpointPath := s.store.Paths().APIEndpoint
+	endpointPath := s.service.APIEndpointFiles().Endpoint
 	s.listener = nil
 	s.listeners = nil
 	s.httpServer = nil
@@ -194,7 +193,7 @@ func (s *Server) Close(ctx context.Context) error {
 		_ = listener.Close()
 	}
 	_ = os.Remove(endpointPath)
-	_ = s.service.Store.AppendSecurityAudit("API_STOP", "API local encerrada")
+	s.service.Audit("API_STOP", "API local encerrada")
 	return err
 }
 
@@ -203,7 +202,7 @@ func (s *Server) Handler(token ...string) http.Handler {
 	if len(token) > 0 {
 		secret = token[0]
 	} else {
-		loaded, err := readToken(s.store.Paths().APIToken)
+		loaded, err := readToken(s.service.APIEndpointFiles().Token)
 		if err == nil {
 			secret = loaded
 		}
@@ -432,7 +431,7 @@ func (s *Server) isValidOrigin(origin string) bool {
 	if !strings.EqualFold(u.Scheme, "http") {
 		return false
 	}
-	cfg, err := s.store.Load()
+	cfg, err := s.service.Config()
 	if err != nil {
 		return false
 	}
@@ -1032,31 +1031,21 @@ func (s *Server) handleConfig(writer http.ResponseWriter, request *http.Request)
 			writeJSONError(writer, http.StatusBadRequest, "configuração global inválida")
 			return
 		}
-		cfg, err := s.store.Load()
-		if err != nil {
-			writeJSONError(writer, http.StatusInternalServerError, err.Error())
-			return
-		}
 		if view.DefaultMode != "" {
-			m, err := domain.ParseMode(view.DefaultMode)
-			if err != nil {
+			if _, err := domain.ParseMode(view.DefaultMode); err != nil {
 				writeJSONError(writer, http.StatusBadRequest, err.Error())
 				return
 			}
-			cfg.DefaultMode = m
 		}
-		if view.WindowsPort > 0 {
-			cfg.WindowsPort = view.WindowsPort
+		settings := app.GlobalSettings{
+			DefaultMode:       view.DefaultMode,
+			WindowsPort:       view.WindowsPort,
+			HTTPSPort:         view.HTTPSPort,
+			TLSEnabled:        view.TLSEnabled,
+			PHPDefaultVersion: view.PHPDefaultVersion,
+			Allowlist:         view.Allowlist,
 		}
-		if view.HTTPSPort > 0 {
-			cfg.HTTPSPort = view.HTTPSPort
-		}
-		cfg.TLSEnabled = view.TLSEnabled
-		if view.PHPDefaultVersion != "" {
-			cfg.PHPDefaultVersion = view.PHPDefaultVersion
-		}
-		cfg.Allowlist = view.Allowlist
-		if _, err := s.service.SaveConfigAndApply(request.Context(), cfg, true); err != nil {
+		if _, err := s.service.SaveGlobalSettings(request.Context(), settings); err != nil {
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
 		}
@@ -1626,8 +1615,8 @@ func writeEndpoint(path string, endpoint Endpoint) error {
 	return os.Rename(temporaryName, path)
 }
 
-func ReadEndpoint(store config.Store) (Endpoint, error) {
-	data, err := os.ReadFile(store.Paths().APIEndpoint)
+func ReadEndpoint(endpointPath, tokenPath string) (Endpoint, error) {
+	data, err := os.ReadFile(endpointPath)
 	if err != nil {
 		return Endpoint{}, err
 	}
@@ -1635,10 +1624,10 @@ func ReadEndpoint(store config.Store) (Endpoint, error) {
 	if err := json.Unmarshal(data, &endpoint); err != nil {
 		return Endpoint{}, fmt.Errorf("ler endpoint da API local: %w", err)
 	}
-	if endpoint.Version != ProtocolVersion || endpoint.Address == "" || !sameTokenPath(endpoint.TokenFile, store.Paths().APIToken) {
+	if endpoint.Version != ProtocolVersion || endpoint.Address == "" || !sameTokenPath(endpoint.TokenFile, tokenPath) {
 		return Endpoint{}, ErrInvalidEndpoint
 	}
-	endpoint.TokenFile = store.Paths().APIToken
+	endpoint.TokenFile = tokenPath
 	host, _, err := net.SplitHostPort(endpoint.Address)
 	if err != nil || (host != "127.0.0.1" && host != "::1") {
 		return Endpoint{}, ErrInvalidEndpoint
@@ -1659,8 +1648,28 @@ func sameTokenPath(written, expected string) bool {
 }
 
 type Client struct {
-	Store      config.Store
-	HTTPClient *http.Client
+	EndpointFile string
+	TokenFile    string
+	HTTPClient   *http.Client
+}
+
+// NewClient creates a local API client from the application-owned discovery
+// files. CLI and tray callers never need direct access to config.Store.
+func NewClient(service *app.App) Client {
+	return NewClientFromFiles(service.APIEndpointFiles())
+}
+
+// NewClientForDataDir is for the thin WSL client, which only discovers the
+// authenticated Windows endpoint and never opens a controller or state store.
+func NewClientForDataDir(dataDir string) Client {
+	return Client{
+		EndpointFile: filepath.Join(dataDir, "api.endpoint.json"),
+		TokenFile:    filepath.Join(dataDir, "api.token"),
+	}
+}
+
+func NewClientFromFiles(files app.APIEndpointFiles) Client {
+	return Client{EndpointFile: files.Endpoint, TokenFile: files.Token}
 }
 
 func (c Client) Command(ctx context.Context, command string, args []string) (map[string]any, error) {
@@ -1690,7 +1699,7 @@ func (c Client) Do(ctx context.Context, method, route string, body io.Reader) (*
 	if !strings.HasPrefix(route, "/v1/") && !strings.HasPrefix(route, "/api/v1/") {
 		return nil, fmt.Errorf("rota da API local inválida: %q", route)
 	}
-	endpoint, err := ReadEndpoint(c.Store)
+	endpoint, err := ReadEndpoint(c.EndpointFile, c.TokenFile)
 	if err != nil {
 		return nil, err
 	}

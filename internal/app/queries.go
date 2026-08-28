@@ -4,13 +4,41 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/dougkusanagi/dev-lan/internal/config"
 	"github.com/dougkusanagi/dev-lan/internal/domain"
 )
+
+// APIEndpointFiles identifies the two managed files needed by a local API
+// client. It deliberately exposes neither the Store nor other persistence
+// artifacts to a transport.
+type APIEndpointFiles struct {
+	Endpoint string
+	Token    string
+}
 
 // Config returns the authoritative configuration snapshot to application
 // queries. Transports use this boundary instead of reaching into Store.
 func (a *App) Config() (domain.Config, error) {
 	return a.Store.Load()
+}
+
+// EnsureState creates the DevLAN-managed state directories before a transport
+// starts. Persistence remains owned by the application service.
+func (a *App) EnsureState() error {
+	return a.Store.Ensure()
+}
+
+// APIEndpointFiles returns only the local API discovery files required by
+// transports and helper processes.
+func (a *App) APIEndpointFiles() APIEndpointFiles {
+	paths := a.Store.Paths()
+	return APIEndpointFiles{Endpoint: paths.APIEndpoint, Token: paths.APIToken}
+}
+
+// ManagedPaths exposes derived managed artifact locations to read-only views.
+// Callers must not mutate these files or use this as a persistence API.
+func (a *App) ManagedPaths() config.Paths {
+	return a.Store.Paths()
 }
 
 // Revision returns zero only when the authoritative state cannot be read.

@@ -1,7 +1,7 @@
 # Plano de refatoração Go orientada a testes
 
 **Estado:** ativo
-**Rastreio:** `R-01` a `R-09` em [ROADMAP.md](../ROADMAP.md)
+**Rastreio:** `R-01` a `R-10` em [ROADMAP.md](../ROADMAP.md)
 
 ## Objetivo
 

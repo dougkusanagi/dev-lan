@@ -3,14 +3,70 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
+
+func captureCLIOutput(t *testing.T, action func()) string {
+	t.Helper()
+	previous := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+	action()
+	_ = writer.Close()
+	os.Stdout = previous
+	data, err := io.ReadAll(reader)
+	_ = reader.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+func TestCLIGlobalDispatchAndValidation(t *testing.T) {
+	versionOutput := captureCLIOutput(t, func() {
+		if err := run([]string{"version"}); err != nil {
+			t.Fatalf("version retornou erro: %v", err)
+		}
+	})
+	if versionOutput != version+"\n" {
+		t.Fatalf("saída de version = %q, esperado %q", versionOutput, version+"\n")
+	}
+
+	if _, _, err := parseGlobalArgs([]string{"--data-dir"}); err == nil || err.Error() != "--data-dir exige um caminho" {
+		t.Fatalf("erro de --data-dir mudou: %v", err)
+	}
+	if err := run([]string{"config"}); err == nil || !strings.Contains(err.Error(), "uso: devlan config export") {
+		t.Fatalf("erro de validação de config mudou: %v", err)
+	}
+}
+
+func TestCLIEntrypointMapsCommandErrorToExitCode(t *testing.T) {
+	if os.Getenv("DEVLAN_CLI_EXIT_CHILD") == "1" {
+		os.Args = []string{"devlan", "comando-inexistente"}
+		main()
+		return
+	}
+	command := exec.Command(os.Args[0], "-test.run=TestCLIEntrypointMapsCommandErrorToExitCode", "-test.v=false")
+	command.Env = append(os.Environ(), "DEVLAN_CLI_EXIT_CHILD=1")
+	err := command.Run()
+	if err == nil {
+		t.Fatal("entrypoint de comando inválido deveria retornar código diferente de zero")
+	}
+	if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 1 {
+		t.Fatalf("código de saída inesperado: %v", err)
+	}
+}
 
 func TestTopologyMigrationGetsColdWSLStartupBudget(t *testing.T) {
 	if got := cliCommandTimeout("topology", []string{"migrate", "--yes"}); got != 3*time.Minute {

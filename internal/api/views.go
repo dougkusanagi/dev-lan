@@ -40,7 +40,7 @@ type systemHealthSnapshot struct {
 }
 
 func loadProjectViewRuntimeUncached(ctx context.Context, service *app.App) (*projectViewRuntime, error) {
-	cfg, err := service.Store.Load()
+	cfg, err := service.Config()
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +109,7 @@ func loadProjectViewRuntime(ctx context.Context, service *app.App) (*projectView
 }
 
 func loadSystemHealthSnapshot(ctx context.Context, service *app.App, caddyStatus platform.CaddyServiceStatus) systemHealthSnapshot {
-	cfg, err := service.Store.Load()
+	cfg, err := service.Config()
 	if err != nil {
 		return systemHealthSnapshot{}
 	}
@@ -150,7 +150,7 @@ func loadSystemHealthSnapshot(ctx context.Context, service *app.App, caddyStatus
 }
 
 func cachedCaddyTopology(service *app.App, status platform.CaddyServiceStatus) platform.TopologySnapshot {
-	paths := service.Store.Paths()
+	paths := service.ManagedPaths()
 	_, unifiedErr := os.Stat(paths.Caddy)
 	_, windowsErr := os.Stat(paths.WindowsCaddy)
 	_, wslErr := os.Stat(paths.WSLCaddy)
@@ -452,7 +452,7 @@ func BuildOverviewView(ctx context.Context, service *app.App, filter string) (Ov
 }
 
 func BuildStatusView(ctx context.Context, service *app.App) (SystemStatusView, error) {
-	cfg, err := service.Store.Load()
+	cfg, err := service.Config()
 	if err != nil {
 		return SystemStatusView{}, err
 	}
@@ -466,7 +466,7 @@ func BuildStatusView(ctx context.Context, service *app.App) (SystemStatusView, e
 }
 
 func BuildGlobalConfigView(service *app.App) (GlobalConfigView, error) {
-	cfg, err := service.Store.Load()
+	cfg, err := service.Config()
 	if err != nil {
 		return GlobalConfigView{}, err
 	}
@@ -538,7 +538,7 @@ func BuildMetricsSnapshot(service *app.App, project, rawRange string) (*metrics.
 	if service.Now != nil {
 		now = service.Now()
 	}
-	accessLog := filepath.Join(service.Store.Paths().LogsDir, "access.jsonl")
+	accessLog := filepath.Join(service.ManagedPaths().LogsDir, "access.jsonl")
 	collector, _ := metricsCollectors.LoadOrStore(accessLog, metrics.NewCollector())
 	return collector.(*metrics.Collector).Snapshot(accessLog, project, rangeValue, now)
 }

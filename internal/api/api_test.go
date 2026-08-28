@@ -54,6 +54,25 @@ func TestLoopbackAPIHealthAndStatus(t *testing.T) {
 	}
 }
 
+func TestApplicationClientDiscoversEndpointWithoutStoreAccess(t *testing.T) {
+	t.Setenv("DEVLAN_TEST_MOCK", "1")
+	service := app.New(t.TempDir())
+	server := New(service)
+	if _, err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close(context.Background())
+
+	response, err := NewClient(service).Do(context.Background(), http.MethodGet, "/v1/health", nil)
+	if err != nil {
+		t.Fatalf("cliente construído a partir do app não encontrou API: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("health via cliente do app retornou HTTP %d", response.StatusCode)
+	}
+}
+
 func TestLoopbackAPIBindsIPv6ForConfiguredPort(t *testing.T) {
 	service := app.New(t.TempDir())
 	reserved, err := net.Listen("tcp", "127.0.0.1:0")
