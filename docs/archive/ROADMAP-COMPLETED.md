@@ -29,6 +29,9 @@ retroativamente.
   de gravar e mantém o estado inalterado se qualquer hash falhar.
 - [x] `R-03a` Separar comandos de projeto e lifecycle de runtime de
   `internal/app/app.go`, preservando o pacote e o comportamento.
+- [x] `R-03b` Separar as responsabilidades restantes de `internal/app/app.go`
+  em arquivos focados de firewall, instalação, PHP, TLS, reconciliação,
+  diagnóstico, migração e configuração, sem mudar pacote ou comportamento.
 - [x] `R-04a` Introduzir views tipadas para topologia, overview, mutações e
   configuração, verificadas contra o contrato TypeScript.
 - [x] `R-05a` Remover de CLI, HTTP e Wails o acesso direto a `config.Store` no

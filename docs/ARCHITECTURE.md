@@ -79,7 +79,8 @@ editados manualmente. Detalhes estão em
 
 ### Limitações estruturais atuais
 
-Os fluxos funcionam, mas `app.App`, API e CLI concentram responsabilidades. Há
+Os fluxos funcionam, mas `app.App`, API e CLI ainda concentram responsabilidades,
+embora as implementações de `internal/app` já estejam divididas por assunto. Há
 acesso de transportes ao store, DTOs duplicados, valores `any`, caches globais
 e orquestração repetida no Wails. Isso dificulta testes de lifecycle e faz uma
 mudança atravessar arquivos grandes. A solução é evolução incremental orientada

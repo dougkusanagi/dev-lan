@@ -16,8 +16,6 @@ Subtarefas já entregues estão registradas em
 
 ### R-03 — Divisão interna dos pacotes
 
-- [ ] `R-03b` Separar as responsabilidades restantes de `internal/app/app.go`
-  em arquivos focados, sem mudar pacote ou comportamento.
 - [ ] `R-03c` Separar servidor, middleware, rotas e handlers de `internal/api`.
 - [ ] `R-03d` Separar bootstrap e famílias de comandos de `cmd/devlan`.
 - [ ] `R-03e` Dividir os modelos de domínio por agregado sem criar ciclos.

@@ -77,6 +77,21 @@ func TestM8UnifiedEdgeContract(t *testing.T) {
 		}
 		return string(data)
 	}
+	readPackage := func(relative string) string {
+		entries, err := os.ReadDir(filepath.Join(root, relative))
+		if err != nil {
+			t.Fatalf("ler pacote %s: %v", relative, err)
+		}
+		var source strings.Builder
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+				continue
+			}
+			source.WriteString(read(filepath.Join(relative, entry.Name())))
+			source.WriteByte('\n')
+		}
+		return source.String()
+	}
 
 	render := read(filepath.Join("internal", "caddy", "render.go"))
 	start := strings.Index(render, "func RenderWSLUnified(")
@@ -95,7 +110,7 @@ func TestM8UnifiedEdgeContract(t *testing.T) {
 		}
 	}
 
-	app := read(filepath.Join("internal", "app", "app.go"))
+	app := readPackage(filepath.Join("internal", "app"))
 	applyStart := strings.Index(app, "func (a *App) apply(")
 	if applyStart < 0 {
 		t.Fatal("pipeline apply não encontrado")
