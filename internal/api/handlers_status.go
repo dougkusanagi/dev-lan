@@ -29,7 +29,7 @@ func (s *Server) handleStatus(writer http.ResponseWriter, request *http.Request)
 		methodNotAllowed(writer, http.MethodGet)
 		return
 	}
-	view, err := BuildStatusView(request.Context(), s.service)
+	view, err := s.BuildStatusView(request.Context())
 	if err != nil {
 		writeJSONError(writer, http.StatusInternalServerError, err.Error())
 		return
@@ -51,7 +51,7 @@ func (s *Server) handleOverview(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	filter := request.URL.Query().Get("filter")
-	view, err := BuildOverviewView(request.Context(), s.service, filter)
+	view, err := s.BuildOverviewView(request.Context(), filter)
 	if err != nil {
 		writeJSONError(writer, http.StatusInternalServerError, err.Error())
 		return
@@ -109,7 +109,7 @@ func (s *Server) handleEvents(writer http.ResponseWriter, request *http.Request)
 			if !open {
 				return
 			}
-			result := operationResult(request.Context(), s.service, state)
+			result := s.operationResult(request.Context(), state)
 			eventName := "operation-progress"
 			if isTerminalPhase(state.Phase) && state.ProjectName != "" {
 				eventName = "project-state-changed"

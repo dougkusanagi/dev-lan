@@ -86,7 +86,7 @@ func (s *Server) handleDoctorFix(writer http.ResponseWriter, request *http.Reque
 	default:
 		_, _ = s.service.Reload(ctx)
 	}
-	InvalidateReadModelCache(s.service)
+	s.InvalidateReadModelCache()
 	writeJSON(writer, http.StatusOK, MessageOnlyResponse{Message: "Correção aplicada."})
 }
 
@@ -117,6 +117,6 @@ func (s *Server) handleSecurityTrust(writer http.ResponseWriter, request *http.R
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
 	}
-	InvalidateReadModelCache(s.service)
+	s.InvalidateReadModelCache()
 	writeJSON(writer, http.StatusOK, MessageOnlyResponse{Message: "Certificado raiz instalado e confiado."})
 }

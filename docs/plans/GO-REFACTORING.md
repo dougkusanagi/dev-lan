@@ -22,7 +22,8 @@ de microserviços ou adoção de framework backend completo.
 - Wails repete orquestração que deveria passar pelos mesmos casos de uso HTTP;
 - modelos grandes e valores `any` escondem dependências e reduzem a segurança
   dos contratos;
-- caches globais indexados por `*app.App` tornam lifecycle e testes mais frágeis.
+- o cache de read model é uma dependência do `api.Server`; demais registros
+  compartilhados devem seguir o mesmo lifecycle explícito.
 
 Isso justifica a refatoração agora, mas não justifica pausar todas as entregas:
 o trabalho deve ocorrer em fatias verticais curtas, começando pelos pontos que

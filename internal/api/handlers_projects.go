@@ -21,7 +21,7 @@ func (s *Server) handleProjects(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	filter := request.URL.Query().Get("filter")
-	views, err := BuildProjectViews(request.Context(), s.service, filter)
+	views, err := s.BuildProjectViews(request.Context(), filter)
 	if err != nil {
 		writeJSONError(writer, http.StatusInternalServerError, err.Error())
 		return
@@ -68,7 +68,7 @@ func (s *Server) handleProjectLink(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	writeJSON(writer, http.StatusOK, MessageResponse{Message: fmt.Sprintf("Projeto %s vinculado.", proj.Name), Warnings: res.Warnings})
-	InvalidateReadModelCache(s.service)
+	s.InvalidateReadModelCache()
 }
 
 func (s *Server) handleProjectUnlink(writer http.ResponseWriter, request *http.Request) {
@@ -89,7 +89,7 @@ func (s *Server) handleProjectUnlink(writer http.ResponseWriter, request *http.R
 		return
 	}
 	writeJSON(writer, http.StatusOK, MessageResponse{Message: fmt.Sprintf("Projeto %s desvinculado.", proj.Name), Warnings: res.Warnings})
-	InvalidateReadModelCache(s.service)
+	s.InvalidateReadModelCache()
 }
 
 func (s *Server) handleProjectHide(writer http.ResponseWriter, request *http.Request) {
@@ -110,7 +110,7 @@ func (s *Server) handleProjectHide(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	writeJSON(writer, http.StatusOK, MessageResponse{Message: fmt.Sprintf("Projeto %s ocultado.", input.Name), Warnings: res.Warnings})
-	InvalidateReadModelCache(s.service)
+	s.InvalidateReadModelCache()
 }
 
 func (s *Server) handleProjectUnhide(writer http.ResponseWriter, request *http.Request) {
@@ -131,7 +131,7 @@ func (s *Server) handleProjectUnhide(writer http.ResponseWriter, request *http.R
 		return
 	}
 	writeJSON(writer, http.StatusOK, MessageResponse{Message: fmt.Sprintf("Projeto %s restaurado.", input.Path), Warnings: res.Warnings})
-	InvalidateReadModelCache(s.service)
+	s.InvalidateReadModelCache()
 }
 
 func (s *Server) handleProjectConfig(writer http.ResponseWriter, request *http.Request) {
@@ -198,7 +198,7 @@ func (s *Server) handleProjectConfig(writer http.ResponseWriter, request *http.R
 			Message: "Configuração do projeto salva.", Status: result.Status,
 			Revision: result.Revision, Warnings: result.Warnings,
 		})
-		InvalidateReadModelCache(s.service)
+		s.InvalidateReadModelCache()
 		return
 	}
 	if update.StaticDir != "" {
@@ -219,7 +219,7 @@ func (s *Server) handleProjectConfig(writer http.ResponseWriter, request *http.R
 			return
 		}
 	}
-	InvalidateReadModelCache(s.service)
+	s.InvalidateReadModelCache()
 	writeJSON(writer, http.StatusOK, MessageOnlyResponse{Message: "Configuração do projeto salva."})
 }
 
@@ -369,7 +369,7 @@ func (s *Server) handlePark(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	writeJSON(writer, http.StatusOK, MessageResponse{Message: fmt.Sprintf("Pasta %s estacionada.", park.Path), Warnings: res.Warnings})
-	InvalidateReadModelCache(s.service)
+	s.InvalidateReadModelCache()
 }
 
 func (s *Server) handleUnpark(writer http.ResponseWriter, request *http.Request) {
@@ -390,5 +390,5 @@ func (s *Server) handleUnpark(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 	writeJSON(writer, http.StatusOK, MessageResponse{Message: fmt.Sprintf("Pasta %s desestacionada.", park.Path), Warnings: res.Warnings})
-	InvalidateReadModelCache(s.service)
+	s.InvalidateReadModelCache()
 }

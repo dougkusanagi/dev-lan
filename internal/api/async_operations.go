@@ -38,7 +38,7 @@ func (s *Server) startAsyncOperation(writer http.ResponseWriter, request *http.R
 		s.service.SetOperationTransport(id, "http")
 		go s.runAsyncOperation(id, operation, project, timeout, work)
 	}
-	writeJSON(writer, http.StatusAccepted, operationResult(request.Context(), s.service, state))
+	writeJSON(writer, http.StatusAccepted, s.operationResult(request.Context(), state))
 }
 
 func (s *Server) runAsyncOperation(id, operation, project string, timeout time.Duration, work operationWork) {
@@ -65,9 +65,9 @@ func (s *Server) runAsyncOperation(id, operation, project string, timeout time.D
 		}
 	}
 	if operation == "start" || operation == "stop" || operation == "restart" {
-		InvalidateHotReadModelCache(s.service)
+		s.InvalidateHotReadModelCache()
 	} else {
-		InvalidateReadModelCache(s.service)
+		s.InvalidateReadModelCache()
 	}
 	state := s.service.UpdateOperation(id, terminal, terminal, revision, nil, warnings, err)
 	if state.OperationID == "" {
@@ -80,5 +80,5 @@ func (s *Server) operationResponse(ctx context.Context, id string) (MutationResu
 	if !ok {
 		return MutationResult{}, false
 	}
-	return operationResult(ctx, s.service, state), true
+	return s.operationResult(ctx, state), true
 }

@@ -113,7 +113,7 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 		if len(input.Args) == 1 {
 			filter = input.Args[0]
 		}
-		views, err := BuildProjectViews(ctx, s.service, filter)
+		views, err := s.BuildProjectViews(ctx, filter)
 		if err != nil {
 			writeJSONError(writer, http.StatusInternalServerError, err.Error())
 			return
@@ -124,7 +124,7 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 			writeJSONError(writer, http.StatusBadRequest, "uso: status")
 			return
 		}
-		statusView, err := BuildStatusView(ctx, s.service)
+		statusView, err := s.BuildStatusView(ctx)
 		if err != nil {
 			writeJSONError(writer, http.StatusInternalServerError, err.Error())
 			return

@@ -11,14 +11,6 @@ Plano: [Refatoração Go orientada a testes](plans/GO-REFACTORING.md).
 Subtarefas já entregues estão registradas em
 [ROADMAP-COMPLETED.md](archive/ROADMAP-COMPLETED.md) com o mesmo prefixo.
 
-### R-01 — Contratos observáveis
-
-
-### R-04 — Tipos e lifecycle explícitos
-
-- [ ] `R-04d` Substituir caches e registries globais por dependências com
-  lifecycle explícito e testes concorrentes.
-
 ### R-05 — Casos de uso e reconciliação
 
 - [ ] `R-05c` Extrair comandos e consultas de aplicação das operações críticas,

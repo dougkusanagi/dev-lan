@@ -85,7 +85,7 @@ func (a *App) startOperationEvents() {
 				if !open {
 					return
 				}
-				result := localapi.BuildOperationResult(context.Background(), a.service, state)
+				result := a.api.BuildOperationResult(context.Background(), state)
 				eventName := "devlan:operation-progress"
 				if guiTerminalPhase(state.Phase) && state.ProjectName != "" {
 					eventName = "devlan:project-state-changed"
@@ -108,13 +108,13 @@ func guiTerminalPhase(phase string) bool {
 func (a *App) GetProjects(filter string) ([]ProjectView, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	return localapi.BuildProjectViews(ctx, a.service, filter)
+	return a.api.BuildProjectViews(ctx, filter)
 }
 
 func (a *App) GetStatus() (SystemStatusView, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return localapi.BuildStatusView(ctx, a.service)
+	return a.api.BuildStatusView(ctx)
 }
 
 // GetTopology exposes the detailed single-edge diagnostic model to the Wails
@@ -128,7 +128,7 @@ func (a *App) GetTopology() (app.TopologySnapshot, error) {
 func (a *App) GetOverview(filter string) (OverviewView, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	return localapi.BuildOverviewView(ctx, a.service, filter)
+	return a.api.BuildOverviewView(ctx, filter)
 }
 
 func (a *App) GetMetrics(project, rawRange string) (*metrics.Snapshot, error) {
@@ -142,7 +142,7 @@ func (a *App) GetGlobalConfig() (GlobalConfigView, error) {
 func (a *App) GetPHPVersions() ([]PHPVersionView, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	return localapi.BuildPHPVersionsView(ctx, a.service)
+	return a.api.BuildPHPVersionsView(ctx)
 }
 
 func (a *App) InstallPHPVersion(version string) error {
@@ -150,7 +150,7 @@ func (a *App) InstallPHPVersion(version string) error {
 	defer cancel()
 	_, err := a.service.PHPInstall(ctx, version, nil)
 	if err == nil {
-		localapi.InvalidateColdReadModelCache(a.service)
+		a.api.InvalidateColdReadModelCache()
 	}
 	return err
 }
@@ -160,7 +160,7 @@ func (a *App) RemovePHPVersion(version string) error {
 	defer cancel()
 	_, err := a.service.PHPRemove(ctx, version)
 	if err == nil {
-		localapi.InvalidateColdReadModelCache(a.service)
+		a.api.InvalidateColdReadModelCache()
 	}
 	return err
 }
@@ -170,7 +170,7 @@ func (a *App) SetDefaultPHPVersion(version string) error {
 	defer cancel()
 	_, err := a.service.SetDefaultPHPVersion(ctx, version)
 	if err == nil {
-		localapi.InvalidateColdReadModelCache(a.service)
+		a.api.InvalidateColdReadModelCache()
 	}
 	return err
 }
@@ -188,7 +188,7 @@ func (a *App) SaveGlobalConfig(view GlobalConfigView) error {
 		Allowlist:         view.Allowlist,
 	})
 	if err == nil {
-		localapi.InvalidateReadModelCache(a.service)
+		a.api.InvalidateReadModelCache()
 	}
 	return err
 }
@@ -248,7 +248,7 @@ func (a *App) SaveProjectConfig(update ProjectConfigUpdate) error {
 			return err
 		}
 	}
-	localapi.InvalidateReadModelCache(a.service)
+	a.api.InvalidateReadModelCache()
 	return nil
 }
 
@@ -277,7 +277,7 @@ func (a *App) GetOperation(operationID string) (MutationResult, error) {
 	if !ok {
 		return MutationResult{}, fmt.Errorf("operação não encontrada: %s", operationID)
 	}
-	return localapi.BuildOperationResult(context.Background(), a.service, state), nil
+	return a.api.BuildOperationResult(context.Background(), state), nil
 }
 
 func (a *App) StartDevOperation(name, operationID string) (MutationResult, error) {
@@ -340,14 +340,14 @@ func (a *App) acceptProjectOperation(operation, project, operationID string, tim
 				}
 			}
 			if operation == "start" || operation == "stop" || operation == "restart" {
-				localapi.InvalidateHotReadModelCache(a.service)
+				a.api.InvalidateHotReadModelCache()
 			} else {
-				localapi.InvalidateReadModelCache(a.service)
+				a.api.InvalidateReadModelCache()
 			}
 			a.service.UpdateOperation(operationID, terminal, terminal, revision, nil, warnings, workErr)
 		}()
 	}
-	return localapi.BuildOperationResult(context.Background(), a.service, state), nil
+	return a.api.BuildOperationResult(context.Background(), state), nil
 }
 
 func (a *App) resultForCompleted(operation, project, operationID string, ctx context.Context, warnings []string) MutationResult {
@@ -357,8 +357,8 @@ func (a *App) resultForCompleted(operation, project, operationID string, ctx con
 	state, _, _ := a.service.BeginOperation(operationID, operation, project)
 	a.service.SetOperationTransport(operationID, "wails")
 	state = a.service.UpdateOperation(operationID, "ready", "ready", guiCurrentRevision(a.service), nil, warnings, nil)
-	localapi.InvalidateReadModelCache(a.service)
-	return localapi.BuildOperationResult(ctx, a.service, state)
+	a.api.InvalidateReadModelCache()
+	return a.api.BuildOperationResult(ctx, state)
 }
 
 func guiCurrentRevision(service *app.App) uint64 {
@@ -370,7 +370,7 @@ func (a *App) LinkProject(name, path string) error {
 	defer cancel()
 	_, _, err := a.service.Link(ctx, name, path)
 	if err == nil {
-		localapi.InvalidateReadModelCache(a.service)
+		a.api.InvalidateReadModelCache()
 	}
 	return err
 }
@@ -380,7 +380,7 @@ func (a *App) UnlinkProject(name string) error {
 	defer cancel()
 	_, _, err := a.service.Unlink(ctx, name)
 	if err == nil {
-		localapi.InvalidateReadModelCache(a.service)
+		a.api.InvalidateReadModelCache()
 	}
 	return err
 }
@@ -390,7 +390,7 @@ func (a *App) HideProject(name string) error {
 	defer cancel()
 	_, err := a.service.IgnoreProject(ctx, name)
 	if err == nil {
-		localapi.InvalidateReadModelCache(a.service)
+		a.api.InvalidateReadModelCache()
 	}
 	return err
 }
@@ -400,7 +400,7 @@ func (a *App) ParkDir(path string) error {
 	defer cancel()
 	_, _, err := a.service.Park(ctx, path)
 	if err == nil {
-		localapi.InvalidateReadModelCache(a.service)
+		a.api.InvalidateReadModelCache()
 	}
 	return err
 }
@@ -410,7 +410,7 @@ func (a *App) UnparkDir(path string) error {
 	defer cancel()
 	_, _, err := a.service.Unpark(ctx, path)
 	if err == nil {
-		localapi.InvalidateReadModelCache(a.service)
+		a.api.InvalidateReadModelCache()
 	}
 	return err
 }
@@ -420,7 +420,7 @@ func (a *App) StartDev(name string) error {
 	defer cancel()
 	err := a.service.StartDev(ctx, name)
 	if err == nil {
-		localapi.InvalidateHotReadModelCache(a.service)
+		a.api.InvalidateHotReadModelCache()
 	}
 	return err
 }
@@ -430,7 +430,7 @@ func (a *App) StopDev(name string) error {
 	defer cancel()
 	err := a.service.StopDev(ctx, name)
 	if err == nil {
-		localapi.InvalidateHotReadModelCache(a.service)
+		a.api.InvalidateHotReadModelCache()
 	}
 	return err
 }
@@ -440,7 +440,7 @@ func (a *App) RestartDev(name string) error {
 	defer cancel()
 	err := a.service.RestartDev(ctx, name)
 	if err == nil {
-		localapi.InvalidateHotReadModelCache(a.service)
+		a.api.InvalidateHotReadModelCache()
 	}
 	return err
 }
@@ -503,7 +503,7 @@ func (a *App) ApplyDoctorFix(action, target string) error {
 		_, err = a.service.Reload(ctx)
 	}
 	if err == nil {
-		localapi.InvalidateReadModelCache(a.service)
+		a.api.InvalidateReadModelCache()
 	}
 	return err
 }
@@ -528,7 +528,7 @@ func (a *App) Reload() error {
 	defer cancel()
 	_, err := a.service.Reload(ctx)
 	if err == nil {
-		localapi.InvalidateReadModelCache(a.service)
+		a.api.InvalidateReadModelCache()
 	}
 	return err
 }
@@ -552,7 +552,7 @@ func (a *App) TrustCA() error {
 	defer cancel()
 	err := a.service.Trust(ctx)
 	if err == nil {
-		localapi.InvalidateColdReadModelCache(a.service)
+		a.api.InvalidateColdReadModelCache()
 	}
 	return err
 }

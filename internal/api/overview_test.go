@@ -47,7 +47,8 @@ func TestOverviewRouteUsesOneReadModelAndBatchedWSLCalls(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/api/v1/overview", nil)
 	request.RemoteAddr = "127.0.0.1:1234"
 	recorder := httptest.NewRecorder()
-	New(service).Handler().ServeHTTP(recorder, request)
+	server := New(service)
+	server.Handler().ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("overview rejeitado: %d %s", recorder.Code, recorder.Body.String())
 	}
@@ -67,7 +68,7 @@ func TestOverviewRouteUsesOneReadModelAndBatchedWSLCalls(t *testing.T) {
 	// A second poll inside the hot/cold TTLs is served from the materialized
 	// snapshots and must not cross the WSL boundary again.
 	second := httptest.NewRecorder()
-	New(service).Handler().ServeHTTP(second, request.Clone(request.Context()))
+	server.Handler().ServeHTTP(second, request.Clone(request.Context()))
 	if second.Code != http.StatusOK {
 		t.Fatalf("segundo overview rejeitado: %d", second.Code)
 	}

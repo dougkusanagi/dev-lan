@@ -18,6 +18,7 @@ Wails opcional.
   recuperação;
 - endpoint agregado `/api/v1/overview`, cache de read model e operações longas
   assíncronas expostas por consulta e SSE;
+- cache de read model com lifecycle explícito por servidor, sem registry global;
 - métricas incrementais e limitadas, atribuídas por metadado confiável do Caddy,
   com suporte a rotação, truncamento e linhas grandes sem reter dados sensíveis;
 - manifesto de instalação e núcleo do uninstall conservador com dry-run,

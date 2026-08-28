@@ -348,5 +348,17 @@ disponível no ambiente.
 **Gate:** testes Go focados em aplicação e arquitetura passam; artefatos legados
 em disco continuam disponíveis para detecção e rollback explícitos.
 
+## R-04d — Lifecycle explícito de caches e registries
+
+- [x] Substituir o registry global indexado por `*app.App` por um
+  `ReadModelCache` criado e possuído por cada `api.Server`.
+- [x] Fazer handlers HTTP e o shell Wails reutilizarem a dependência do servidor
+  e invalidá-la no lifecycle de fechamento, sem reter serviços encerrados.
+- [x] Cobrir isolamento entre servidores e invalidação/consulta concorrente com
+  testes compatíveis com `go test -race`.
+
+**Gate:** não há registry global de read model; a suíte focada de API/GUI e os
+testes concorrentes passam sem alterar os contratos HTTP, Wails ou de cache.
+
 O restante foi migrado para o [roadmap vigente](../ROADMAP.md), sem duplicar
 caixas abertas neste histórico.

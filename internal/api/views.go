@@ -99,12 +99,12 @@ func loadProjectViewRuntimeUncached(ctx context.Context, service *app.App) (*pro
 	return runtime, nil
 }
 
-func loadProjectViewRuntime(ctx context.Context, service *app.App) (*projectViewRuntime, bool, error) {
+func loadProjectViewRuntime(ctx context.Context, service *app.App, cache *ReadModelCache) (*projectViewRuntime, bool, error) {
 	now := time.Now()
 	if service.Now != nil {
 		now = service.Now()
 	}
-	value, hit, err := cachedHot(ctx, service, now)
+	value, hit, err := cache.cachedHot(ctx, service, now)
 	return value, hit, err
 }
 
@@ -302,12 +302,23 @@ func renderProjectViews(runtime *projectViewRuntime, filter string) []ProjectVie
 	return result
 }
 
-func BuildProjectViews(ctx context.Context, service *app.App, filter string) ([]ProjectView, error) {
-	runtime, _, err := loadProjectViewRuntime(ctx, service)
+func buildProjectViews(ctx context.Context, service *app.App, cache *ReadModelCache, filter string) ([]ProjectView, error) {
+	runtime, _, err := loadProjectViewRuntime(ctx, service, cache)
 	if err != nil {
 		return nil, err
 	}
 	return renderProjectViews(runtime, filter), nil
+}
+
+// BuildProjectViews is a convenience for callers that do not own a server
+// lifecycle. API and Wails paths use Server.BuildProjectViews so their cache
+// remains attached to the owning Server instance.
+func BuildProjectViews(ctx context.Context, service *app.App, filter string) ([]ProjectView, error) {
+	return buildProjectViews(ctx, service, NewReadModelCache(), filter)
+}
+
+func (s *Server) BuildProjectViews(ctx context.Context, filter string) ([]ProjectView, error) {
+	return buildProjectViews(ctx, s.service, s.readModelCache, filter)
 }
 
 func wslAvailability(ctx context.Context, service *app.App) bool {
@@ -408,11 +419,11 @@ func phpVersionViews(items []app.PHPVersionStatus) []PHPVersionView {
 // BuildOverviewView is the browser polling boundary. It materializes parks
 // once and shares the resulting runtime/status/PHP snapshot across the three
 // panels that used to issue independent requests.
-func BuildOverviewView(ctx context.Context, service *app.App, filter string) (OverviewView, error) {
+func buildOverviewView(ctx context.Context, service *app.App, cache *ReadModelCache, filter string) (OverviewView, error) {
 	ctx = platform.WithWSLOperation(ctx, platform.WSLOperationPolling)
 	started := time.Now()
 	beforeStats := service.WSL.StatsSnapshot()
-	runtime, hotHit, err := loadProjectViewRuntime(ctx, service)
+	runtime, hotHit, err := loadProjectViewRuntime(ctx, service, cache)
 	if err != nil {
 		return OverviewView{}, err
 	}
@@ -420,9 +431,9 @@ func BuildOverviewView(ctx context.Context, service *app.App, filter string) (Ov
 	if service.Now != nil {
 		now = service.Now()
 	}
-	health, coldHit := cachedCold(ctx, service, now, runtime.caddyStatus)
+	health, coldHit := cache.cachedCold(ctx, service, now, runtime.caddyStatus)
 	observedAt := now.UTC().Format(time.RFC3339Nano)
-	hotAge, coldAge := readModelCacheAges(service, now)
+	hotAge, coldAge := cache.ages(now)
 	afterStats := service.WSL.StatsSnapshot()
 	cacheStatus := "miss"
 	if hotHit && coldHit {
@@ -451,7 +462,15 @@ func BuildOverviewView(ctx context.Context, service *app.App, filter string) (Ov
 	}, nil
 }
 
-func BuildStatusView(ctx context.Context, service *app.App) (SystemStatusView, error) {
+func BuildOverviewView(ctx context.Context, service *app.App, filter string) (OverviewView, error) {
+	return buildOverviewView(ctx, service, NewReadModelCache(), filter)
+}
+
+func (s *Server) BuildOverviewView(ctx context.Context, filter string) (OverviewView, error) {
+	return buildOverviewView(ctx, s.service, s.readModelCache, filter)
+}
+
+func buildStatusView(ctx context.Context, service *app.App, cache *ReadModelCache) (SystemStatusView, error) {
 	cfg, err := service.Config()
 	if err != nil {
 		return SystemStatusView{}, err
@@ -461,8 +480,16 @@ func BuildStatusView(ctx context.Context, service *app.App) (SystemStatusView, e
 		now = service.Now()
 	}
 	caddyStatus := serviceCaddyStatus(ctx, service)
-	health, _ := cachedCold(ctx, service, now, caddyStatus)
+	health, _ := cache.cachedCold(ctx, service, now, caddyStatus)
 	return buildSystemStatusView(cfg, health.phpVersions, caddyStatus, health, now.UTC().Format(time.RFC3339Nano)), nil
+}
+
+func BuildStatusView(ctx context.Context, service *app.App) (SystemStatusView, error) {
+	return buildStatusView(ctx, service, NewReadModelCache())
+}
+
+func (s *Server) BuildStatusView(ctx context.Context) (SystemStatusView, error) {
+	return buildStatusView(ctx, s.service, s.readModelCache)
 }
 
 func BuildGlobalConfigView(service *app.App) (GlobalConfigView, error) {
@@ -480,13 +507,21 @@ func BuildGlobalConfigView(service *app.App) (GlobalConfigView, error) {
 	}, nil
 }
 
-func BuildPHPVersionsView(ctx context.Context, service *app.App) ([]PHPVersionView, error) {
+func buildPHPVersionsView(ctx context.Context, service *app.App, cache *ReadModelCache) ([]PHPVersionView, error) {
 	now := time.Now()
 	if service.Now != nil {
 		now = service.Now()
 	}
-	health, _ := cachedCold(ctx, service, now, serviceCaddyStatus(ctx, service))
+	health, _ := cache.cachedCold(ctx, service, now, serviceCaddyStatus(ctx, service))
 	return phpVersionViews(health.phpVersions), nil
+}
+
+func BuildPHPVersionsView(ctx context.Context, service *app.App) ([]PHPVersionView, error) {
+	return buildPHPVersionsView(ctx, service, NewReadModelCache())
+}
+
+func (s *Server) BuildPHPVersionsView(ctx context.Context) ([]PHPVersionView, error) {
+	return buildPHPVersionsView(ctx, s.service, s.readModelCache)
 }
 
 func BuildDoctorChecksView(ctx context.Context, service *app.App, name string) ([]DoctorCheckView, error) {

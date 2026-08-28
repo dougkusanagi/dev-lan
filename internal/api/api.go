@@ -38,7 +38,8 @@ type Endpoint struct {
 }
 
 type Server struct {
-	service *app.App
+	service        *app.App
+	readModelCache *ReadModelCache
 
 	mu         sync.Mutex
 	listener   net.Listener
@@ -48,7 +49,7 @@ type Server struct {
 }
 
 func New(service *app.App) *Server {
-	return &Server{service: service}
+	return &Server{service: service, readModelCache: NewReadModelCache()}
 }
 
 func (s *Server) Start() (Endpoint, error) {
@@ -167,11 +168,13 @@ func (s *Server) Close(ctx context.Context) error {
 	server := s.httpServer
 	listeners := s.listeners
 	endpointPath := s.service.APIEndpointFiles().Endpoint
+	readModelCache := s.readModelCache
 	s.listener = nil
 	s.listeners = nil
 	s.httpServer = nil
 	s.endpoint = Endpoint{}
 	s.mu.Unlock()
+	readModelCache.InvalidateReadModelCache()
 	if server == nil {
 		return nil
 	}

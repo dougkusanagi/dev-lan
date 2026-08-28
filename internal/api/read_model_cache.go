@@ -24,57 +24,80 @@ type cachedColdSnapshot struct {
 	at    time.Time
 }
 
-type serviceReadModelCache struct {
+// ReadModelCache owns the materialized read snapshots for one API consumer.
+// It is intentionally constructed and held by Server instead of being indexed
+// by *app.App in a package-level registry. That keeps cache lifetime explicit
+// and prevents closed services from being retained by the API package.
+type ReadModelCache struct {
 	mu   sync.Mutex
 	hot  cachedHotRuntime
 	cold cachedColdSnapshot
 }
 
-var readModelCaches sync.Map // map[*app.App]*serviceReadModelCache
-
-func cacheFor(service *app.App) *serviceReadModelCache {
-	if value, ok := readModelCaches.Load(service); ok {
-		return value.(*serviceReadModelCache)
-	}
-	created := &serviceReadModelCache{}
-	actual, _ := readModelCaches.LoadOrStore(service, created)
-	return actual.(*serviceReadModelCache)
+func NewReadModelCache() *ReadModelCache {
+	return &ReadModelCache{}
 }
 
 // InvalidateHotReadModelCache is used by HMR mutations. It preserves the
 // administrative snapshot so a start/stop does not immediately re-run PHP,
 // firewall, Hyper-V and CA checks.
-func InvalidateHotReadModelCache(service *app.App) {
-	cache := cacheFor(service)
-	cache.mu.Lock()
-	cache.hot = cachedHotRuntime{}
-	cache.mu.Unlock()
+func (c *ReadModelCache) InvalidateHotReadModelCache() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.hot = cachedHotRuntime{}
+	c.mu.Unlock()
 }
 
 // InvalidateColdReadModelCache expires only the slower administrative layer.
-func InvalidateColdReadModelCache(service *app.App) {
-	cache := cacheFor(service)
-	cache.mu.Lock()
-	cache.cold = cachedColdSnapshot{}
-	cache.mu.Unlock()
+func (c *ReadModelCache) InvalidateColdReadModelCache() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.cold = cachedColdSnapshot{}
+	c.mu.Unlock()
 }
 
 // InvalidateReadModelCache is called after a mutation that can change both
 // project runtime and administrative health state.
-func InvalidateReadModelCache(service *app.App) {
-	cache := cacheFor(service)
-	cache.mu.Lock()
-	cache.hot = cachedHotRuntime{}
-	cache.cold = cachedColdSnapshot{}
-	cache.mu.Unlock()
+func (c *ReadModelCache) InvalidateReadModelCache() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.hot = cachedHotRuntime{}
+	c.cold = cachedColdSnapshot{}
+	c.mu.Unlock()
 }
 
-func cachedHot(ctx context.Context, service *app.App, now time.Time) (*projectViewRuntime, bool, error) {
-	cache := cacheFor(service)
-	cache.mu.Lock()
-	defer cache.mu.Unlock()
-	if cache.hot.runtime != nil && now.Sub(cache.hot.at) < hotSnapshotTTL {
-		runtime := cache.hot.runtime
+func (s *Server) InvalidateHotReadModelCache() {
+	if s != nil {
+		s.readModelCache.InvalidateHotReadModelCache()
+	}
+}
+
+func (s *Server) InvalidateColdReadModelCache() {
+	if s != nil {
+		s.readModelCache.InvalidateColdReadModelCache()
+	}
+}
+
+func (s *Server) InvalidateReadModelCache() {
+	if s != nil {
+		s.readModelCache.InvalidateReadModelCache()
+	}
+}
+
+func (c *ReadModelCache) cachedHot(ctx context.Context, service *app.App, now time.Time) (*projectViewRuntime, bool, error) {
+	if c == nil {
+		c = NewReadModelCache()
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.hot.runtime != nil && now.Sub(c.hot.at) < hotSnapshotTTL {
+		runtime := c.hot.runtime
 		return runtime, true, nil
 	}
 
@@ -82,34 +105,38 @@ func cachedHot(ctx context.Context, service *app.App, now time.Time) (*projectVi
 	if err != nil {
 		return nil, false, err
 	}
-	cache.hot = cachedHotRuntime{runtime: runtime, at: now}
+	c.hot = cachedHotRuntime{runtime: runtime, at: now}
 	return runtime, false, nil
 }
 
-func cachedCold(ctx context.Context, service *app.App, now time.Time, caddyStatus platform.CaddyServiceStatus) (systemHealthSnapshot, bool) {
-	cache := cacheFor(service)
-	cache.mu.Lock()
-	defer cache.mu.Unlock()
-	if !cache.cold.at.IsZero() && now.Sub(cache.cold.at) < coldSnapshotTTL {
-		value := cache.cold.value
+func (c *ReadModelCache) cachedCold(ctx context.Context, service *app.App, now time.Time, caddyStatus platform.CaddyServiceStatus) (systemHealthSnapshot, bool) {
+	if c == nil {
+		c = NewReadModelCache()
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.cold.at.IsZero() && now.Sub(c.cold.at) < coldSnapshotTTL {
+		value := c.cold.value
 		return value, true
 	}
 
 	value := loadSystemHealthSnapshot(ctx, service, caddyStatus)
-	cache.cold = cachedColdSnapshot{value: value, at: now}
+	c.cold = cachedColdSnapshot{value: value, at: now}
 	return value, false
 }
 
-func readModelCacheAges(service *app.App, now time.Time) (int64, int64) {
-	cache := cacheFor(service)
-	cache.mu.Lock()
-	defer cache.mu.Unlock()
-	var hotAge, coldAge int64
-	if !cache.hot.at.IsZero() {
-		hotAge = now.Sub(cache.hot.at).Milliseconds()
+func (c *ReadModelCache) ages(now time.Time) (int64, int64) {
+	if c == nil {
+		return 0, 0
 	}
-	if !cache.cold.at.IsZero() {
-		coldAge = now.Sub(cache.cold.at).Milliseconds()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var hotAge, coldAge int64
+	if !c.hot.at.IsZero() {
+		hotAge = now.Sub(c.hot.at).Milliseconds()
+	}
+	if !c.cold.at.IsZero() {
+		coldAge = now.Sub(c.cold.at).Milliseconds()
 	}
 	return hotAge, coldAge
 }

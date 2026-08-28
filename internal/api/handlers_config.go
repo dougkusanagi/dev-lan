@@ -46,7 +46,7 @@ func (s *Server) handleConfig(writer http.ResponseWriter, request *http.Request)
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
 		}
-		InvalidateReadModelCache(s.service)
+		s.InvalidateReadModelCache()
 		writeJSON(writer, http.StatusOK, MessageOnlyResponse{Message: "Configuração global salva."})
 		return
 	}
@@ -96,7 +96,7 @@ func (s *Server) handleReload(writer http.ResponseWriter, request *http.Request)
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
 	}
-	InvalidateReadModelCache(s.service)
+	s.InvalidateReadModelCache()
 	writeJSON(writer, http.StatusOK, ReloadResponse{Message: "Configurações recarregadas com sucesso.", Result: result})
 }
 
@@ -105,7 +105,7 @@ func (s *Server) handlePHPVersions(writer http.ResponseWriter, request *http.Req
 		methodNotAllowed(writer, http.MethodGet)
 		return
 	}
-	items, err := BuildPHPVersionsView(request.Context(), s.service)
+	items, err := s.BuildPHPVersionsView(request.Context())
 	if err != nil {
 		writeJSONError(writer, http.StatusInternalServerError, err.Error())
 		return
@@ -132,7 +132,7 @@ func (s *Server) handlePHPInstall(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	writeJSON(writer, http.StatusOK, MessageResponse{Message: fmt.Sprintf("PHP %s instalado.", input.Version), Warnings: res.Warnings})
-	InvalidateColdReadModelCache(s.service)
+	s.InvalidateColdReadModelCache()
 }
 
 func (s *Server) handlePHPRemove(writer http.ResponseWriter, request *http.Request) {
@@ -153,7 +153,7 @@ func (s *Server) handlePHPRemove(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	writeJSON(writer, http.StatusOK, MessageResponse{Message: fmt.Sprintf("PHP %s removido.", input.Version), Warnings: res.Warnings})
-	InvalidateColdReadModelCache(s.service)
+	s.InvalidateColdReadModelCache()
 }
 
 func (s *Server) handlePHPDefault(writer http.ResponseWriter, request *http.Request) {
@@ -174,5 +174,5 @@ func (s *Server) handlePHPDefault(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	writeJSON(writer, http.StatusOK, MessageResponse{Message: fmt.Sprintf("PHP padrão alterado para %s.", input.Version), Warnings: res.Warnings})
-	InvalidateColdReadModelCache(s.service)
+	s.InvalidateColdReadModelCache()
 }
