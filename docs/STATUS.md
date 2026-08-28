@@ -21,6 +21,8 @@ Wails opcional.
 - cache de read model com lifecycle explícito por servidor, sem registry global;
 - comandos e consultas de aplicação explícitos para as fatias críticas de
   projeto, configuração, modo e read model, usados por HTTP, CLI e Wails;
+- reconciliador real de mutações com plan/apply/verify, revisão otimista,
+  journal e rollback de configuração, artefatos e runtime;
 - métricas incrementais e limitadas, atribuídas por metadado confiável do Caddy,
   com suporte a rotação, truncamento e linhas grandes sem reter dados sensíveis;
 - manifesto de instalação e núcleo do uninstall conservador com dry-run,

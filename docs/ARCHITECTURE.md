@@ -58,8 +58,10 @@ rollback explícitos.
 
 As fatias críticas de projeto, configuração, modo e read model são compostas
 por `application.Commands`/`application.Queries`; HTTP e Wails compartilham as
-instâncias do servidor, enquanto a CLI compõe as mesmas abstrações. As demais
-operações ainda usam a fachada de `internal/app` e serão migradas em R-05e.
+instâncias do servidor, enquanto a CLI compõe as mesmas abstrações. O caminho
+compartilhado de salvar/aplicar e reload usa o reconciliador de aplicação sob o
+lock do Store; as demais operações ainda usam a fachada de `internal/app` e
+serão migradas em R-05e.
 
 O fluxo de mutação converge em persistir a intenção e reconciliar recursos por
 `plan → validate → stage → commit → reload → healthcheck`, com recuperação por

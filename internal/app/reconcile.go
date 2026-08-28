@@ -9,7 +9,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
+	"github.com/dougkusanagi/dev-lan/internal/application/ports"
+	applicationreconcile "github.com/dougkusanagi/dev-lan/internal/application/reconcile"
 	"github.com/dougkusanagi/dev-lan/internal/caddy"
 	"github.com/dougkusanagi/dev-lan/internal/config"
 	"github.com/dougkusanagi/dev-lan/internal/detect"
@@ -28,44 +31,25 @@ func (a *App) Reload(ctx context.Context) (ApplyResult, error) {
 	defer a.mutationMu.Unlock()
 	var result ApplyResult
 	err := a.Store.WithLock(ctx, func() error {
-		cfg, err := a.Store.LoadLocked()
+		current, err := a.Store.LoadLocked()
 		if err != nil {
 			return err
 		}
-		prepared, prepareErr := a.routeAllocationConfig(ctx, cfg)
-		if prepareErr != nil {
-			return prepareErr
+		runner := &configMutationReconciler{
+			app:               a,
+			current:           current,
+			decidePersistence: true,
+			reload:            true,
+			mode:              OperationalStrict,
+			result:            &result,
 		}
-		allocationsChanged := !routealloc.EqualAllocations(cfg.RoutePortAllocations, prepared.RoutePortAllocations)
-		result, err = a.apply(ctx, prepared, true, false, OperationalStrict)
-		if err != nil {
+		if err := applicationreconcile.Execute(ctx, runner, current); err != nil {
 			return err
 		}
-		if allocationsChanged {
-			if err := a.Store.SaveLocked(prepared); err != nil {
-				_ = a.Store.RollbackCaddy()
-				_ = a.Store.RollbackPHPFiles()
-				return err
-			}
-			result.Revision = cfg.Revision + 1
-		}
-		result, err = a.reloadApplied(ctx, prepared, result, OperationalStrict)
-		if err != nil {
-			result.Status = "rolled_back"
-			if allocationsChanged {
-				_ = a.Store.RollbackConfigLocked()
-			}
-			_ = a.Store.RollbackCaddy()
-			_ = a.Store.RollbackPHPFiles()
-			if previous, loadErr := a.Store.LoadLocked(); loadErr == nil {
-				_, _ = a.reloadApplied(ctx, previous, ApplyResult{}, BootstrapTolerant)
-			}
-			return err
-		}
+		result.Status = statusFor(result)
 		return nil
 	})
 	if err == nil {
-		result.Status = statusFor(result)
 		_ = a.appendLog("reload aplicado")
 		a.recordTelemetry("reload", map[string]string{"result": "ok"})
 	}
@@ -85,43 +69,19 @@ func (a *App) saveAndApplyMode(ctx context.Context, cfg domain.Config, reload bo
 		if err != nil {
 			return err
 		}
-		if cfg.Revision != 0 && cfg.Revision != current.Revision {
-			return fmt.Errorf("%w: esperado %d, atual %d", config.ErrRevisionConflict, cfg.Revision, current.Revision)
+		// Keep the Store lock across all three phases. That makes the optimistic
+		// revision check in Plan and the SaveLocked commit one atomic mutation
+		// from the point of view of CLI, HTTP, Wails and concurrent processes.
+		runner := &configMutationReconciler{
+			app:     a,
+			current: current,
+			persist: true,
+			reload:  reload,
+			mode:    mode,
+			result:  &result,
 		}
-		cfg, err = a.routeAllocationConfig(ctx, cfg)
-		if err != nil {
+		if err := applicationreconcile.Execute(ctx, runner, cfg); err != nil {
 			return err
-		}
-		// Plan, validate and stage happen before the persistent commit. The
-		// generated files are backed up by Store and are therefore recoverable
-		// if any subsequent phase fails.
-		result, err = a.apply(ctx, cfg, true, false, mode)
-		if err != nil {
-			result.Status = "failed"
-			return err
-		}
-		if err := a.Store.SaveLocked(cfg); err != nil {
-			_ = a.Store.RollbackConfigLocked()
-			_ = a.Store.RollbackCaddy()
-			_ = a.Store.RollbackPHPFiles()
-			result.Status = "failed"
-			return err
-		}
-		result.Revision = current.Revision + 1
-		if reload {
-			result, err = a.reloadApplied(ctx, cfg, result, mode)
-			if err != nil {
-				// Compensate both files and live processes. A failed post-commit
-				// reload must not leave a newer state pointing at older services.
-				_ = a.Store.RollbackConfigLocked()
-				_ = a.Store.RollbackCaddy()
-				_ = a.Store.RollbackPHPFiles()
-				if previous, loadErr := a.Store.LoadLocked(); loadErr == nil {
-					_, _ = a.reloadApplied(ctx, previous, ApplyResult{}, BootstrapTolerant)
-				}
-				result.Status = "rolled_back"
-				return err
-			}
 		}
 		result.Status = statusFor(result)
 		return nil
@@ -141,6 +101,156 @@ func (a *App) saveAndApplyMode(ctx context.Context, cfg domain.Config, reload bo
 		result.Status = statusFor(result)
 	}
 	return result, nil
+}
+
+// configMutationReconciler is the composition-root adapter for the generic
+// application reconciler. It deliberately keeps persistence and host details
+// here, while application/reconcile owns only the ordering contract.
+type configMutationReconciler struct {
+	app               *App
+	current           domain.Config
+	desired           domain.Config
+	persist           bool
+	decidePersistence bool
+	reload            bool
+	mode              OperationMode
+	result            *ApplyResult
+
+	staged           bool
+	persistAttempted bool
+	applied          bool
+	planned          bool
+}
+
+var _ ports.Reconciler = (*configMutationReconciler)(nil)
+
+func (r *configMutationReconciler) Plan(ctx context.Context, cfg domain.Config) (ports.ReconcilePlan, error) {
+	if err := mutationContextError(ctx); err != nil {
+		return ports.ReconcilePlan{}, err
+	}
+	if cfg.Revision != 0 && cfg.Revision != r.current.Revision {
+		return ports.ReconcilePlan{}, fmt.Errorf("%w: esperado %d, atual %d", config.ErrRevisionConflict, cfg.Revision, r.current.Revision)
+	}
+	desired, err := r.app.routeAllocationConfig(ctx, cfg)
+	if err != nil {
+		return ports.ReconcilePlan{}, err
+	}
+	r.desired = desired
+	if r.decidePersistence {
+		r.persist = !routealloc.EqualAllocations(r.current.RoutePortAllocations, desired.RoutePortAllocations)
+	}
+	r.planned = true
+	revision := r.current.Revision
+	if r.persist {
+		revision++
+	}
+	return ports.ReconcilePlan{
+		OperationID: NewOperationID(),
+		Revision:    revision,
+		Description: "aplicar configuração e recursos gerados",
+	}, nil
+}
+
+func (r *configMutationReconciler) Apply(ctx context.Context, plan ports.ReconcilePlan) error {
+	expectedRevision := r.current.Revision
+	if r.persist {
+		expectedRevision++
+	}
+	if !r.planned || plan.Revision != expectedRevision {
+		return errors.New("plano de reconciliação não corresponde à mutação atual")
+	}
+	result, err := r.app.apply(ctx, r.desired, true, false, r.mode)
+	*r.result = result
+	if err != nil {
+		r.result.Status = "failed"
+		return err
+	}
+	r.staged = true
+	if r.persist {
+		r.persistAttempted = true
+		if err := r.app.Store.SaveLocked(r.desired); err != nil {
+			// SaveLocked may have left a prepared pair or a manifest behind. The
+			// same compensating steps used by the former inline pipeline are kept
+			// in this phase boundary.
+			_ = r.rollbackArtifacts(ctx, false)
+			r.result.Status = "failed"
+			return err
+		}
+	}
+	r.applied = true
+	if r.persist {
+		r.result.Revision = plan.Revision
+	}
+	return nil
+}
+
+func (r *configMutationReconciler) Verify(ctx context.Context, plan ports.ReconcilePlan) error {
+	expectedRevision := r.current.Revision
+	if r.persist {
+		expectedRevision++
+	}
+	if !r.planned || !r.applied || plan.Revision != expectedRevision {
+		return errors.New("mutação não foi aplicada antes da verificação")
+	}
+	if !r.reload {
+		return nil
+	}
+	result, err := r.app.reloadApplied(ctx, r.desired, *r.result, r.mode)
+	*r.result = result
+	if err == nil {
+		return nil
+	}
+
+	// A post-commit health failure must restore both the authoritative pair and
+	// the generated/runtime artifacts, then attempt to bring the previous
+	// revision back online. This is intentionally the old rollback sequence,
+	// now owned by the verify phase of the real reconciler.
+	_ = r.rollbackArtifacts(ctx, true)
+	r.result.Status = "rolled_back"
+	return err
+}
+
+func (r *configMutationReconciler) rollbackArtifacts(ctx context.Context, restoreRuntime bool) error {
+	var rollbackErr error
+	if r.persistAttempted {
+		if err := r.app.Store.RollbackConfigLocked(); err != nil {
+			rollbackErr = errors.Join(rollbackErr, err)
+		}
+	}
+	if r.staged {
+		if err := r.app.Store.RollbackCaddy(); err != nil {
+			rollbackErr = errors.Join(rollbackErr, err)
+		}
+		if err := r.app.Store.RollbackPHPFiles(); err != nil {
+			rollbackErr = errors.Join(rollbackErr, err)
+		}
+	}
+	if restoreRuntime {
+		if previous, err := r.app.Store.LoadLocked(); err == nil {
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 45*time.Second)
+			_, reloadErr := r.app.reloadApplied(rollbackCtx, previous, ApplyResult{}, BootstrapTolerant)
+			cancel()
+			rollbackErr = errors.Join(rollbackErr, reloadErr)
+		} else {
+			rollbackErr = errors.Join(rollbackErr, err)
+		}
+	}
+	return rollbackErr
+}
+
+func mutationContextError(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return nil
+	}
 }
 
 func (a *App) SaveConfigAndApply(ctx context.Context, cfg domain.Config, reload bool) (ApplyResult, error) {

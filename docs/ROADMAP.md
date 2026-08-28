@@ -13,8 +13,6 @@ Subtarefas já entregues estão registradas em
 
 ### R-05 — Casos de uso e reconciliação
 
-- [ ] `R-05d` Integrar o reconciliador `plan → apply → verify` ao caminho real
-  de mutação, preservando journal, rollback e revisão otimista.
 - [ ] `R-05e` Fazer HTTP, CLI e o shell desktop chamarem somente casos de uso,
   sem coordenar adaptadores diretamente.
 

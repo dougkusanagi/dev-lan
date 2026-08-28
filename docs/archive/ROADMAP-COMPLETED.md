@@ -373,5 +373,19 @@ testes concorrentes passam sem alterar os contratos HTTP, Wails ou de cache.
 configuração da CLI e os handlers/read models críticos não acessam `config.Store`
 nem coordenam essa persistência diretamente.
 
+## R-05d — Reconciliador no caminho real de mutação
+
+- [x] Integrar `application/reconcile.Execute` ao caminho compartilhado de
+  salvar/aplicar e ao reload, mantendo `plan → apply → verify` sob o lock do
+  `config.Store`.
+- [x] Fazer o plano validar a revisão otimista antes de qualquer stage e fazer
+  o apply preservar a transação com journal/manifesto do Store.
+- [x] Manter o rollback compensatório de configuração, Caddy, pools PHP e
+  runtime quando o commit ou o healthcheck pós-commit falhar.
+
+**Gate:** mutações reais passam pelo reconciliador tipado; conflitos de revisão
+não aplicam artefatos; falhas após o commit restauram a revisão anterior e a
+suíte de aplicação permanece verde.
+
 O restante foi migrado para o [roadmap vigente](../ROADMAP.md), sem duplicar
 caixas abertas neste histórico.
