@@ -55,7 +55,7 @@ func (a *App) InstallWithPort(ctx context.Context, configureFirewall bool, windo
 			result.Warnings = append(result.Warnings, "não foi possível reconciliar Windows Firewall/Hyper-V Firewall; execute install como administrador")
 		}
 	}
-	if err := a.edgeCaddy().Available(ctx); err != nil {
+	if err := a.resourceUseCases().CaddyAvailable(ctx); err != nil {
 		result.Warnings = append(result.Warnings, "Caddy único no WSL não encontrado; instale-o e execute devlan doctor")
 	}
 	phpCommands := []string{"php-fpm", "php-fpm8.5", "php-fpm8.4", "php-fpm8.3", "php-fpm8.2", "php-fpm8.1"}

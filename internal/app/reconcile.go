@@ -283,12 +283,12 @@ func (a *App) reloadApplied(ctx context.Context, cfg domain.Config, result Apply
 		}
 	}
 	paths := a.Store.Paths()
-	caddyClient := a.edgeCaddy()
-	if err := caddyClient.Available(ctx); err == nil {
-		if err := caddyClient.EnsureRunning(ctx, paths.Caddy); err != nil {
+	caddyAvailableErr := a.resourceUseCases().CaddyAvailable(ctx)
+	if caddyAvailableErr == nil {
+		if err := a.resourceUseCases().EnsureCaddy(ctx, paths.Caddy); err != nil {
 			return result, fmt.Errorf("iniciar/recarregar Caddy WSL único: %w", err)
 		}
-		if caddyClient.RequireSystemd && !caddyClient.Status(ctx).Running {
+		if a.edgeCaddy().RequireSystemd && !a.edgeCaddy().Status(ctx).Running {
 			return result, fmt.Errorf("healthcheck Caddy WSL único: serviço systemd não está ativo")
 		}
 	} else {
@@ -329,7 +329,11 @@ func (a *App) apply(ctx context.Context, cfg domain.Config, validate, reload boo
 	// the URL table. Resolve the automatic address for the generated edge, but
 	// keep the persisted preference as "auto" so it can follow network changes.
 	if strings.TrimSpace(cfg.LANAddress) == "" || cfg.LANAddress == "auto" {
-		if host, hostErr := platform.LANAddress(); hostErr == nil && host != "" {
+		configuredAddress := cfg.LANAddress
+		if strings.TrimSpace(configuredAddress) == "" {
+			configuredAddress = "auto"
+		}
+		if host, hostErr := a.resourceUseCases().LANAddress(ctx, configuredAddress); hostErr == nil && host != "" {
 			cfg.LANAddress = host
 		}
 	}
@@ -363,7 +367,7 @@ func (a *App) apply(ctx context.Context, cfg domain.Config, validate, reload boo
 	}
 	caddyReady := false
 	if validate || reload {
-		if err := a.edgeCaddy().Available(ctx); err != nil {
+		if err := a.resourceUseCases().CaddyAvailable(ctx); err != nil {
 			if mode == OperationalStrict {
 				return result, fmt.Errorf("Caddy WSL único indisponível: %w", err)
 			}
@@ -375,7 +379,7 @@ func (a *App) apply(ctx context.Context, cfg domain.Config, validate, reload boo
 
 	validator := func(caddyTemp string) error {
 		if validate && caddyReady {
-			if err := a.edgeCaddy().Validate(ctx, caddyTemp); err != nil {
+			if err := a.resourceUseCases().ValidateCaddy(ctx, caddyTemp); err != nil {
 				return fmt.Errorf("Caddy WSL único: %w", err)
 			}
 		}
@@ -404,7 +408,7 @@ func (a *App) apply(ctx context.Context, cfg domain.Config, validate, reload boo
 	if reload {
 		paths := a.Store.Paths()
 		if caddyReady {
-			if err := a.edgeCaddy().EnsureRunning(ctx, paths.Caddy); err != nil {
+			if err := a.resourceUseCases().EnsureCaddy(ctx, paths.Caddy); err != nil {
 				_ = a.Store.RollbackCaddy()
 				_ = a.Store.RollbackPHPFiles()
 				return result, fmt.Errorf("iniciar/recarregar Caddy WSL único: %w", err)

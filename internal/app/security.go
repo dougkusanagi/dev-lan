@@ -18,11 +18,7 @@ func (a *App) SetAuth(ctx context.Context, selector string, enabled bool, userna
 	}
 	var hash string
 	if password != "" {
-		caddyClient := a.edgeCaddy()
-		if caddyClient.Runner == nil {
-			return ApplyResult{}, ErrPasswordHashUnavailable
-		}
-		h, hashErr := caddyClient.HashPassword(ctx, password)
+		h, hashErr := a.resourceUseCases().HashPassword(ctx, password)
 		if hashErr != nil {
 			return ApplyResult{}, fmt.Errorf("%w: %v", ErrPasswordHashUnavailable, hashErr)
 		}
@@ -69,10 +65,6 @@ func (a *App) MigrateLegacyAuth(ctx context.Context) (ApplyResult, error) {
 	if err != nil {
 		return ApplyResult{}, err
 	}
-	caddyClient := a.edgeCaddy()
-	if caddyClient.Runner == nil {
-		return ApplyResult{}, ErrPasswordHashUnavailable
-	}
 	migrate := func(users []domain.AuthUser) ([]domain.AuthUser, bool, error) {
 		converted := append([]domain.AuthUser(nil), users...)
 		changed := false
@@ -80,7 +72,7 @@ func (a *App) MigrateLegacyAuth(ctx context.Context) (ApplyResult, error) {
 			if isCaddyPasswordHash(converted[index].PasswordHash) {
 				continue
 			}
-			hash, hashErr := caddyClient.HashPassword(ctx, converted[index].PasswordHash)
+			hash, hashErr := a.resourceUseCases().HashPassword(ctx, converted[index].PasswordHash)
 			if hashErr != nil || !isCaddyPasswordHash(hash) {
 				if hashErr != nil {
 					return nil, false, fmt.Errorf("%w: %v", ErrPasswordHashUnavailable, hashErr)

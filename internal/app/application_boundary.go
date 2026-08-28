@@ -35,20 +35,14 @@ func (a *App) LANAddressSnapshot() string {
 	if err != nil || cfg.LANAddress == "" {
 		return "localhost"
 	}
-	if cfg.LANAddress != "auto" {
-		return cfg.LANAddress
-	}
-	if host, err := platform.LANAddress(); err == nil && host != "" {
+	if host, err := a.resourceUseCases().LANAddress(context.Background(), cfg.LANAddress); err == nil && host != "" {
 		return host
 	}
 	return "localhost"
 }
 
 func (a *App) ClockNow() time.Time {
-	if a.Now != nil {
-		return a.Now()
-	}
-	return time.Now()
+	return a.resourceUseCases().Now()
 }
 
 func (a *App) WSLStatsSnapshot() application.WSLStats {
@@ -76,8 +70,8 @@ func (a *App) TopologySnapshot(ctx context.Context) application.TopologySnapshot
 }
 
 func (a *App) NetworkProfileSnapshot(ctx context.Context) application.NetworkProfile {
-	public, detail, _ := platform.NetworkProfile(ctx)
-	return application.NetworkProfile{Public: public, Detail: detail}
+	profile, _ := a.resourceUseCases().NetworkProfile(ctx)
+	return application.NetworkProfile{Public: profile.Public, Detail: profile.Detail}
 }
 
 func (a *App) ProjectRuntime(ctx context.Context) (application.ProjectRuntimeSnapshot, error) {
@@ -96,12 +90,10 @@ func (a *App) ProjectRuntime(ctx context.Context) (application.ProjectRuntimeSna
 		edgeReady, wslReady = true, true
 	}
 	host := cfg.LANAddress
-	if host == "auto" {
-		if lanHost, lanErr := platform.LANAddress(); lanErr == nil {
-			host = lanHost
-		} else {
-			host = "localhost"
-		}
+	if lanHost, lanErr := a.resourceUseCases().LANAddress(ctx, host); lanErr == nil {
+		host = lanHost
+	} else if host == "auto" || host == "" {
+		host = "localhost"
 	}
 
 	snapshot := application.ProjectRuntimeSnapshot{

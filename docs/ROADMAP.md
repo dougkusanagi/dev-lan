@@ -15,8 +15,6 @@ Subtarefas já entregues estão registradas em
 
 ### R-06 — Portas e adaptadores
 
-- [ ] `R-06b` Fazer os casos de uso consumirem portas pequenas para Store,
-  Runner, Caddy, Firewall, TrustStore, Network e Clock.
 - [ ] `R-06c` Isolar implementações Windows, WSL e Caddy atrás dessas portas.
 - [ ] `R-06d` Criar testes de contrato reutilizáveis para adapters fake e reais;
   manter integrações dependentes de host como opt-in.

@@ -48,7 +48,8 @@ func (a *App) Trust(ctx context.Context) error {
 	}
 	paths := a.Store.Paths()
 	if caddyClient.WSL {
-		if err := caddyClient.ExportRootCA(ctx, paths.CARootExport); err != nil {
+		trustResult, err := a.resourceUseCases().TrustCA(ctx, paths.CARootExport)
+		if err != nil {
 			// A package-local migration test may inject the pre-M8 Windows client
 			// for rollback. Production has no second operational edge, so this
 			// cannot silently bring the old edge into the normal install path.
@@ -57,17 +58,10 @@ func (a *App) Trust(ctx context.Context) error {
 			}
 			return err
 		}
-		trustedBefore := false
-		if runtime.GOOS == "windows" {
-			trustedBefore, _ = platform.CARootTrusted(ctx, paths.CARootExport)
-		}
-		if err := platform.InstallCARoot(ctx, paths.CARootExport); err != nil {
-			return err
-		}
 		if runtime.GOOS == "windows" {
 			if thumbprint, thumbprintErr := platform.CARootThumbprint(paths.CARootExport); thumbprintErr == nil {
 				ownership := config.OwnershipCreated
-				if trustedBefore {
+				if trustResult.AlreadyTrusted {
 					ownership = config.OwnershipPreexisting
 				}
 				if updateErr := a.Store.UpdateManifestResource("windows.ca-trust", func(resource *config.ManifestResource) {

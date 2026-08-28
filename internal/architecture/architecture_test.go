@@ -101,6 +101,33 @@ func TestTransportsUseApplicationBoundary(t *testing.T) {
 	}
 }
 
+// TestApplicationDoesNotImportConcreteAdapters keeps the application package
+// independent from the composition root. A new use case must receive a port;
+// it cannot reach into platform, config or transport packages by import.
+func TestApplicationDoesNotImportConcreteAdapters(t *testing.T) {
+	root := filepath.Join("..", "..", "internal", "application")
+	forbidden := regexp.MustCompile(`(?m)^\s*"github\.com/dougkusanagi/dev-lan/internal/(?:api|app|config|platform)/`)
+	err := filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		if forbidden.Match(data) {
+			t.Errorf("caso de uso importa adapter concreto em %s", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("inspecionar dependências da aplicação: %v", err)
+	}
+}
+
 // TestM8UnifiedEdgeContract guards the active production path during the
 // migration window. Legacy artifacts remain readable for rollback, but new
 // reloads, the unified renderer and the installer must not grow a second edge.
@@ -156,7 +183,7 @@ func TestM8UnifiedEdgeContract(t *testing.T) {
 		t.Fatal("fim do pipeline apply não encontrado")
 	}
 	activeApply := app[applyStart : applyStart+applyEnd]
-	for _, required := range []string{"RenderWSLUnifiedWithAccessLog", "ApplyCaddy", "edgeCaddy"} {
+	for _, required := range []string{"RenderWSLUnifiedWithAccessLog", "ApplyCaddy"} {
 		if !strings.Contains(activeApply, required) {
 			t.Fatalf("pipeline apply não usa %q", required)
 		}

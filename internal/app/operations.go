@@ -41,7 +41,7 @@ func (a *App) BeginOperation(id, operation, project string) (OperationState, boo
 	if strings.ContainsAny(id, "\r\n") || strings.TrimSpace(operation) == "" {
 		return OperationState{}, false, errors.New("identificador de operação inválido")
 	}
-	now := time.Now()
+	now := a.now()
 	a.operationMu.Lock()
 	defer a.operationMu.Unlock()
 	if a.operations == nil {
@@ -83,7 +83,7 @@ func (a *App) UpdateOperation(id, phase, status string, revision uint64, project
 	if isTerminalOperationPhase(state.Phase) {
 		return cloneOperationState(state)
 	}
-	now := time.Now()
+	now := a.now()
 	if !state.UpdatedAt.IsZero() && state.Phase != "" {
 		elapsed := now.Sub(state.UpdatedAt).Milliseconds()
 		if state.PhaseMs == nil {

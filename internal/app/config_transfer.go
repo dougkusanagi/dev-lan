@@ -47,9 +47,6 @@ func (a *App) ImportConfig(ctx context.Context, data []byte) (ApplyResult, error
 // never traversed or included.
 func (a *App) DiagnosticBundle(ctx context.Context, targetPath string) (string, error) {
 	now := a.now()
-	if a.Now != nil {
-		now = a.Now()
-	}
 	cfg, err := a.Store.Load()
 	if err != nil {
 		return "", err

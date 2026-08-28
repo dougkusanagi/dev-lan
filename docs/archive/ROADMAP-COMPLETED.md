@@ -403,5 +403,23 @@ suíte de aplicação permanece verde.
 fronteira tipada; suíte Go e teste arquitetural passam sem alteração dos
 contratos existentes.
 
+## R-06b — Casos de uso nas portas pequenas
+
+- [x] Consolidar as portas de Store, Runner, Caddy, Firewall, TrustStore,
+  Network e Clock, mantendo aliases compatíveis para os nomes introduzidos em
+  R-06a.
+- [x] Extrair `application.ResourceUseCases` para operações de firewall,
+  lifecycle/configuração do Caddy, trust da CA, rede e relógio, sem importar
+  adapters concretos ou transportes.
+- [x] Compor as implementações atuais por meio de adapters locais em
+  `internal/app`, mantendo a política neutra de firewall na aplicação e a
+  representação Windows/WSL no pacote de plataforma.
+- [x] Adicionar testes com fakes e uma regra arquitetural que impede imports de
+  `platform`, `config`, `app` ou transportes dentro da aplicação.
+
+**Gate:** testes focados de aplicação, plataforma, arquitetura e `internal/app`
+passam; os caminhos de firewall, Caddy, trust, rede e relógio atravessam a
+fronteira tipada sem alterar os contratos existentes.
+
 O restante foi migrado para o [roadmap vigente](../ROADMAP.md), sem duplicar
 caixas abertas neste histórico.

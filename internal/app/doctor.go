@@ -23,7 +23,7 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 	}
 	checks := []Check{}
 	if cfg.LANAddress == "auto" {
-		if address, err := platform.LANAddress(); err != nil {
+		if address, err := a.resourceUseCases().LANAddress(ctx, cfg.LANAddress); err != nil {
 			checks = append(checks, Check{"IP LAN", "WARN", err.Error()})
 		} else {
 			generated := extractCaddyLANAddress(a.Store.Paths().Caddy)
@@ -42,10 +42,10 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 	}
 
 	caddyClient := a.edgeCaddy()
-	if err := caddyClient.Available(ctx); err != nil {
+	if err := a.resourceUseCases().CaddyAvailable(ctx); err != nil {
 		checks = append(checks, Check{"Caddy WSL único", "WARN", "não encontrado: " + err.Error()})
 	} else {
-		status := caddyClient.Status(ctx)
+		status := a.edgeCaddy().Status(ctx)
 		if !status.Running && !status.Live {
 			checks = append(checks, Check{"Caddy WSL único", "WARN", "binário disponível, mas serviço/live indisponível"})
 		} else {
@@ -153,8 +153,8 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 		}
 	}
 
-	if isPublic, netDetail, _ := platform.NetworkProfile(ctx); isPublic {
-		checks = append(checks, Check{"Rede Pública", "WARN", netDetail})
+	if networkProfile, profileErr := a.resourceUseCases().NetworkProfile(ctx); profileErr == nil && networkProfile.Public {
+		checks = append(checks, Check{"Rede Pública", "WARN", networkProfile.Detail})
 	} else {
 		checks = append(checks, Check{"Perfil de Rede", "OK", "Privada / confiável"})
 	}
@@ -168,7 +168,7 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 	if caInfo, err := a.CAInfo(ctx); err == nil && caInfo["exists"] == "true" {
 		if runtime.GOOS != "windows" {
 			checks = append(checks, Check{"CA Local", "WARN", fmt.Sprintf("certificado raiz presente (%s), mas a confiança só é verificada no Windows", caInfo["path"])})
-		} else if trusted, trustErr := platform.CARootTrusted(ctx, caInfo["path"]); trustErr != nil {
+		} else if trusted, trustErr := a.resourceUseCases().IsTrusted(ctx, caInfo["path"]); trustErr != nil {
 			checks = append(checks, Check{"CA Local", "WARN", "não foi possível verificar a confiança da CA: " + trustErr.Error()})
 		} else if !trusted {
 			checks = append(checks, Check{"CA Local", "WARN", "certificado raiz presente, mas não confiado; execute `devlan trust` como Administrador"})
@@ -180,13 +180,13 @@ func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 	}
 
 	firewallSpec := platform.FirewallSpecForConfig(cfg)
-	if rule, inspectErr := a.inspectFirewall(ctx); inspectErr != nil {
+	if healthy, inspectErr := a.FirewallHealthy(ctx, cfg); inspectErr != nil {
 		if errors.Is(inspectErr, platform.ErrFirewallNotFound) {
 			checks = append(checks, Check{"Firewall", "WARN", "regra DevLAN ausente; execute `devlan install` ou `devlan reload` como Administrador"})
 		} else {
 			checks = append(checks, Check{"Firewall", "WARN", "regra DevLAN não confirmada: " + inspectErr.Error()})
 		}
-	} else if !rule.Matches(firewallSpec) {
+	} else if !healthy {
 		checks = append(checks, Check{"Firewall", "FAIL", "regra DevLAN divergente (direção, ação, protocolo, portas, perfil ou origem); execute `devlan reload` como Administrador"})
 	} else {
 		checks = append(checks, Check{"Firewall", "OK", "regra DevLAN reconciliada: TCP " + firewallSpecDescription(firewallSpec)})

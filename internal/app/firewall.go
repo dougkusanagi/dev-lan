@@ -13,59 +13,19 @@ import (
 	routealloc "github.com/dougkusanagi/dev-lan/internal/route"
 )
 
-// ErrPasswordHashUnavailable is returned before any configuration write when
-// Caddy cannot produce a password hash. A runtime failure must never cause a
-
-func (a *App) ensureFirewall(ctx context.Context, ports ...int) error {
-	if a.Firewall == nil {
-		return platform.SystemFirewall{}.Ensure(ctx, ports...)
-	}
-	return a.Firewall.Ensure(ctx, ports...)
-}
-
 func (a *App) ensureFirewallSpec(ctx context.Context, cfg domain.Config) error {
-	spec := platform.FirewallSpecForConfig(cfg)
-	if reconciler, ok := a.Firewall.(platform.FirewallReconciler); ok {
-		return reconciler.Reconcile(ctx, spec)
-	}
-	// Keep compatibility with a legacy injected manager while all production
-	// paths use the complete range-aware specification.
-	ports := append([]int(nil), spec.Ports...)
-	for _, portRange := range spec.Ranges {
-		for port := portRange.From; port <= portRange.To; port++ {
-			ports = append(ports, port)
-		}
-	}
-	return a.ensureFirewall(ctx, ports...)
-}
-
-func (a *App) inspectFirewall(ctx context.Context) (platform.FirewallRuleState, error) {
-	if reconciler, ok := a.Firewall.(platform.FirewallReconciler); ok {
-		return reconciler.Inspect(ctx)
-	}
-	if a.Firewall == nil {
-		return (platform.SystemFirewall{}).Inspect(ctx)
-	}
-	return platform.FirewallRuleState{}, fmt.Errorf("adapter de firewall não oferece inspeção exata")
+	return a.resourceUseCases().ReconcileFirewallConfig(ctx, cfg)
 }
 
 // FirewallHealthy checks the exact desired policy, including every port
 // property, rather than treating the mere presence of a similarly named rule
 // as success.
 func (a *App) FirewallHealthy(ctx context.Context, cfg domain.Config) (bool, error) {
-	rule, err := a.inspectFirewall(ctx)
-	if err != nil {
-		return false, err
-	}
-	return rule.Matches(platform.FirewallSpecForConfig(cfg)), nil
+	return a.resourceUseCases().FirewallHealthy(ctx, cfg)
 }
 
 func (a *App) ReconcileFirewall(ctx context.Context) error {
-	cfg, err := a.Store.Load()
-	if err != nil {
-		return err
-	}
-	return a.ensureFirewallSpec(ctx, cfg)
+	return a.resourceUseCases().ReconcileFirewall(ctx)
 }
 
 func firewallSpecDescription(spec platform.FirewallSpec) string {
@@ -112,7 +72,7 @@ func (a *App) routeAllocationConfig(ctx context.Context, cfg domain.Config) (dom
 
 	listeners := []int(nil)
 	if a.ExternalListeners != nil && os.Getenv("DEVLAN_TEST_MOCK") != "1" {
-		listeners, err = a.ExternalListeners(ctx)
+		listeners, err = a.resourceUseCases().ExternalListeners(ctx)
 		if err != nil {
 			return domain.Config{}, fmt.Errorf("verificar listeners externos: %w", err)
 		}
@@ -165,21 +125,9 @@ func activeRoutePortOwner(cfg domain.Config, port int) bool {
 }
 
 func (a *App) now() time.Time {
-	if a.Now != nil {
-		return a.Now()
-	}
-	return time.Now()
+	return a.resourceUseCases().Now()
 }
 
 func (a *App) removeFirewall(ctx context.Context) error {
-	if a.Firewall == nil {
-		return platform.SystemFirewall{}.Remove(ctx)
-	}
-	if reconciler, ok := a.Firewall.(platform.FirewallReconciler); ok {
-		return reconciler.Remove(ctx)
-	}
-	if manager, ok := a.Firewall.(platform.FirewallManager); ok {
-		return manager.Remove(ctx)
-	}
-	return fmt.Errorf("adapter de firewall não configurado")
+	return a.resourceUseCases().RemoveFirewall(ctx)
 }

@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/dougkusanagi/dev-lan/internal/application"
+	applicationports "github.com/dougkusanagi/dev-lan/internal/application/ports"
 	"github.com/dougkusanagi/dev-lan/internal/domain"
 )
 
@@ -68,69 +70,41 @@ type FirewallRuleState struct {
 }
 
 const (
-	FirewallRuleName        = "DevLAN"
-	FirewallRuleGroup       = "DevLAN Managed"
-	FirewallRuleDescription = "Managed by DevLAN; do not edit."
+	FirewallRuleName        = applicationports.FirewallRuleName
+	FirewallRuleGroup       = applicationports.FirewallRuleGroup
+	FirewallRuleDescription = applicationports.FirewallRuleDescription
 )
 
 // DefaultFirewallSpec describes the standard LAN policy independently from a
 // Config. It is useful for install/bootstrap and for contract tests.
 func DefaultFirewallSpec() FirewallSpec {
-	return normalizeFirewallSpec(FirewallSpec{
-		Ports:       []int{80, 443},
-		Ranges:      []PortRange{{From: 8080, To: 8179}},
-		Direction:   "in",
-		Action:      "allow",
-		Protocol:    "tcp",
-		Profile:     "private",
-		RemoteIP:    "localsubnet",
-		RuleName:    FirewallRuleName,
-		RuleGroup:   FirewallRuleGroup,
-		Description: FirewallRuleDescription,
-	})
+	return firewallSpecFromPortSpec(applicationports.DefaultFirewallSpec())
 }
 
 // FirewallSpecForConfig is the single source of truth used by install, route,
 // TLS, repair, doctor and the UI. ui_port is intentionally absent: the admin
 // server is loopback-only and must never be opened on the LAN.
 func FirewallSpecForConfig(cfg domain.Config) FirewallSpec {
-	base, count := cfg.RouteBasePort, cfg.RoutePortCount
-	if base == 0 {
-		base = 8080
+	return firewallSpecFromPortSpec(application.FirewallSpecForConfig(cfg))
+}
+
+func firewallSpecFromPortSpec(spec applicationports.FirewallSpec) FirewallSpec {
+	converted := FirewallSpec{
+		Ports:       append([]int(nil), spec.Ports...),
+		Direction:   spec.Direction,
+		Action:      spec.Action,
+		Protocol:    spec.Protocol,
+		Profile:     spec.Profile,
+		RemoteIP:    spec.RemoteIP,
+		RuleName:    spec.RuleName,
+		RuleGroup:   spec.RuleGroup,
+		Description: spec.Description,
+		Ranges:      make([]PortRange, 0, len(spec.Ranges)),
 	}
-	if count == 0 {
-		count = 100
+	for _, portRange := range spec.Ranges {
+		converted.Ranges = append(converted.Ranges, PortRange{From: portRange.From, To: portRange.To})
 	}
-	// M8 removes the Windows edge and therefore removes the configurable host
-	// listener from the policy. The unified Caddy binds these two ports in WSL;
-	// legacy windows_port/https_port values remain readable for migration only.
-	windowsPort, httpsPort := 80, 443
-	spec := DefaultFirewallSpec()
-	spec.Ports = []int{windowsPort, httpsPort}
-	spec.Ranges = []PortRange{{From: base, To: base + count - 1}}
-	uiPort := cfg.UIPort
-	activePaths := make(map[string]struct{}, len(cfg.Projects))
-	for _, project := range cfg.Projects {
-		activePaths[project.Path] = struct{}{}
-		if project.RoutePort != nil && *project.RoutePort > 0 && !portInRanges(*project.RoutePort, spec.Ranges) {
-			if *project.RoutePort != uiPort {
-				spec.Ports = append(spec.Ports, *project.RoutePort)
-			}
-		}
-	}
-	for path, port := range cfg.RoutePortAllocations {
-		// Allocations are intentionally retained as orphan-prune state. They
-		// must not become firewall openings after their project disappears. An
-		// explicit project override is already covered above; automatic active
-		// projects may use the pool range, which is covered compactly there.
-		if _, active := activePaths[path]; !active || port == uiPort {
-			continue
-		}
-		if !portInRanges(port, spec.Ranges) {
-			spec.Ports = append(spec.Ports, port)
-		}
-	}
-	return normalizeFirewallSpec(spec)
+	return normalizeFirewallSpec(converted)
 }
 
 func portInRanges(port int, ranges []PortRange) bool {

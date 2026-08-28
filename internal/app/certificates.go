@@ -33,7 +33,7 @@ func (a *App) CAInfo(ctx context.Context) (map[string]string, error) {
 	}
 	trusted := false
 	if details.Valid && runtime.GOOS == "windows" {
-		if value, trustErr := platform.CARootTrusted(ctx, path); trustErr == nil {
+		if value, trustErr := a.resourceUseCases().IsTrusted(ctx, path); trustErr == nil {
 			trusted = value
 		}
 	}

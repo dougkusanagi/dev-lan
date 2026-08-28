@@ -18,8 +18,11 @@ CLI / browser / Wails / cliente WSL
                  │
       application.Commands / Queries
                   │
-        internal/app.App + config.Store
-                 │
+   application use cases + ports
+                  │
+        internal/app composition
+          App + config.Store
+                  │
    ┌─────────────┼──────────────┐
  Windows      wsl.exe        geração
  firewall/CA  processos       Caddy/PHP
@@ -39,7 +42,8 @@ sua API administrativa também é loopback-only.
 ### Pacotes e responsabilidades atuais
 
 - `cmd/devlan`: bootstrap, parsing e execução da CLI;
-- `internal/application`: DTOs, comandos e consultas com dependências privadas;
+- `internal/application`: DTOs, comandos, consultas, casos de uso de recursos e
+  portas com dependências privadas;
 - `internal/app`: implementação atual dos casos de uso e coordenação de
   configuração/adaptadores;
 - `internal/domain`: modelos e validações compartilhados;
@@ -60,8 +64,10 @@ Todas as mutações e consultas usadas por HTTP, CLI e Wails atravessam
 `application.Commands`/`application.Queries`; HTTP e Wails compartilham as
 instâncias compostas pelo shell, enquanto a CLI compõe as mesmas abstrações.
 `internal/app` implementa a fronteira de valores e mantém os adaptadores
-privados à composição. A porta estendida ainda será decomposta em portas
-menores em R-06.
+privados à composição. A fatia de recursos já usa portas neutras em
+`internal/application/ports`; `internal/app/application_ports.go` traduz essas
+portas para os adapters atuais. A porta estendida e os adapters concretos ainda
+serão reduzidos e cobertos por contratos em R-06c/R-06d.
 
 O fluxo de mutação converge em persistir a intenção e reconciliar recursos por
 `plan → validate → stage → commit → reload → healthcheck`, com recuperação por
@@ -97,10 +103,11 @@ editados manualmente. Detalhes estão em
 Os fluxos funcionam, e todos os transportes atravessam `application`, mas
 `app.App`, API e CLI ainda concentram responsabilidades. As implementações de
 `internal/app`, `internal/api`, `cmd/devlan` e `internal/domain` já estão
-divididas por assunto, porém há uma porta estendida temporária, DTOs de
-compatibilidade e registros genéricos de integrações de framework. O cache de
-read model é criado e encerrado pelo `api.Server`, mas ainda há pontos que
-dificultam testes de lifecycle e fazem uma mudança atravessar arquivos grandes.
+divididas por assunto, porém ainda há uma porta estendida temporária, adapters
+concretos em transição, DTOs de compatibilidade e registros genéricos de
+integrações de framework. O cache de read model é criado e encerrado pelo
+`api.Server`, mas ainda há pontos que dificultam testes de lifecycle e fazem uma
+mudança atravessar arquivos grandes.
 A solução é evolução incremental orientada por testes, não uma troca de stack.
 
 ## Arquitetura alvo

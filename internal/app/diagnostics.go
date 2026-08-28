@@ -29,11 +29,10 @@ func (a *App) URL(ctx context.Context, projectName string) (string, error) {
 		return "", err
 	}
 	host := cfg.LANAddress
-	if host == "auto" {
-		host, err = platform.LANAddress()
-		if err != nil {
-			host = "localhost"
-		}
+	if resolvedHost, resolveErr := a.resourceUseCases().LANAddress(ctx, host); resolveErr == nil {
+		host = resolvedHost
+	} else if host == "auto" || strings.TrimSpace(host) == "" {
+		host = "localhost"
 	}
 	return resolved.URL(host, cfg.WindowsPort, cfg.HTTPSPort, cfg.SecureProject(resolved.Project)), nil
 }
@@ -44,11 +43,10 @@ func (a *App) URLs(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	host := cfg.LANAddress
-	if host == "auto" {
-		host, err = platform.LANAddress()
-		if err != nil {
-			host = "localhost"
-		}
+	if resolvedHost, resolveErr := a.resourceUseCases().LANAddress(ctx, host); resolveErr == nil {
+		host = resolvedHost
+	} else if host == "auto" || strings.TrimSpace(host) == "" {
+		host = "localhost"
 	}
 	effective, err := a.EffectiveConfig(ctx, cfg)
 	if err != nil {
@@ -138,7 +136,7 @@ func (a *App) CheckLANAddressDivergence() (current string, generated string, div
 	if err != nil || cfg.LANAddress != "auto" {
 		return "", "", false
 	}
-	current, err = platform.LANAddress()
+	current, err = a.resourceUseCases().LANAddress(context.Background(), cfg.LANAddress)
 	if err != nil {
 		return "", "", false
 	}
@@ -232,7 +230,7 @@ func (a *App) WSLCompatibility(ctx context.Context) platform.WSLCompatibilityRep
 	edgeLive := edgeStatus.Running && edgeStatus.Live
 	lanHost := cfg.LANAddress
 	if lanHost == "auto" || strings.TrimSpace(lanHost) == "" {
-		lanHost, err = platform.LANAddress()
+		lanHost, err = a.resourceUseCases().LANAddress(ctx, lanHost)
 		if err != nil {
 			lanHost = ""
 		}
