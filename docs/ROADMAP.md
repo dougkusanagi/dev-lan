@@ -15,7 +15,6 @@ Subtarefas já entregues estão registradas em
 
 ### R-06 — Portas e adaptadores
 
-- [ ] `R-06c` Isolar implementações Windows, WSL e Caddy atrás dessas portas.
 - [ ] `R-06d` Criar testes de contrato reutilizáveis para adapters fake e reais;
   manter integrações dependentes de host como opt-in.
 

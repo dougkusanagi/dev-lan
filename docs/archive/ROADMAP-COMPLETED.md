@@ -421,5 +421,20 @@ contratos existentes.
 passam; os caminhos de firewall, Caddy, trust, rede e relógio atravessam a
 fronteira tipada sem alterar os contratos existentes.
 
+## R-06c — Implementações host atrás das portas
+
+- [x] Mover a tradução da política de firewall e os adapters de trust store,
+  rede e relógio para `internal/platform`, mantendo a aplicação independente de
+  netsh, Hyper-V, certutil e sondagens nativas.
+- [x] Declarar que os runners de processo, `WSLRunner` e `CaddyClient`
+  implementam as portas consumidas pela aplicação, com composição dinâmica
+  preservada para fakes e migração legada.
+- [x] Reduzir `internal/app/application_ports.go` à composição das
+  implementações, sem alterar os contratos de CLI, API, Wails ou persistência.
+
+**Gate:** os adapters host são verificáveis através de portas tipadas, os
+casos de uso continuam sem imports concretos e os testes focados de aplicação,
+plataforma e `internal/app` preservam o comportamento existente.
+
 O restante foi migrado para o [roadmap vigente](../ROADMAP.md), sem duplicar
 caixas abertas neste histórico.

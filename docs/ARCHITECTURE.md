@@ -65,9 +65,11 @@ Todas as mutações e consultas usadas por HTTP, CLI e Wails atravessam
 instâncias compostas pelo shell, enquanto a CLI compõe as mesmas abstrações.
 `internal/app` implementa a fronteira de valores e mantém os adaptadores
 privados à composição. A fatia de recursos já usa portas neutras em
-`internal/application/ports`; `internal/app/application_ports.go` traduz essas
-portas para os adapters atuais. A porta estendida e os adapters concretos ainda
-serão reduzidos e cobertos por contratos em R-06c/R-06d.
+`internal/application/ports`; `internal/platform/application_adapters.go`
+implementa essas portas para Caddy, WSL, firewall Windows, trust store, rede e
+relógio, enquanto `internal/app/application_ports.go` somente compõe as
+implementações. A porta estendida e os adapters concretos ainda serão cobertos
+por contratos reutilizáveis em R-06d.
 
 O fluxo de mutação converge em persistir a intenção e reconciliar recursos por
 `plan → validate → stage → commit → reload → healthcheck`, com recuperação por
