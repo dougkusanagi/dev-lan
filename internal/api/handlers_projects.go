@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dougkusanagi/dev-lan/internal/app"
+	"github.com/dougkusanagi/dev-lan/internal/application"
 	"github.com/dougkusanagi/dev-lan/internal/domain"
 )
 
@@ -62,7 +62,7 @@ func (s *Server) handleProjectLink(writer http.ResponseWriter, request *http.Req
 		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
 		return
 	}
-	proj, res, err := s.service.Link(request.Context(), input.Name, input.Path)
+	proj, res, err := s.commands.LinkProject(request.Context(), application.LinkProjectCommand{Name: input.Name, Path: input.Path})
 	if err != nil {
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
@@ -83,7 +83,7 @@ func (s *Server) handleProjectUnlink(writer http.ResponseWriter, request *http.R
 		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
 		return
 	}
-	proj, res, err := s.service.Unlink(request.Context(), input.Name)
+	proj, res, err := s.commands.UnlinkProject(request.Context(), application.UnlinkProjectCommand{Name: input.Name})
 	if err != nil {
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
@@ -104,7 +104,7 @@ func (s *Server) handleProjectHide(writer http.ResponseWriter, request *http.Req
 		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
 		return
 	}
-	res, err := s.service.IgnoreProject(request.Context(), input.Name)
+	res, err := s.commands.IgnoreProject(request.Context(), application.IgnoreProjectCommand{Selector: input.Name})
 	if err != nil {
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
@@ -125,7 +125,7 @@ func (s *Server) handleProjectUnhide(writer http.ResponseWriter, request *http.R
 		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
 		return
 	}
-	res, err := s.service.UnignoreProject(request.Context(), input.Path)
+	res, err := s.commands.UnignoreProject(request.Context(), application.UnignoreProjectCommand{Path: input.Path})
 	if err != nil {
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
@@ -161,7 +161,7 @@ func (s *Server) handleProjectConfig(writer http.ResponseWriter, request *http.R
 			writeJSONError(writer, http.StatusBadRequest, err.Error())
 			return
 		}
-		if _, err := s.service.SetProjectMode(ctx, update.Name, &m); err != nil {
+		if _, err := s.commands.SetProjectMode(ctx, application.SetProjectModeCommand{Name: update.Name, Mode: &m}); err != nil {
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
 		}
@@ -223,7 +223,7 @@ func (s *Server) handleProjectConfig(writer http.ResponseWriter, request *http.R
 	writeJSON(writer, http.StatusOK, MessageOnlyResponse{Message: "Configuração do projeto salva."})
 }
 
-func writeApplyError(writer http.ResponseWriter, status int, result app.ApplyResult, err error) {
+func writeApplyError(writer http.ResponseWriter, status int, result application.ApplyResult, err error) {
 	writeJSON(writer, status, ApplyErrorResponse{
 		Error: err.Error(), Status: result.Status,
 		Revision: result.Revision, Warnings: result.Warnings,
@@ -246,7 +246,7 @@ func (s *Server) handleProjectStart(writer http.ResponseWriter, request *http.Re
 	s.startAsyncOperation(writer, request, "start", input.Name, input.OperationID, 90*time.Second,
 		func(ctx context.Context) (uint64, []string, error) {
 			err := s.service.StartDev(ctx, input.Name)
-			return currentRevision(s.service), nil, err
+			return s.currentRevision(ctx), nil, err
 		})
 }
 
@@ -266,7 +266,7 @@ func (s *Server) handleProjectStop(writer http.ResponseWriter, request *http.Req
 	s.startAsyncOperation(writer, request, "stop", input.Name, input.OperationID, 45*time.Second,
 		func(ctx context.Context) (uint64, []string, error) {
 			err := s.service.StopDev(ctx, input.Name)
-			return currentRevision(s.service), nil, err
+			return s.currentRevision(ctx), nil, err
 		})
 }
 
@@ -286,7 +286,7 @@ func (s *Server) handleProjectRestart(writer http.ResponseWriter, request *http.
 	s.startAsyncOperation(writer, request, "restart", input.Name, input.OperationID, 90*time.Second,
 		func(ctx context.Context) (uint64, []string, error) {
 			err := s.service.RestartDev(ctx, input.Name)
-			return currentRevision(s.service), nil, err
+			return s.currentRevision(ctx), nil, err
 		})
 }
 
@@ -363,7 +363,7 @@ func (s *Server) handlePark(writer http.ResponseWriter, request *http.Request) {
 		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
 		return
 	}
-	park, res, err := s.service.Park(request.Context(), input.Path)
+	park, res, err := s.commands.ParkDirectory(request.Context(), application.ParkDirectoryCommand{Path: input.Path})
 	if err != nil {
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
@@ -384,7 +384,7 @@ func (s *Server) handleUnpark(writer http.ResponseWriter, request *http.Request)
 		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
 		return
 	}
-	park, res, err := s.service.Unpark(request.Context(), input.Path)
+	park, res, err := s.commands.UnparkDirectory(request.Context(), application.UnparkDirectoryCommand{Path: input.Path})
 	if err != nil {
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return

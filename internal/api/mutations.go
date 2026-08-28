@@ -6,9 +6,10 @@ import (
 	"time"
 
 	"github.com/dougkusanagi/dev-lan/internal/app"
+	"github.com/dougkusanagi/dev-lan/internal/application"
 )
 
-func operationResult(ctx context.Context, service *app.App, cache *ReadModelCache, state app.OperationState) MutationResult {
+func operationResult(ctx context.Context, service *app.App, queries *application.Queries, cache *ReadModelCache, state app.OperationState) MutationResult {
 	result := MutationResult{
 		OperationID: state.OperationID,
 		Operation:   state.Operation,
@@ -37,7 +38,7 @@ func operationResult(ctx context.Context, service *app.App, cache *ReadModelCach
 	// view. If the read model is temporarily unavailable, the operation itself
 	// remains valid and the frontend will retry through the overview coordinator.
 	if result.ProjectState == nil && service != nil && state.ProjectName != "" && isTerminalPhase(state.Phase) {
-		if views, err := buildProjectViews(ctx, service, cache, state.ProjectName); err == nil {
+		if views, err := buildProjectViews(ctx, service, queries, cache, state.ProjectName); err == nil {
 			for _, view := range views {
 				if view.Name == state.ProjectName {
 					result.ProjectState = &view
@@ -83,19 +84,19 @@ func isTerminalPhase(phase string) bool {
 }
 
 func acceptedResult(state app.OperationState) MutationResult {
-	return operationResult(context.Background(), nil, nil, state)
+	return operationResult(context.Background(), nil, nil, nil, state)
 }
 
 func (s *Server) operationResult(ctx context.Context, state app.OperationState) MutationResult {
-	return operationResult(ctx, s.service, s.readModelCache, state)
+	return operationResult(ctx, s.service, s.queries, s.readModelCache, state)
 }
 
 // BuildOperationResult is exported for the Wails adapter, which shares the
 // same operation registry but has no HTTP request handler.
 func BuildOperationResult(ctx context.Context, service *app.App, state app.OperationState) MutationResult {
-	return operationResult(ctx, service, NewReadModelCache(), state)
+	return operationResult(ctx, service, application.NewQueries(service), NewReadModelCache(), state)
 }
 
 func (s *Server) BuildOperationResult(ctx context.Context, state app.OperationState) MutationResult {
-	return operationResult(ctx, s.service, s.readModelCache, state)
+	return operationResult(ctx, s.service, s.queries, s.readModelCache, state)
 }

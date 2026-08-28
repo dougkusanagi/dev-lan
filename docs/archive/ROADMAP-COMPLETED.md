@@ -360,5 +360,18 @@ em disco continuam disponíveis para detecção e rollback explícitos.
 **Gate:** não há registry global de read model; a suíte focada de API/GUI e os
 testes concorrentes passam sem alterar os contratos HTTP, Wails ou de cache.
 
+## R-05c — Comandos e consultas de aplicação
+
+- [x] Extrair DTOs de comando, resultado de aplicação e configurações globais
+  para `internal/application`, preservando aliases compatíveis em `internal/app`.
+- [x] Criar `application.Commands` e `application.Queries` com dependências
+  privadas, portas pequenas e construtores explícitos.
+- [x] Encaminhar as fatias críticas de projeto, configuração, modo e read model
+  pela mesma fronteira em HTTP, CLI e Wails, mantendo os contratos existentes.
+
+**Gate:** suíte focada de aplicação, API, GUI e CLI passa; as leituras de
+configuração da CLI e os handlers/read models críticos não acessam `config.Store`
+nem coordenam essa persistência diretamente.
+
 O restante foi migrado para o [roadmap vigente](../ROADMAP.md), sem duplicar
 caixas abertas neste histórico.

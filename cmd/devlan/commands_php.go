@@ -7,11 +7,12 @@ import (
 	"strings"
 
 	"github.com/dougkusanagi/dev-lan/internal/app"
+	"github.com/dougkusanagi/dev-lan/internal/application"
 	"github.com/dougkusanagi/dev-lan/internal/domain"
 	"github.com/dougkusanagi/dev-lan/internal/platform"
 )
 
-func runMode(ctx context.Context, service *app.App, args []string) error {
+func runMode(ctx context.Context, commands *application.Commands, args []string) error {
 	if len(args) != 2 {
 		return fmt.Errorf("uso: devlan mode default php | devlan mode NAME php|inherit")
 	}
@@ -20,7 +21,7 @@ func runMode(ctx context.Context, service *app.App, args []string) error {
 		if err != nil {
 			return err
 		}
-		result, err := service.SetDefaultMode(ctx, mode)
+		result, err := commands.SetDefaultMode(ctx, application.SetDefaultModeCommand{Mode: mode})
 		printWarnings(result.Warnings)
 		if err != nil {
 			return err
@@ -29,7 +30,7 @@ func runMode(ctx context.Context, service *app.App, args []string) error {
 		return nil
 	}
 	if args[1] == "inherit" {
-		result, err := service.SetProjectMode(ctx, args[0], nil)
+		result, err := commands.SetProjectMode(ctx, application.SetProjectModeCommand{Name: args[0]})
 		printWarnings(result.Warnings)
 		if err != nil {
 			return err
@@ -41,7 +42,7 @@ func runMode(ctx context.Context, service *app.App, args []string) error {
 	if err != nil {
 		return err
 	}
-	result, err := service.SetProjectMode(ctx, args[0], &mode)
+	result, err := commands.SetProjectMode(ctx, application.SetProjectModeCommand{Name: args[0], Mode: &mode})
 	printWarnings(result.Warnings)
 	if err != nil {
 		return err
@@ -50,7 +51,7 @@ func runMode(ctx context.Context, service *app.App, args []string) error {
 	return nil
 }
 
-func runPHP(ctx context.Context, service *app.App, args []string) error {
+func runPHP(ctx context.Context, service *app.App, queries *application.Queries, args []string) error {
 	if len(args) == 0 || args[0] == "list" {
 		if len(args) > 1 {
 			return fmt.Errorf("uso: devlan php list")
@@ -59,7 +60,7 @@ func runPHP(ctx context.Context, service *app.App, args []string) error {
 		if err != nil {
 			return err
 		}
-		cfg, err := service.Config()
+		cfg, err := queries.Config(ctx)
 		if err != nil {
 			return err
 		}
@@ -113,7 +114,7 @@ func runPHP(ctx context.Context, service *app.App, args []string) error {
 		if len(args) != 3 {
 			return fmt.Errorf("uso: devlan php use default VERSION | devlan php use NAME VERSION|inherit")
 		}
-		var result app.ApplyResult
+		var result application.ApplyResult
 		var err error
 		if args[1] == "default" {
 			result, err = service.SetDefaultPHPVersion(ctx, args[2])
@@ -132,7 +133,7 @@ func runPHP(ctx context.Context, service *app.App, args []string) error {
 			return fmt.Errorf("uso: devlan php extensions VERSION [EXT1 EXT2 ...]")
 		}
 		if len(args) == 2 {
-			cfg, err := service.Config()
+			cfg, err := queries.Config(ctx)
 			if err != nil {
 				return err
 			}
@@ -156,7 +157,7 @@ func runPHP(ctx context.Context, service *app.App, args []string) error {
 		return nil
 
 	case "pool":
-		return runPHPPool(ctx, service, args[1:])
+		return runPHPPool(ctx, service, queries, args[1:])
 
 	case "preset":
 		if len(args) != 3 {
@@ -214,7 +215,7 @@ func parseExtensionValues(values []string) ([]string, error) {
 	return result, nil
 }
 
-func runPHPPool(ctx context.Context, service *app.App, args []string) error {
+func runPHPPool(ctx context.Context, service *app.App, queries *application.Queries, args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("uso: devlan php pool default|VERSION|NAME [shared|isolated] [opções]")
 	}
@@ -232,7 +233,7 @@ func runPHPPool(ctx context.Context, service *app.App, args []string) error {
 		printWarnings(result.Warnings)
 		return err
 	}
-	cfg, err := service.Config()
+	cfg, err := queries.Config(ctx)
 	if err != nil {
 		return err
 	}

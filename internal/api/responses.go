@@ -2,6 +2,7 @@ package api
 
 import (
 	"github.com/dougkusanagi/dev-lan/internal/app"
+	"github.com/dougkusanagi/dev-lan/internal/application"
 	"github.com/dougkusanagi/dev-lan/internal/metrics"
 	"github.com/dougkusanagi/dev-lan/internal/platform"
 )
@@ -45,8 +46,8 @@ type ApplyErrorResponse struct {
 }
 
 type ReloadResponse struct {
-	Message string          `json:"message"`
-	Result  app.ApplyResult `json:"result"`
+	Message string                  `json:"message"`
+	Result  application.ApplyResult `json:"result"`
 }
 
 type HealthResponse struct {
@@ -68,7 +69,7 @@ type CommandResponse struct {
 	Topology      *platform.TopologySnapshot       `json:"topology,omitempty"`
 	Caddy         *platform.CaddyServiceStatus     `json:"caddy,omitempty"`
 	Compatibility *platform.WSLCompatibilityReport `json:"compatibility,omitempty"`
-	Result        *app.ApplyResult                 `json:"result,omitempty"`
+	Result        *application.ApplyResult         `json:"result,omitempty"`
 	Allocations   *[]app.RouteAllocation           `json:"allocations,omitempty"`
 	Paths         *[]string                        `json:"paths,omitempty"`
 	Checks        *[]app.Check                     `json:"checks,omitempty"`

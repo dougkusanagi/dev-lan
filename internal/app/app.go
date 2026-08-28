@@ -117,12 +117,6 @@ func New(dataDir string) *App {
 	}
 }
 
-type ApplyResult struct {
-	Warnings []string
-	Status   string `json:"status,omitempty"`
-	Revision uint64 `json:"revision,omitempty"`
-}
-
 type OperationMode string
 
 const (

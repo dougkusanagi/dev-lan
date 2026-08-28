@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dougkusanagi/dev-lan/internal/app"
+	"github.com/dougkusanagi/dev-lan/internal/application"
 )
 
 type commandRequest struct {
@@ -45,7 +45,7 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 			writeJSONError(writer, http.StatusBadRequest, "uso: link NAME PATH")
 			return
 		}
-		project, result, err := s.service.Link(ctx, input.Args[0], input.Args[1])
+		project, result, err := s.commands.LinkProject(ctx, application.LinkProjectCommand{Name: input.Args[0], Path: input.Args[1]})
 		if err != nil {
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
@@ -57,7 +57,7 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 			writeJSONError(writer, http.StatusBadRequest, "uso: unlink NAME")
 			return
 		}
-		project, result, err := s.service.Unlink(ctx, input.Args[0])
+		project, result, err := s.commands.UnlinkProject(ctx, application.UnlinkProjectCommand{Name: input.Args[0]})
 		if err != nil {
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
@@ -66,12 +66,12 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 		setWarnings(result.Warnings)
 	case "park":
 		if len(input.Args) == 2 && (input.Args[0] == "ignore" || input.Args[0] == "unignore") {
-			var result app.ApplyResult
+			var result application.ApplyResult
 			var err error
 			if input.Args[0] == "ignore" {
-				result, err = s.service.IgnoreProject(ctx, input.Args[1])
+				result, err = s.commands.IgnoreProject(ctx, application.IgnoreProjectCommand{Selector: input.Args[1]})
 			} else {
-				result, err = s.service.UnignoreProject(ctx, input.Args[1])
+				result, err = s.commands.UnignoreProject(ctx, application.UnignoreProjectCommand{Path: input.Args[1]})
 			}
 			if err != nil {
 				writeJSONError(writer, http.StatusConflict, err.Error())
@@ -85,7 +85,7 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 			writeJSONError(writer, http.StatusBadRequest, "uso: park PATH | park ignore NAME|PATH | park unignore PATH")
 			return
 		}
-		park, result, err := s.service.Park(ctx, input.Args[0])
+		park, result, err := s.commands.ParkDirectory(ctx, application.ParkDirectoryCommand{Path: input.Args[0]})
 		if err != nil {
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
@@ -97,7 +97,7 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 			writeJSONError(writer, http.StatusBadRequest, "uso: unpark PATH")
 			return
 		}
-		park, result, err := s.service.Unpark(ctx, input.Args[0])
+		park, result, err := s.commands.UnparkDirectory(ctx, application.UnparkDirectoryCommand{Path: input.Args[0]})
 		if err != nil {
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return

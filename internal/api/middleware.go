@@ -3,6 +3,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
@@ -100,7 +101,7 @@ func isValidHost(hostHeader string) bool {
 	return host == "127.0.0.1" || host == "::1" || host == "localhost" || host == "devlan.localhost"
 }
 
-func (s *Server) isValidOrigin(origin string) bool {
+func (s *Server) isValidOrigin(ctx context.Context, origin string) bool {
 	u, err := url.Parse(origin)
 	if err != nil || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
 		return false
@@ -120,7 +121,7 @@ func (s *Server) isValidOrigin(origin string) bool {
 	if !strings.EqualFold(u.Scheme, "http") {
 		return false
 	}
-	cfg, err := s.service.Config()
+	cfg, err := s.queries.Config(ctx)
 	if err != nil {
 		return false
 	}

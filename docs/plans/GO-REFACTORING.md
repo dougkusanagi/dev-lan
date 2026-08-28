@@ -84,8 +84,10 @@ O pacote permanece igual nessa fase; o ganho é navegabilidade e ownership.
 
 ### 2. Dependências e casos de uso
 
-- introduzir `application.Services` com dependências privadas e construtor;
-- extrair comandos/queries e um reconciliador explícito;
+- introduzir serviços de `application` com dependências privadas e construtores
+  explícitos; `Commands`/`Queries` já atendem as fatias críticas de R-05c;
+- extrair comandos/queries restantes e integrar o reconciliador explícito em
+  R-05d/R-05e;
 - impedir acesso direto ao store nos transportes;
 - substituir campos de compatibilidade e globais por objetos com lifecycle.
 

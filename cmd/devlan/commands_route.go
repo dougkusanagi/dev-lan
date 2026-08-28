@@ -10,20 +10,21 @@ import (
 	"time"
 
 	"github.com/dougkusanagi/dev-lan/internal/app"
+	"github.com/dougkusanagi/dev-lan/internal/application"
 	"github.com/dougkusanagi/dev-lan/internal/domain"
 	"github.com/dougkusanagi/dev-lan/internal/platform"
 )
 
-func runRoute(ctx context.Context, service *app.App, args []string) error {
+func runRoute(ctx context.Context, service *app.App, queries *application.Queries, args []string) error {
 	if len(args) > 0 && args[0] == "allocations" {
 		return runRouteAllocations(ctx, service, args[1:])
 	}
 	if len(args) == 0 {
-		cfg, err := service.Config()
+		cfg, err := queries.Config(ctx)
 		if err != nil {
 			return err
 		}
-		eff, err := service.EffectiveConfig(ctx, cfg)
+		eff, err := queries.EffectiveConfig(ctx, cfg)
 		if err != nil {
 			return err
 		}
@@ -46,11 +47,11 @@ func runRoute(ctx context.Context, service *app.App, args []string) error {
 	}
 	name := args[0]
 	if len(args) == 1 {
-		cfg, err := service.Config()
+		cfg, err := queries.Config(ctx)
 		if err != nil {
 			return err
 		}
-		eff, err := service.EffectiveConfig(ctx, cfg)
+		eff, err := queries.EffectiveConfig(ctx, cfg)
 		if err != nil {
 			return err
 		}
@@ -194,13 +195,13 @@ func runUnexpose(ctx context.Context, service *app.App, args []string) error {
 	return nil
 }
 
-func runAllowlist(ctx context.Context, service *app.App, args []string) error {
+func runAllowlist(ctx context.Context, service *app.App, queries *application.Queries, args []string) error {
 	if len(args) == 0 {
-		cfg, err := service.Config()
+		cfg, err := queries.Config(ctx)
 		if err != nil {
 			return err
 		}
-		eff, err := service.EffectiveConfig(ctx, cfg)
+		eff, err := queries.EffectiveConfig(ctx, cfg)
 		if err != nil {
 			return err
 		}
@@ -264,11 +265,11 @@ func runAllowlist(ctx context.Context, service *app.App, args []string) error {
 		fmt.Printf("Allowlist de %s limpa.\n", args[1])
 		return nil
 	default:
-		cfg, err := service.Config()
+		cfg, err := queries.Config(ctx)
 		if err != nil {
 			return err
 		}
-		eff, err := service.EffectiveConfig(ctx, cfg)
+		eff, err := queries.EffectiveConfig(ctx, cfg)
 		if err != nil {
 			return err
 		}

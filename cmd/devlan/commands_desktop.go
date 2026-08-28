@@ -12,11 +12,12 @@ import (
 
 	localapi "github.com/dougkusanagi/dev-lan/internal/api"
 	"github.com/dougkusanagi/dev-lan/internal/app"
+	"github.com/dougkusanagi/dev-lan/internal/application"
 	"github.com/dougkusanagi/dev-lan/internal/desktop"
 	"github.com/dougkusanagi/dev-lan/internal/platform"
 )
 
-func runGUI(ctx context.Context, service *app.App, dataDir string, args []string) error {
+func runGUI(ctx context.Context, service *app.App, queries *application.Queries, dataDir string, args []string) error {
 	foreground := false
 	for _, arg := range args {
 		if arg == "--foreground" || arg == "-f" {
@@ -26,7 +27,7 @@ func runGUI(ctx context.Context, service *app.App, dataDir string, args []string
 		}
 	}
 
-	cfg, err := service.Config()
+	cfg, err := queries.Config(ctx)
 	if err != nil {
 		return err
 	}

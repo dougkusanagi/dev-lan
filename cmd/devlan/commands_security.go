@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/dougkusanagi/dev-lan/internal/app"
+	"github.com/dougkusanagi/dev-lan/internal/application"
 	"github.com/dougkusanagi/dev-lan/internal/platform"
 )
 
@@ -83,9 +84,9 @@ func runCA(ctx context.Context, service *app.App, args []string) error {
 	}
 }
 
-func runSecurity(ctx context.Context, service *app.App, args []string) error {
+func runSecurity(ctx context.Context, service *app.App, queries *application.Queries, args []string) error {
 	if len(args) == 0 || args[0] == "posture" {
-		cfg, err := service.Config()
+		cfg, err := queries.Config(ctx)
 		if err != nil {
 			return err
 		}

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/dougkusanagi/dev-lan/internal/app"
+	"github.com/dougkusanagi/dev-lan/internal/application"
 )
 
 const (
@@ -39,6 +40,8 @@ type Endpoint struct {
 
 type Server struct {
 	service        *app.App
+	commands       *application.Commands
+	queries        *application.Queries
 	readModelCache *ReadModelCache
 
 	mu         sync.Mutex
@@ -49,7 +52,29 @@ type Server struct {
 }
 
 func New(service *app.App) *Server {
-	return &Server{service: service, readModelCache: NewReadModelCache()}
+	return NewWithApplication(
+		service,
+		application.NewCommands(service, service),
+		application.NewQueries(service),
+	)
+}
+
+// NewWithApplication composes the API transport with explicit application
+// services. New keeps the existing composition shortcut for production while
+// tests and alternate shells can provide isolated command/query doubles.
+func NewWithApplication(service *app.App, commands *application.Commands, queries *application.Queries) *Server {
+	if commands == nil {
+		commands = application.NewCommands(service, service)
+	}
+	if queries == nil {
+		queries = application.NewQueries(service)
+	}
+	return &Server{
+		service:        service,
+		commands:       commands,
+		queries:        queries,
+		readModelCache: NewReadModelCache(),
+	}
 }
 
 func (s *Server) Start() (Endpoint, error) {
@@ -61,7 +86,7 @@ func (s *Server) Start() (Endpoint, error) {
 	if err := s.service.EnsureState(); err != nil {
 		return Endpoint{}, err
 	}
-	cfg, err := s.service.Config()
+	cfg, err := s.queries.Config(context.Background())
 	if err != nil {
 		return Endpoint{}, fmt.Errorf("validar configuração antes de iniciar a API: %w", err)
 	}

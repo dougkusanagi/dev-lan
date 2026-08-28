@@ -10,17 +10,18 @@ import (
 	"text/tabwriter"
 
 	"github.com/dougkusanagi/dev-lan/internal/app"
+	"github.com/dougkusanagi/dev-lan/internal/application"
 	"github.com/dougkusanagi/dev-lan/internal/domain"
 	"github.com/dougkusanagi/dev-lan/internal/platform"
 )
 
-func printProjects(service *app.App, filter string, asJSON bool) error {
-	cfg, err := service.Config()
+func printProjects(ctx context.Context, queries *application.Queries, filter string, asJSON bool) error {
+	cfg, err := queries.Config(ctx)
 	if err != nil {
 		return err
 	}
-	effective, err := service.EffectiveConfig(
-		platform.WithWSLOperation(context.Background(), platform.WSLOperationDiscovery), cfg,
+	effective, err := queries.EffectiveConfig(
+		platform.WithWSLOperation(ctx, platform.WSLOperationDiscovery), cfg,
 	)
 	if err != nil {
 		return err
@@ -142,9 +143,9 @@ func sslState(enabled bool) string {
 	return "off"
 }
 
-func printStatus(ctx context.Context, service *app.App, dataDir string) error {
+func printStatus(ctx context.Context, queries *application.Queries, service *app.App, dataDir string) error {
 	ctx = platform.WithWSLOperation(ctx, platform.WSLOperationStatus)
-	cfg, err := service.Config()
+	cfg, err := queries.Config(ctx)
 	if err != nil {
 		return err
 	}
@@ -174,7 +175,7 @@ func printStatus(ctx context.Context, service *app.App, dataDir string) error {
 		fmt.Printf("PHP: indisponível (%s)\n", versionErr)
 	}
 	fmt.Printf("Projetos registrados: %d | parks: %d\n", len(cfg.Projects), len(cfg.Parks))
-	return printProjects(service, "", false)
+	return printProjects(ctx, queries, "", false)
 }
 
 func printWarnings(warnings []string) {

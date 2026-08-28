@@ -110,7 +110,7 @@ func (s *Server) Handler(token ...string) http.Handler {
 
 		// 3. Origin validation for browser requests
 		if origin := request.Header.Get("Origin"); origin != "" {
-			if !s.isValidOrigin(origin) {
+			if !s.isValidOrigin(request.Context(), origin) {
 				writeJSONError(writer, http.StatusForbidden, "Origem não permitida: "+origin)
 				return
 			}

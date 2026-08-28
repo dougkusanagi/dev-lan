@@ -19,6 +19,8 @@ Wails opcional.
 - endpoint agregado `/api/v1/overview`, cache de read model e operações longas
   assíncronas expostas por consulta e SSE;
 - cache de read model com lifecycle explícito por servidor, sem registry global;
+- comandos e consultas de aplicação explícitos para as fatias críticas de
+  projeto, configuração, modo e read model, usados por HTTP, CLI e Wails;
 - métricas incrementais e limitadas, atribuídas por metadado confiável do Caddy,
   com suporte a rotação, truncamento e linhas grandes sem reter dados sensíveis;
 - manifesto de instalação e núcleo do uninstall conservador com dry-run,
@@ -36,8 +38,9 @@ As tarefas e critérios de aceite ficam em [ROADMAP.md](ROADMAP.md).
 
 ## Dívida conhecida
 
-- `internal/app.App`, `internal/api` e `cmd/devlan` acumulam responsabilidades e
-  acessos diretos à persistência;
+- `internal/app.App`, `internal/api` e `cmd/devlan` ainda acumulam responsabilidades;
+- operações fora das fatias críticas de R-05c ainda chamam diretamente a fachada
+  legada de `internal/app` e serão convergidas em R-05e;
 - ainda há globais por ponteiro, DTOs duplicados e listas genéricas exigidas por
   integrações de framework;
 - CLI, HTTP e Wails ainda não convergem integralmente nos mesmos casos de uso;

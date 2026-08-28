@@ -56,18 +56,8 @@ func (a *App) Audit(event, details string) {
 	_ = a.Store.AppendSecurityAudit(event, details)
 }
 
-// GlobalSettings is the command DTO shared by the HTTP and Wails transports.
-// It deliberately does not expose persistence records.
-type GlobalSettings struct {
-	DefaultMode       string
-	WindowsPort       int
-	HTTPSPort         int
-	TLSEnabled        bool
-	PHPDefaultVersion string
-	Allowlist         []string
-}
-
-// SaveGlobalSettings applies a validated global settings command.
+// SaveGlobalSettings applies the validated global settings command owned by
+// internal/application. It deliberately does not expose persistence records.
 func (a *App) SaveGlobalSettings(ctx context.Context, settings GlobalSettings) (ApplyResult, error) {
 	cfg, err := a.Config()
 	if err != nil {

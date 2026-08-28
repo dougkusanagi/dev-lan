@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/dougkusanagi/dev-lan/internal/app"
+	"github.com/dougkusanagi/dev-lan/internal/application"
 	"github.com/dougkusanagi/dev-lan/internal/platform"
 )
 
@@ -90,7 +91,7 @@ func (s *Server) InvalidateReadModelCache() {
 	}
 }
 
-func (c *ReadModelCache) cachedHot(ctx context.Context, service *app.App, now time.Time) (*projectViewRuntime, bool, error) {
+func (c *ReadModelCache) cachedHot(ctx context.Context, service *app.App, queries *application.Queries, now time.Time) (*projectViewRuntime, bool, error) {
 	if c == nil {
 		c = NewReadModelCache()
 	}
@@ -101,7 +102,7 @@ func (c *ReadModelCache) cachedHot(ctx context.Context, service *app.App, now ti
 		return runtime, true, nil
 	}
 
-	runtime, err := loadProjectViewRuntimeUncached(ctx, service)
+	runtime, err := loadProjectViewRuntimeUncached(ctx, service, queries)
 	if err != nil {
 		return nil, false, err
 	}
@@ -109,7 +110,7 @@ func (c *ReadModelCache) cachedHot(ctx context.Context, service *app.App, now ti
 	return runtime, false, nil
 }
 
-func (c *ReadModelCache) cachedCold(ctx context.Context, service *app.App, now time.Time, caddyStatus platform.CaddyServiceStatus) (systemHealthSnapshot, bool) {
+func (c *ReadModelCache) cachedCold(ctx context.Context, service *app.App, queries *application.Queries, now time.Time, caddyStatus platform.CaddyServiceStatus) (systemHealthSnapshot, bool) {
 	if c == nil {
 		c = NewReadModelCache()
 	}
@@ -120,7 +121,7 @@ func (c *ReadModelCache) cachedCold(ctx context.Context, service *app.App, now t
 		return value, true
 	}
 
-	value := loadSystemHealthSnapshot(ctx, service, caddyStatus)
+	value := loadSystemHealthSnapshot(ctx, service, queries, caddyStatus)
 	c.cold = cachedColdSnapshot{value: value, at: now}
 	return value, false
 }

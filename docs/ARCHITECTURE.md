@@ -16,6 +16,8 @@ CLI / browser / Wails / cliente WSL
                  │
         API HTTP loopback autenticada
                  │
+      application.Commands / Queries
+                  │
         internal/app.App + config.Store
                  │
    ┌─────────────┼──────────────┐
@@ -37,7 +39,9 @@ sua API administrativa também é loopback-only.
 ### Pacotes e responsabilidades atuais
 
 - `cmd/devlan`: bootstrap, parsing e execução da CLI;
-- `internal/app`: casos de uso e coordenação de configuração/adaptadores;
+- `internal/application`: DTOs, comandos e consultas com dependências privadas;
+- `internal/app`: implementação atual dos casos de uso e coordenação de
+  configuração/adaptadores;
 - `internal/domain`: modelos e validações compartilhados;
 - `internal/config`: configuração/estado versionados, lock, transação e journal;
 - `internal/api`: servidor, autenticação, handlers, DTOs, cliente, read model,
@@ -51,6 +55,11 @@ sua API administrativa também é loopback-only.
 `internal/app.App` expõe somente `Caddy`, a dependência da borda WSL única;
 clientes Caddy legados ficam privados ao pacote e só participam de migração ou
 rollback explícitos.
+
+As fatias críticas de projeto, configuração, modo e read model são compostas
+por `application.Commands`/`application.Queries`; HTTP e Wails compartilham as
+instâncias do servidor, enquanto a CLI compõe as mesmas abstrações. As demais
+operações ainda usam a fachada de `internal/app` e serão migradas em R-05e.
 
 O fluxo de mutação converge em persistir a intenção e reconciliar recursos por
 `plan → validate → stage → commit → reload → healthcheck`, com recuperação por
@@ -83,13 +92,13 @@ editados manualmente. Detalhes estão em
 
 ### Limitações estruturais atuais
 
-Os fluxos funcionam, mas `app.App`, API e CLI ainda concentram responsabilidades,
-embora as implementações de `internal/app`, `internal/api`, `cmd/devlan` e
-`internal/domain` já estejam divididas por assunto. Há
-acesso de transportes ao store, DTOs duplicados, registros genéricos de
-integrações de framework e orquestração repetida no Wails. O cache de read model
-é criado e encerrado pelo `api.Server`, mas ainda há pontos que dificultam testes
-de lifecycle e fazem uma
+Os fluxos funcionam, e as fatias críticas já atravessam `application`, mas
+`app.App`, API e CLI ainda concentram responsabilidades. As implementações de
+`internal/app`, `internal/api`, `cmd/devlan` e `internal/domain` já estão
+divididas por assunto, porém há DTOs duplicados, operações fora da fatia crítica
+que ainda usam a fachada legada, registros genéricos de integrações de framework
+e orquestração repetida no Wails. O cache de read model é criado e encerrado pelo
+`api.Server`, mas ainda há pontos que dificultam testes de lifecycle e fazem uma
 mudança atravessar arquivos grandes. A solução é evolução incremental orientada
 por testes, não uma troca de stack.
 

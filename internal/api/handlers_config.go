@@ -8,13 +8,13 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/dougkusanagi/dev-lan/internal/app"
+	"github.com/dougkusanagi/dev-lan/internal/application"
 	"github.com/dougkusanagi/dev-lan/internal/domain"
 )
 
 func (s *Server) handleConfig(writer http.ResponseWriter, request *http.Request) {
 	if request.Method == http.MethodGet {
-		view, err := BuildGlobalConfigView(s.service)
+		view, err := s.BuildGlobalConfigView()
 		if err != nil {
 			writeJSONError(writer, http.StatusInternalServerError, err.Error())
 			return
@@ -34,7 +34,7 @@ func (s *Server) handleConfig(writer http.ResponseWriter, request *http.Request)
 				return
 			}
 		}
-		settings := app.GlobalSettings{
+		settings := application.GlobalSettings{
 			DefaultMode:       view.DefaultMode,
 			WindowsPort:       view.WindowsPort,
 			HTTPSPort:         view.HTTPSPort,
@@ -42,7 +42,7 @@ func (s *Server) handleConfig(writer http.ResponseWriter, request *http.Request)
 			PHPDefaultVersion: view.PHPDefaultVersion,
 			Allowlist:         view.Allowlist,
 		}
-		if _, err := s.service.SaveGlobalSettings(request.Context(), settings); err != nil {
+		if _, err := s.commands.SaveGlobalSettings(request.Context(), settings); err != nil {
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
 		}

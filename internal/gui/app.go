@@ -12,6 +12,7 @@ import (
 
 	localapi "github.com/dougkusanagi/dev-lan/internal/api"
 	"github.com/dougkusanagi/dev-lan/internal/app"
+	"github.com/dougkusanagi/dev-lan/internal/application"
 	"github.com/dougkusanagi/dev-lan/internal/domain"
 	"github.com/dougkusanagi/dev-lan/internal/metrics"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -136,7 +137,7 @@ func (a *App) GetMetrics(project, rawRange string) (*metrics.Snapshot, error) {
 }
 
 func (a *App) GetGlobalConfig() (GlobalConfigView, error) {
-	return localapi.BuildGlobalConfigView(a.service)
+	return a.api.BuildGlobalConfigView()
 }
 
 func (a *App) GetPHPVersions() ([]PHPVersionView, error) {
@@ -179,7 +180,7 @@ func (a *App) SaveGlobalConfig(view GlobalConfigView) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	_, err := a.service.SaveGlobalSettings(ctx, app.GlobalSettings{
+	_, err := a.api.SaveGlobalSettings(ctx, application.GlobalSettings{
 		DefaultMode:       view.DefaultMode,
 		WindowsPort:       view.WindowsPort,
 		HTTPSPort:         view.HTTPSPort,
@@ -205,7 +206,7 @@ func (a *App) SaveProjectConfig(update ProjectConfigUpdate) error {
 		if err != nil {
 			return err
 		}
-		if _, err := a.service.SetProjectMode(ctx, update.Name, &mode); err != nil {
+		if _, err := a.api.SetProjectMode(ctx, update.Name, &mode); err != nil {
 			return err
 		}
 	}
@@ -284,7 +285,7 @@ func (a *App) StartDevOperation(name, operationID string) (MutationResult, error
 	return a.acceptProjectOperation("start", name, operationID, 90*time.Second,
 		func(ctx context.Context) (uint64, []string, error) {
 			err := a.service.StartDev(ctx, name)
-			return guiCurrentRevision(a.service), nil, err
+			return a.api.QueryRevision(context.Background()), nil, err
 		})
 }
 
@@ -292,7 +293,7 @@ func (a *App) StopDevOperation(name, operationID string) (MutationResult, error)
 	return a.acceptProjectOperation("stop", name, operationID, 45*time.Second,
 		func(ctx context.Context) (uint64, []string, error) {
 			err := a.service.StopDev(ctx, name)
-			return guiCurrentRevision(a.service), nil, err
+			return a.api.QueryRevision(context.Background()), nil, err
 		})
 }
 
@@ -300,7 +301,7 @@ func (a *App) RestartDevOperation(name, operationID string) (MutationResult, err
 	return a.acceptProjectOperation("restart", name, operationID, 90*time.Second,
 		func(ctx context.Context) (uint64, []string, error) {
 			err := a.service.RestartDev(ctx, name)
-			return guiCurrentRevision(a.service), nil, err
+			return a.api.QueryRevision(context.Background()), nil, err
 		})
 }
 
@@ -356,19 +357,15 @@ func (a *App) resultForCompleted(operation, project, operationID string, ctx con
 	}
 	state, _, _ := a.service.BeginOperation(operationID, operation, project)
 	a.service.SetOperationTransport(operationID, "wails")
-	state = a.service.UpdateOperation(operationID, "ready", "ready", guiCurrentRevision(a.service), nil, warnings, nil)
+	state = a.service.UpdateOperation(operationID, "ready", "ready", a.api.QueryRevision(context.Background()), nil, warnings, nil)
 	a.api.InvalidateReadModelCache()
 	return a.api.BuildOperationResult(ctx, state)
-}
-
-func guiCurrentRevision(service *app.App) uint64 {
-	return service.Revision()
 }
 
 func (a *App) LinkProject(name, path string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	_, _, err := a.service.Link(ctx, name, path)
+	_, _, err := a.api.LinkProject(ctx, name, path)
 	if err == nil {
 		a.api.InvalidateReadModelCache()
 	}
@@ -378,7 +375,7 @@ func (a *App) LinkProject(name, path string) error {
 func (a *App) UnlinkProject(name string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	_, _, err := a.service.Unlink(ctx, name)
+	_, _, err := a.api.UnlinkProject(ctx, name)
 	if err == nil {
 		a.api.InvalidateReadModelCache()
 	}
@@ -388,7 +385,7 @@ func (a *App) UnlinkProject(name string) error {
 func (a *App) HideProject(name string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	_, err := a.service.IgnoreProject(ctx, name)
+	_, err := a.api.IgnoreProject(ctx, name)
 	if err == nil {
 		a.api.InvalidateReadModelCache()
 	}
@@ -398,7 +395,7 @@ func (a *App) HideProject(name string) error {
 func (a *App) ParkDir(path string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	_, _, err := a.service.Park(ctx, path)
+	_, _, err := a.api.ParkDirectory(ctx, path)
 	if err == nil {
 		a.api.InvalidateReadModelCache()
 	}
@@ -408,7 +405,7 @@ func (a *App) ParkDir(path string) error {
 func (a *App) UnparkDir(path string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	_, _, err := a.service.Unpark(ctx, path)
+	_, _, err := a.api.UnparkDirectory(ctx, path)
 	if err == nil {
 		a.api.InvalidateReadModelCache()
 	}

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/dougkusanagi/dev-lan/internal/app"
+	"github.com/dougkusanagi/dev-lan/internal/application"
 	"github.com/dougkusanagi/dev-lan/internal/desktop"
 	backgroundservice "github.com/dougkusanagi/dev-lan/internal/service"
 	"github.com/dougkusanagi/dev-lan/internal/startup"
@@ -60,6 +61,8 @@ func run(args []string) error {
 		return runWSLClient(context.Background(), dataDir, command, args)
 	}
 	service := app.New(dataDir)
+	commands := application.NewCommands(service, service)
+	queries := application.NewQueries(service)
 	var ctx context.Context
 	var cancel context.CancelFunc
 	if command == "gui" && len(args) > 0 && (args[0] == "--foreground" || args[0] == "-f") {
@@ -165,7 +168,7 @@ func run(args []string) error {
 		if len(args) != 2 {
 			return fmt.Errorf("uso: devlan link NAME PATH")
 		}
-		project, result, err := service.Link(ctx, args[0], args[1])
+		project, result, err := commands.LinkProject(ctx, application.LinkProjectCommand{Name: args[0], Path: args[1]})
 		printWarnings(result.Warnings)
 		if err != nil {
 			return err
@@ -177,7 +180,7 @@ func run(args []string) error {
 		if len(args) != 1 {
 			return fmt.Errorf("uso: devlan unlink NAME")
 		}
-		project, result, err := service.Unlink(ctx, args[0])
+		project, result, err := commands.UnlinkProject(ctx, application.UnlinkProjectCommand{Name: args[0]})
 		printWarnings(result.Warnings)
 		if err != nil {
 			return err
@@ -197,11 +200,11 @@ func run(args []string) error {
 				return fmt.Errorf("uso: devlan links [FILTRO] [--json]")
 			}
 		}
-		return printProjects(service, filter, asJSON)
+		return printProjects(ctx, queries, filter, asJSON)
 
 	case "park":
 		if len(args) == 2 && args[0] == "ignore" {
-			result, err := service.IgnoreProject(ctx, args[1])
+			result, err := commands.IgnoreProject(ctx, application.IgnoreProjectCommand{Selector: args[1]})
 			printWarnings(result.Warnings)
 			if err != nil {
 				return err
@@ -210,7 +213,7 @@ func run(args []string) error {
 			return nil
 		}
 		if len(args) == 2 && args[0] == "unignore" {
-			result, err := service.UnignoreProject(ctx, args[1])
+			result, err := commands.UnignoreProject(ctx, application.UnignoreProjectCommand{Path: args[1]})
 			printWarnings(result.Warnings)
 			if err != nil {
 				return err
@@ -221,7 +224,7 @@ func run(args []string) error {
 		if len(args) != 1 {
 			return fmt.Errorf("uso: devlan park PATH | devlan park ignore NAME|PATH | devlan park unignore PATH")
 		}
-		park, result, err := service.Park(ctx, args[0])
+		park, result, err := commands.ParkDirectory(ctx, application.ParkDirectoryCommand{Path: args[0]})
 		printWarnings(result.Warnings)
 		if err != nil {
 			return err
@@ -233,7 +236,7 @@ func run(args []string) error {
 		if len(args) != 1 {
 			return fmt.Errorf("uso: devlan unpark PATH")
 		}
-		park, result, err := service.Unpark(ctx, args[0])
+		park, result, err := commands.UnparkDirectory(ctx, application.UnparkDirectoryCommand{Path: args[0]})
 		printWarnings(result.Warnings)
 		if err != nil {
 			return err
@@ -245,7 +248,7 @@ func run(args []string) error {
 		if len(args) != 0 {
 			return fmt.Errorf("uso: devlan parked")
 		}
-		cfg, err := service.Config()
+		cfg, err := queries.Config(ctx)
 		if err != nil {
 			return err
 		}
@@ -259,10 +262,10 @@ func run(args []string) error {
 		return nil
 
 	case "mode":
-		return runMode(ctx, service, args)
+		return runMode(ctx, commands, args)
 
 	case "php":
-		return runPHP(ctx, service, args)
+		return runPHP(ctx, service, queries, args)
 
 	case "composer":
 		return runComposer(ctx, service, args)
@@ -271,7 +274,7 @@ func run(args []string) error {
 		if len(args) != 0 {
 			return fmt.Errorf("uso: devlan status")
 		}
-		return printStatus(ctx, service, dataDir)
+		return printStatus(ctx, queries, service, dataDir)
 
 	case "topology":
 		return runTopology(ctx, service, args)
@@ -432,7 +435,7 @@ func run(args []string) error {
 			return fmt.Errorf("uso: devlan open [NAME]")
 		}
 		if len(args) == 0 {
-			return printProjects(service, "", false)
+			return printProjects(ctx, queries, "", false)
 		}
 		url, err := service.Open(ctx, args[0])
 		fmt.Println(url)
@@ -442,7 +445,7 @@ func run(args []string) error {
 		return nil
 
 	case "route":
-		return runRoute(ctx, service, args)
+		return runRoute(ctx, service, queries, args)
 
 	case "expose":
 		return runExpose(ctx, service, args)
@@ -451,7 +454,7 @@ func run(args []string) error {
 		return runUnexpose(ctx, service, args)
 
 	case "allowlist":
-		return runAllowlist(ctx, service, args)
+		return runAllowlist(ctx, service, queries, args)
 
 	case "auth":
 		return runAuth(ctx, service, args)
@@ -460,13 +463,13 @@ func run(args []string) error {
 		return runCA(ctx, service, args)
 
 	case "gui":
-		return runGUI(ctx, service, dataDir, args)
+		return runGUI(ctx, service, queries, dataDir, args)
 
 	case "desktop":
 		return runDesktop(ctx, dataDir, args)
 
 	case "security":
-		return runSecurity(ctx, service, args)
+		return runSecurity(ctx, service, queries, args)
 
 	case "config":
 		return runConfig(ctx, service, args)

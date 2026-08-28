@@ -12,8 +12,10 @@ import (
 
 type operationWork func(context.Context) (revision uint64, warnings []string, workErr error)
 
-func currentRevision(service *app.App) uint64 {
-	return service.Revision()
+func (s *Server) currentRevision(_ context.Context) uint64 {
+	// The revision is metadata collected after a mutation. A canceled worker
+	// context must not erase a revision that was already committed.
+	return s.queries.Revision(context.Background())
 }
 
 func operationIDOrNew(id string) string {
