@@ -49,12 +49,11 @@ func (a *App) Trust(ctx context.Context) error {
 	paths := a.Store.Paths()
 	if caddyClient.WSL {
 		if err := caddyClient.ExportRootCA(ctx, paths.CARootExport); err != nil {
-			// A caller that explicitly injected the pre-M8 Windows client is
-			// either running a compatibility test or performing a rollback. The
-			// production constructor leaves WindowsCaddy empty, so this cannot
-			// silently bring the old edge back into the normal install path.
-			if a.WindowsCaddy.Runner != nil {
-				return a.WindowsCaddy.Trust(ctx)
+			// A package-local migration test may inject the pre-M8 Windows client
+			// for rollback. Production has no second operational edge, so this
+			// cannot silently bring the old edge into the normal install path.
+			if a.legacyWindowsCaddy.Runner != nil {
+				return a.legacyWindowsCaddy.Trust(ctx)
 			}
 			return err
 		}

@@ -336,5 +336,17 @@ para fechar o gate após reboot, VPN/troca de IP e `wsl --shutdown`.
 passam. `go test -race ./...` permanece dependente de CGo e de um compilador C
 disponível no ambiente.
 
+## R-04c — Remoção dos campos públicos de compatibilidade
+
+- [x] Migrar composição e testes para a dependência pública única `App.Caddy`.
+- [x] Tornar os clientes Caddy de Windows/WSL legados privados ao pacote de
+  aplicação, preservando seu uso somente no rollback de migração e fixtures
+  determinísticas.
+- [x] Adicionar teste arquitetural que impede a reintrodução dos campos públicos
+  `WindowsCaddy` e `WSLCaddy`.
+
+**Gate:** testes Go focados em aplicação e arquitetura passam; artefatos legados
+em disco continuam disponíveis para detecção e rollback explícitos.
+
 O restante foi migrado para o [roadmap vigente](../ROADMAP.md), sem duplicar
 caixas abertas neste histórico.

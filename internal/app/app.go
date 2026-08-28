@@ -28,12 +28,12 @@ type App struct {
 	Dev       platform.DevManager
 	DevProxy  *platform.DevProxy
 	Telemetry telemetry.Store
-	// Caddy is the M8 unified edge. It is intentionally optional in the struct
-	// so callers compiled against the pre-M8 fields can still inject a WSL
-	// client while migrating.
-	Caddy        platform.CaddyClient
-	WindowsCaddy platform.CaddyClient
-	WSLCaddy     platform.CaddyClient
+	// Caddy is the only operational edge. The legacy clients remain private so
+	// migration/rollback tests can model a pre-M8 installation without exposing
+	// a second public Caddy dependency to composition roots.
+	Caddy              platform.CaddyClient
+	legacyWindowsCaddy platform.CaddyClient
+	legacyWSLCaddy     platform.CaddyClient
 	// Firewall is the small compatibility port. Range-aware implementations may
 	// additionally implement platform.FirewallReconciler.
 	Firewall platform.FirewallManager
@@ -53,21 +53,20 @@ type App struct {
 }
 
 func (a *App) edgeCaddy() platform.CaddyClient {
-	// Caddy is the canonical M8 edge. A non-systemd WSLCaddy is accepted only
-	// as an explicit compatibility injection from pre-M8 callers/tests; the
-	// production constructor leaves it empty and a second systemd edge can
-	// never shadow the canonical one.
+	// Caddy is the canonical M8 edge. A non-systemd legacy WSL client is accepted
+	// only by package-local migration tests; production has no second edge.
 	if a.Caddy.Runner != nil {
-		if a.WSLCaddy.Runner != nil && a.Caddy.RequireSystemd && !a.WSLCaddy.RequireSystemd {
-			return a.WSLCaddy
+		if a.legacyWSLCaddy.Runner != nil && a.Caddy.RequireSystemd && !a.legacyWSLCaddy.RequireSystemd {
+			return a.legacyWSLCaddy
 		}
 		return a.Caddy
 	}
-	if a.WSLCaddy.Runner != nil {
-		return a.WSLCaddy
+	if a.legacyWSLCaddy.Runner != nil {
+		return a.legacyWSLCaddy
 	}
-	// Compatibility for callers/tests that only injected the old host edge.
-	return a.WindowsCaddy
+	// Compatibility for package-local migration tests that only inject the old
+	// host edge.
+	return a.legacyWindowsCaddy
 }
 
 type mockRunner struct{}
@@ -109,15 +108,8 @@ func New(dataDir string) *App {
 		Dev:       dev,
 		DevProxy:  platform.NewDevProxy(dev),
 		Telemetry: telemetry.NewStore(dataDir),
-		// This is the only operational edge. It is deliberately assigned to the
-		// canonical field; WSLCaddy below is left nil so a second Caddy cannot be
-		// selected accidentally by normal code.
-		Caddy: wslCaddy,
-		// Windows no longer owns an operational Caddy instance. Keep the field
-		// zero-valued so old integrations can still inject a legacy client when
-		// explicitly testing or rolling back a migration.
-		WindowsCaddy:      platform.CaddyClient{},
-		WSLCaddy:          platform.CaddyClient{},
+		// This is the only operational edge.
+		Caddy:             wslCaddy,
 		Firewall:          firewall,
 		ExternalListeners: platform.ListeningTCPPorts,
 		Now:               time.Now,

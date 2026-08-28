@@ -65,8 +65,8 @@ func TestParkDiscoversOnlyLaravelChildren(t *testing.T) {
 	}
 	service := New(t.TempDir())
 	service.Detector = detect.Detector{Inspector: inspector}
-	service.WindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
-	service.WSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
+	service.legacyWindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
+	service.legacyWSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
 	service.Caddy = platform.CaddyClient{Runner: hashingRunner{}, WSL: true}
 	service.Caddy = platform.CaddyClient{Runner: hashingRunner{}, WSL: true}
 	if _, _, err := service.Park(context.Background(), "/home/dev"); err != nil {
@@ -178,8 +178,8 @@ func TestIgnoreParkedProjectRemovesItFromEffectiveConfig(t *testing.T) {
 			"/home/dev/dougdesign-seo/public/index.php": true,
 		},
 	}}
-	service.WindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
-	service.WSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
+	service.legacyWindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
+	service.legacyWSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
 	ctx := context.Background()
 
 	if _, _, err := service.Park(ctx, "/home/dev"); err != nil {
@@ -234,8 +234,8 @@ func TestSetProjectTLSFindsParkedProject(t *testing.T) {
 			"/home/dev/financeiro/public/index.php": true,
 		},
 	}}
-	service.WindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
-	service.WSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
+	service.legacyWindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
+	service.legacyWSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
 	if _, _, err := service.Park(context.Background(), "/home/dev"); err != nil {
 		t.Fatal(err)
 	}
@@ -259,8 +259,8 @@ func TestUnsecureKeepsTheTLSEdgeAvailableForBrowserCleanup(t *testing.T) {
 		"/home/dev/financeiro/artisan":          true,
 		"/home/dev/financeiro/public/index.php": true,
 	}}}
-	service.WindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
-	service.WSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
+	service.legacyWindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
+	service.legacyWSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
 	ctx := context.Background()
 	if _, _, err := service.Link(ctx, "financeiro", "/home/dev/financeiro"); err != nil {
 		t.Fatal(err)
@@ -291,8 +291,8 @@ func TestPHPVersionsCanBeInstalledAndSelectedPerProject(t *testing.T) {
 		"/home/dev/financeiro/artisan":          true,
 		"/home/dev/financeiro/public/index.php": true,
 	}}}
-	service.WindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
-	service.WSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
+	service.legacyWindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
+	service.legacyWSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
 	ctx := context.Background()
 	if _, err := service.PHPInstall(ctx, "8.3", []string{"xml"}); err != nil {
 		t.Fatal(err)
@@ -335,7 +335,7 @@ func TestPHPVersionsCanBeInstalledAndSelectedPerProject(t *testing.T) {
 
 func TestAppTrust(t *testing.T) {
 	service := New(t.TempDir())
-	service.WindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
+	service.legacyWindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
 	if err := service.Trust(context.Background()); err != nil {
 		t.Fatalf("trust falhou: %v", err)
 	}
@@ -343,8 +343,8 @@ func TestAppTrust(t *testing.T) {
 
 func TestAppDoctorIncludesPortAndIPChecks(t *testing.T) {
 	service := New(t.TempDir())
-	service.WindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
-	service.WSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
+	service.legacyWindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
+	service.legacyWSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
 	service.Detector = detect.Detector{Inspector: detect.StaticInspector{
 		Directories: map[string]bool{"/home/dev/financeiro": true},
 		Files: map[string]bool{
@@ -439,8 +439,8 @@ func TestLinkJSDevProject(t *testing.T) {
 			}`,
 		},
 	}}
-	service.WindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
-	service.WSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
+	service.legacyWindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
+	service.legacyWSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
 
 	project, _, err := service.Link(ctx, "frontend", "/home/dev/frontend")
 	if err != nil {
@@ -465,8 +465,8 @@ func TestLinkStaticProject(t *testing.T) {
 			"/home/dev/static-doc/dist/index.html": true,
 		},
 	}}
-	service.WindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
-	service.WSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
+	service.legacyWindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
+	service.legacyWSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
 
 	project, _, err := service.Link(ctx, "docs", "/home/dev/static-doc")
 	if err != nil {
@@ -490,8 +490,8 @@ func TestPhase4AppMethods(t *testing.T) {
 			"/home/dev/app/dist/index.html": true,
 		},
 	}}
-	service.WindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
-	service.WSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
+	service.legacyWindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
+	service.legacyWSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
 
 	_, _, err := service.Link(ctx, "app", "/home/dev/app")
 	if err != nil {
@@ -556,8 +556,8 @@ func TestRouteAllocationsPersistByPathAndPruneExplicitly(t *testing.T) {
 	service := New(t.TempDir())
 	service.Detector = detect.Detector{Inspector: detect.StaticInspector{}}
 	service.ExternalListeners = func(context.Context) ([]int, error) { return nil, nil }
-	service.WindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
-	service.WSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
+	service.legacyWindowsCaddy = platform.CaddyClient{Runner: successfulRunner{}}
+	service.legacyWSLCaddy = platform.CaddyClient{Runner: successfulRunner{}, WSL: true}
 	staticMode := domain.ModeStatic
 	cfg := domain.NewConfig()
 	cfg.RoutePortCount = 2

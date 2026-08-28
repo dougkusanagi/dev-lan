@@ -77,7 +77,7 @@ func (a *App) MigrateToSingleCaddy(ctx context.Context, confirmed bool) (platfor
 	unifiedStarted := false
 	legacyStopAttempted := false
 	legacyStopped := false
-	legacyCaddy := a.WindowsCaddy
+	legacyCaddy := a.legacyWindowsCaddy
 	if legacyCaddy.Runner == nil {
 		if _, windowsConfigErr := os.Stat(paths.WindowsCaddy); windowsConfigErr == nil {
 			// This adapter is created only inside the migration window. It is not
@@ -238,8 +238,8 @@ func (a *App) MigrateToSingleCaddy(ctx context.Context, confirmed bool) (platfor
 			// An explicitly injected legacy WSL adapter is supported for upgrade
 			// tests/rollback, but the production App has no second operational
 			// client. Never synthesize one here.
-			if wslLegacyExisted && a.Caddy.Runner != nil && a.WSLCaddy.Runner != nil {
-				recordRollbackErr(a.WSLCaddy.EnsureRunning(ctx, paths.WSLCaddy))
+			if wslLegacyExisted && a.Caddy.Runner != nil && a.legacyWSLCaddy.Runner != nil {
+				recordRollbackErr(a.legacyWSLCaddy.EnsureRunning(ctx, paths.WSLCaddy))
 			}
 			return rollbackErr
 		},

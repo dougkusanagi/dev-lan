@@ -48,6 +48,10 @@ sua API administrativa também é loopback-only.
 - `internal/gui`: bindings Wails;
 - `frontend`: dashboard React e cliente HTTP.
 
+`internal/app.App` expõe somente `Caddy`, a dependência da borda WSL única;
+clientes Caddy legados ficam privados ao pacote e só participam de migração ou
+rollback explícitos.
+
 O fluxo de mutação converge em persistir a intenção e reconciliar recursos por
 `plan → validate → stage → commit → reload → healthcheck`, com recuperação por
 journal/backup. Operações longas possuem IDs, estado consultável e eventos SSE.
