@@ -18,7 +18,7 @@ func (s *Server) handleMetrics(writer http.ResponseWriter, request *http.Request
 	if rawRange == "" {
 		rawRange = "1h"
 	}
-	snapshot, err := BuildMetricsSnapshot(s.service, project, rawRange)
+	snapshot, err := s.BuildMetricsSnapshot(request.Context(), project, rawRange)
 	if err != nil {
 		writeJSONError(writer, http.StatusBadRequest, err.Error())
 		return
@@ -32,7 +32,7 @@ func (s *Server) handleDoctor(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 	project := request.URL.Query().Get("project")
-	checks, err := BuildDoctorChecksView(request.Context(), s.service, project)
+	checks, err := s.BuildDoctorChecksView(request.Context(), project)
 	if err != nil {
 		writeJSONError(writer, http.StatusInternalServerError, err.Error())
 		return
@@ -56,35 +56,35 @@ func (s *Server) handleDoctorFix(writer http.ResponseWriter, request *http.Reque
 	ctx := request.Context()
 	switch input.Action {
 	case "reload":
-		_, err := s.service.Reload(ctx)
+		_, err := s.commands.Reload(ctx)
 		if err != nil {
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
 		}
 	case "firewall":
-		if err := s.service.ReconcileFirewall(ctx); err != nil {
+		if err := s.commands.ReconcileFirewall(ctx); err != nil {
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
 		}
 	case "topology", "topology-repair":
-		if _, err := s.service.RepairM8(ctx); err != nil {
+		if _, err := s.commands.RepairM8(ctx); err != nil {
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
 		}
 	case "trust":
-		if err := s.service.Trust(ctx); err != nil {
+		if err := s.commands.Trust(ctx); err != nil {
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
 		}
 	case "restart-dev":
 		if input.Target != "" {
-			if err := s.service.RestartDev(ctx, input.Target); err != nil {
+			if err := s.commands.RestartDev(ctx, input.Target); err != nil {
 				writeJSONError(writer, http.StatusConflict, err.Error())
 				return
 			}
 		}
 	default:
-		_, _ = s.service.Reload(ctx)
+		_, _ = s.commands.Reload(ctx)
 	}
 	s.InvalidateReadModelCache()
 	writeJSON(writer, http.StatusOK, MessageOnlyResponse{Message: "Correção aplicada."})
@@ -100,7 +100,7 @@ func (s *Server) handleSecurityAudit(writer http.ResponseWriter, request *http.R
 	if l, err := strconv.Atoi(linesStr); err == nil && l > 0 {
 		lines = l
 	}
-	logs, err := s.service.SecurityAuditLogs(request.Context(), lines)
+	logs, err := s.queries.SecurityAuditLogs(request.Context(), lines)
 	if err != nil {
 		writeJSONError(writer, http.StatusInternalServerError, err.Error())
 		return
@@ -113,7 +113,7 @@ func (s *Server) handleSecurityTrust(writer http.ResponseWriter, request *http.R
 		methodNotAllowed(writer, http.MethodPost)
 		return
 	}
-	if err := s.service.Trust(request.Context()); err != nil {
+	if err := s.commands.Trust(request.Context()); err != nil {
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
 	}

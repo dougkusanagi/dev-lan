@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/dougkusanagi/dev-lan/internal/app"
+	"github.com/dougkusanagi/dev-lan/internal/application"
 )
 
 type telemetryStatusOutput struct {
@@ -14,26 +14,21 @@ type telemetryStatusOutput struct {
 	Queued   int    `json:"queued"`
 }
 
-func runTelemetry(ctx context.Context, service *app.App, args []string) error {
+func runTelemetry(ctx context.Context, commands *application.Commands, queries *application.Queries, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("uso: devlan telemetry status|enable ENDPOINT|disable|send")
 	}
-	store := service.Telemetry
 	switch args[0] {
 	case "status":
 		if len(args) != 1 {
 			return fmt.Errorf("uso: devlan telemetry status")
 		}
-		consent, err := store.Load()
-		if err != nil {
-			return err
-		}
-		queued, err := store.QueueSize()
+		status, err := queries.TelemetryStatus()
 		if err != nil {
 			return err
 		}
 		data, _ := json.MarshalIndent(telemetryStatusOutput{
-			Enabled: consent.Enabled, Endpoint: consent.Endpoint, Queued: queued,
+			Enabled: status.Enabled, Endpoint: status.Endpoint, Queued: status.Queued,
 		}, "", "  ")
 		fmt.Println(string(data))
 		return nil
@@ -41,7 +36,7 @@ func runTelemetry(ctx context.Context, service *app.App, args []string) error {
 		if len(args) != 2 {
 			return fmt.Errorf("uso: devlan telemetry enable ENDPOINT")
 		}
-		if err := store.SetConsent(true, args[1]); err != nil {
+		if err := commands.SetTelemetryConsent(true, args[1]); err != nil {
 			return err
 		}
 		fmt.Println("Telemetria habilitada com consentimento explícito; o envio continua manual (`devlan telemetry send`).")
@@ -50,7 +45,7 @@ func runTelemetry(ctx context.Context, service *app.App, args []string) error {
 		if len(args) != 1 {
 			return fmt.Errorf("uso: devlan telemetry disable")
 		}
-		if err := store.SetConsent(false, ""); err != nil {
+		if err := commands.SetTelemetryConsent(false, ""); err != nil {
 			return err
 		}
 		fmt.Println("Telemetria desabilitada e fila local removida.")
@@ -59,7 +54,7 @@ func runTelemetry(ctx context.Context, service *app.App, args []string) error {
 		if len(args) != 1 {
 			return fmt.Errorf("uso: devlan telemetry send")
 		}
-		count, err := store.Send(ctx)
+		count, err := commands.SendTelemetry(ctx)
 		if err != nil {
 			return err
 		}

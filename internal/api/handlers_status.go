@@ -42,7 +42,7 @@ func (s *Server) handleTopology(writer http.ResponseWriter, request *http.Reques
 		methodNotAllowed(writer, http.MethodGet)
 		return
 	}
-	writeJSON(writer, http.StatusOK, BuildTopologyView(request.Context(), s.service))
+	writeJSON(writer, http.StatusOK, s.queries.Topology(request.Context()))
 }
 
 func (s *Server) handleOverview(writer http.ResponseWriter, request *http.Request) {
@@ -97,7 +97,7 @@ func (s *Server) handleEvents(writer http.ResponseWriter, request *http.Request)
 	writer.Header().Set("Connection", "keep-alive")
 	_, _ = writer.Write([]byte(": devlan events\n\n"))
 	flusher.Flush()
-	updates, stop := s.service.SubscribeOperations(request.Context())
+	updates, stop := s.queries.SubscribeOperations(request.Context())
 	defer stop()
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()

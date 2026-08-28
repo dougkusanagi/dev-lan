@@ -387,5 +387,21 @@ nem coordenam essa persistência diretamente.
 não aplicam artefatos; falhas após o commit restauram a revisão anterior e a
 suíte de aplicação permanece verde.
 
+## R-05e — Transportes na fronteira de aplicação
+
+- [x] Fazer HTTP, CLI e o shell desktop chamarem somente casos de uso, sem
+  coordenar adaptadores diretamente.
+- [x] Ampliar `application.Commands` e `application.Queries` com DTOs e
+  operações tipadas para runtime, PHP, topologia, segurança, diagnóstico,
+  telemetria e operações assíncronas.
+- [x] Manter os adaptadores de domínio/runtime atrás da composição de
+  `internal/app` e adicionar uma regra arquitetural que bloqueia acessos
+  diretos à fachada/adapters nos transportes; integrações de shell, como
+  abrir o navegador ou instalar o componente desktop, continuam explícitas.
+
+**Gate:** handlers HTTP, comandos CLI e bindings Wails passam pela mesma
+fronteira tipada; suíte Go e teste arquitetural passam sem alteração dos
+contratos existentes.
+
 O restante foi migrado para o [roadmap vigente](../ROADMAP.md), sem duplicar
 caixas abertas neste histórico.

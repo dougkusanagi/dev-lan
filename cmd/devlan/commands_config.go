@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/dougkusanagi/dev-lan/internal/app"
+	"github.com/dougkusanagi/dev-lan/internal/application"
 )
 
-func runConfig(ctx context.Context, service *app.App, args []string) error {
+func runConfig(ctx context.Context, commands *application.Commands, queries *application.Queries, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("uso: devlan config export [PATH] | devlan config import PATH")
 	}
@@ -19,7 +19,7 @@ func runConfig(ctx context.Context, service *app.App, args []string) error {
 		if len(args) > 2 {
 			return fmt.Errorf("uso: devlan config export [PATH]")
 		}
-		data, err := service.ExportConfig()
+		data, err := queries.ExportConfig()
 		if err != nil {
 			return err
 		}
@@ -43,7 +43,7 @@ func runConfig(ctx context.Context, service *app.App, args []string) error {
 		if err != nil {
 			return fmt.Errorf("ler importação: %w", err)
 		}
-		result, err := service.ImportConfig(ctx, data)
+		result, err := commands.ImportConfig(ctx, data)
 		printWarnings(result.Warnings)
 		if err != nil {
 			return err

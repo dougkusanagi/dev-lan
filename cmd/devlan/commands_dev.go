@@ -5,33 +5,33 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/dougkusanagi/dev-lan/internal/app"
+	"github.com/dougkusanagi/dev-lan/internal/application"
 )
 
-func runDevCommand(ctx context.Context, service *app.App, args []string) error {
+func runDevCommand(ctx context.Context, commands *application.Commands, queries *application.Queries, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("uso: devlan dev NAME [start|stop|restart|status|logs|--port PORT|--command CMD|--pm PM]")
 	}
 	name := args[0]
 	if len(args) == 1 {
-		return service.StartDev(ctx, name)
+		return commands.StartDev(ctx, name)
 	}
 	switch args[1] {
 	case "start":
-		return service.StartDev(ctx, name)
+		return commands.StartDev(ctx, name)
 	case "stop":
-		return service.StopDev(ctx, name)
+		return commands.StopDev(ctx, name)
 	case "restart":
-		return service.RestartDev(ctx, name)
+		return commands.RestartDev(ctx, name)
 	case "status":
-		st, err := service.DevStatus(ctx, name)
+		st, err := queries.DevStatus(ctx, name)
 		if err != nil {
 			return err
 		}
 		fmt.Printf("Projeto: %s | Porta: %d | Estado: %s | PID: %d\n", st.ProjectName, st.Port, st.State, st.PID)
 		return nil
 	case "logs":
-		logs, err := service.ProjectDevLogs(ctx, name, 100)
+		logs, err := queries.ProjectDevLogs(ctx, name, 100)
 		if err != nil {
 			return err
 		}
@@ -49,7 +49,7 @@ func runDevCommand(ctx context.Context, service *app.App, args []string) error {
 				if err != nil || port < 1024 || port > 65535 {
 					return fmt.Errorf("porta dev inválida: %s", args[i+1])
 				}
-				res, err := service.SetProjectDevPort(ctx, name, port)
+				res, err := commands.SetProjectDevPort(ctx, name, port)
 				printWarnings(res.Warnings)
 				if err != nil {
 					return err
@@ -59,7 +59,7 @@ func runDevCommand(ctx context.Context, service *app.App, args []string) error {
 				if i+1 >= len(args) {
 					return fmt.Errorf("--command exige uma string de comando")
 				}
-				res, err := service.SetProjectDevCommand(ctx, name, args[i+1])
+				res, err := commands.SetProjectDevCommand(ctx, name, args[i+1])
 				printWarnings(res.Warnings)
 				if err != nil {
 					return err
@@ -69,7 +69,7 @@ func runDevCommand(ctx context.Context, service *app.App, args []string) error {
 				if i+1 >= len(args) {
 					return fmt.Errorf("--pm exige um gerenciador (npm, pnpm, yarn, bun)")
 				}
-				res, err := service.SetProjectPackageManager(ctx, name, args[i+1])
+				res, err := commands.SetProjectPackageManager(ctx, name, args[i+1])
 				printWarnings(res.Warnings)
 				if err != nil {
 					return err

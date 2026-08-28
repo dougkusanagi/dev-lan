@@ -97,7 +97,7 @@ func run(args []string) error {
 			}
 			return fmt.Errorf("uso: devlan install [--no-firewall] [--windows-port PORT]")
 		}
-		result, err := service.InstallWithPort(ctx, configureFirewall, windowsPort)
+		result, err := commands.InstallWithPort(ctx, configureFirewall, windowsPort)
 		printWarnings(result.Warnings)
 		if err != nil {
 			return err
@@ -107,7 +107,7 @@ func run(args []string) error {
 		return nil
 
 	case "uninstall":
-		uninstallOptions := app.UninstallOptions{}
+		uninstallOptions := application.UninstallOptions{}
 		asJSON := false
 		for _, argument := range args {
 			switch argument {
@@ -146,7 +146,7 @@ func run(args []string) error {
 				fmt.Fprintf(os.Stderr, "[aviso] não foi possível remover a integração desktop: %v\n", desktopErr)
 			}
 		}
-		result, err := service.UninstallWithOptions(ctx, uninstallOptions)
+		result, err := commands.UninstallWithOptions(ctx, uninstallOptions)
 		printWarnings(result.Warnings)
 		if err != nil {
 			return err
@@ -265,25 +265,25 @@ func run(args []string) error {
 		return runMode(ctx, commands, args)
 
 	case "php":
-		return runPHP(ctx, service, queries, args)
+		return runPHP(ctx, commands, queries, args)
 
 	case "composer":
-		return runComposer(ctx, service, args)
+		return runComposer(ctx, commands, args)
 
 	case "status":
 		if len(args) != 0 {
 			return fmt.Errorf("uso: devlan status")
 		}
-		return printStatus(ctx, queries, service, dataDir)
+		return printStatus(ctx, queries, dataDir)
 
 	case "topology":
-		return runTopology(ctx, service, args)
+		return runTopology(ctx, commands, queries, args)
 
 	case "reload":
 		if len(args) != 0 {
 			return fmt.Errorf("uso: devlan reload")
 		}
-		result, err := service.Reload(ctx)
+		result, err := commands.Reload(ctx)
 		printWarnings(result.Warnings)
 		if err != nil {
 			return err
@@ -295,7 +295,7 @@ func run(args []string) error {
 		if len(args) != 0 {
 			return fmt.Errorf("uso: devlan trust")
 		}
-		if err := service.Trust(ctx); err != nil {
+		if err := commands.Trust(ctx); err != nil {
 			return fmt.Errorf("não foi possível confiar na CA local automaticamente (%w); execute `devlan trust` em PowerShell como Administrador", err)
 		}
 		fmt.Println("Certificado raiz local do Caddy instalado e confiado no sistema.")
@@ -306,7 +306,7 @@ func run(args []string) error {
 			return fmt.Errorf("uso: devlan %s NAME|PATH", command)
 		}
 		enabled := command == "secure"
-		result, projectName, err := service.SetProjectTLS(ctx, args[0], enabled)
+		result, projectName, err := commands.SetProjectTLS(ctx, args[0], enabled)
 		printWarnings(result.Warnings)
 		if err != nil {
 			return err
@@ -328,7 +328,7 @@ func run(args []string) error {
 		if len(args) == 1 {
 			name = args[0]
 		}
-		checks, err := service.Doctor(ctx, name)
+		checks, err := queries.Doctor(ctx, name)
 		if err != nil {
 			return err
 		}
@@ -341,7 +341,7 @@ func run(args []string) error {
 		if len(args) != 1 {
 			return fmt.Errorf("uso: devlan start NAME")
 		}
-		if err := service.StartDev(ctx, args[0]); err != nil {
+		if err := commands.StartDev(ctx, args[0]); err != nil {
 			return err
 		}
 		fmt.Printf("Servidor dev iniciado para %s.\n", args[0])
@@ -351,7 +351,7 @@ func run(args []string) error {
 		if len(args) != 1 {
 			return fmt.Errorf("uso: devlan stop NAME")
 		}
-		if err := service.StopDev(ctx, args[0]); err != nil {
+		if err := commands.StopDev(ctx, args[0]); err != nil {
 			return err
 		}
 		fmt.Printf("Servidor dev parado para %s.\n", args[0])
@@ -361,7 +361,7 @@ func run(args []string) error {
 		if len(args) != 1 {
 			return fmt.Errorf("uso: devlan restart NAME")
 		}
-		if err := service.RestartDev(ctx, args[0]); err != nil {
+		if err := commands.RestartDev(ctx, args[0]); err != nil {
 			return err
 		}
 		fmt.Printf("Servidor dev reiniciado para %s.\n", args[0])
@@ -371,7 +371,7 @@ func run(args []string) error {
 		if len(args) != 1 {
 			return fmt.Errorf("uso: devlan build NAME")
 		}
-		out, err := service.BuildProject(ctx, args[0])
+		out, err := commands.BuildProject(ctx, args[0])
 		fmt.Print(out)
 		return err
 
@@ -386,7 +386,7 @@ func run(args []string) error {
 			}
 			name = args[1]
 		}
-		out, err := service.InstallDeps(ctx, name)
+		out, err := commands.InstallDeps(ctx, name)
 		fmt.Print(out)
 		return err
 
@@ -398,7 +398,7 @@ func run(args []string) error {
 		if len(args) == 2 {
 			dir = args[1]
 		}
-		res, err := service.SetProjectStaticDir(ctx, args[0], dir)
+		res, err := commands.SetProjectStaticDir(ctx, args[0], dir)
 		printWarnings(res.Warnings)
 		if err != nil {
 			return err
@@ -407,7 +407,7 @@ func run(args []string) error {
 		return nil
 
 	case "dev":
-		return runDevCommand(ctx, service, args)
+		return runDevCommand(ctx, commands, queries, args)
 
 	case "logs":
 		if len(args) > 1 {
@@ -417,10 +417,10 @@ func run(args []string) error {
 		if len(args) == 1 {
 			component = args[0]
 		}
-		logs, err := service.Logs(component)
+		logs, err := queries.Logs(component)
 		if err != nil {
 			// check if it's a dev project log
-			devLog, devErr := service.ProjectDevLogs(ctx, component, 100)
+			devLog, devErr := queries.ProjectDevLogs(ctx, component, 100)
 			if devErr == nil && devLog != "" {
 				fmt.Print(devLog)
 				return nil
@@ -437,7 +437,7 @@ func run(args []string) error {
 		if len(args) == 0 {
 			return printProjects(ctx, queries, "", false)
 		}
-		url, err := service.Open(ctx, args[0])
+		url, err := commands.Open(ctx, args[0])
 		fmt.Println(url)
 		if err != nil {
 			return fmt.Errorf("URL calculada, mas não foi possível abrir o navegador: %w", err)
@@ -445,34 +445,34 @@ func run(args []string) error {
 		return nil
 
 	case "route":
-		return runRoute(ctx, service, queries, args)
+		return runRoute(ctx, commands, queries, args)
 
 	case "expose":
-		return runExpose(ctx, service, args)
+		return runExpose(ctx, commands, args)
 
 	case "unexpose":
-		return runUnexpose(ctx, service, args)
+		return runUnexpose(ctx, commands, args)
 
 	case "allowlist":
-		return runAllowlist(ctx, service, queries, args)
+		return runAllowlist(ctx, commands, queries, args)
 
 	case "auth":
-		return runAuth(ctx, service, args)
+		return runAuth(ctx, commands, args)
 
 	case "ca":
-		return runCA(ctx, service, args)
+		return runCA(ctx, commands, queries, args)
 
 	case "gui":
-		return runGUI(ctx, service, queries, dataDir, args)
+		return runGUI(ctx, service, commands, queries, dataDir, args)
 
 	case "desktop":
 		return runDesktop(ctx, dataDir, args)
 
 	case "security":
-		return runSecurity(ctx, service, queries, args)
+		return runSecurity(ctx, commands, queries, args)
 
 	case "config":
-		return runConfig(ctx, service, args)
+		return runConfig(ctx, commands, queries, args)
 
 	case "diagnostic":
 		if len(args) > 1 {
@@ -482,7 +482,7 @@ func run(args []string) error {
 		if len(args) == 1 {
 			target = args[0]
 		}
-		path, err := service.DiagnosticBundle(ctx, target)
+		path, err := commands.DiagnosticBundle(ctx, target)
 		if err != nil {
 			return err
 		}
@@ -490,7 +490,7 @@ func run(args []string) error {
 		return nil
 
 	case "api":
-		return runAPI(ctx, service, args)
+		return runAPI(ctx, service, commands, queries, args)
 
 	case "service":
 		return runBackgroundService(ctx, dataDir, args)
@@ -499,7 +499,7 @@ func run(args []string) error {
 		return runStartup(ctx, dataDir, args)
 
 	case "telemetry":
-		return runTelemetry(ctx, service, args)
+		return runTelemetry(ctx, commands, queries, args)
 
 	case "update":
 		return runUpdate(ctx, args)

@@ -1,7 +1,7 @@
 # Estado atual
 
 **Verificado em:** 28/08/2026
-**Branch de desenvolvimento:** `dev`
+**Branch de desenvolvimento:** `refactor/r-01-r-09`
 
 O DevLAN já funciona como um control plane Go no Windows com execution plane
 WSL. Mantém projetos e configuração versionados, gera e aplica um único
@@ -21,6 +21,9 @@ Wails opcional.
 - cache de read model com lifecycle explícito por servidor, sem registry global;
 - comandos e consultas de aplicação explícitos para as fatias críticas de
   projeto, configuração, modo e read model, usados por HTTP, CLI e Wails;
+- HTTP, CLI e Wails convergem nas fachadas tipadas de `application.Commands` e
+  `application.Queries`; adaptadores de domínio/runtime só são compostos no
+  bootstrap;
 - reconciliador real de mutações com plan/apply/verify, revisão otimista,
   journal e rollback de configuração, artefatos e runtime;
 - métricas incrementais e limitadas, atribuídas por metadado confiável do Caddy,
@@ -41,11 +44,10 @@ As tarefas e critérios de aceite ficam em [ROADMAP.md](ROADMAP.md).
 ## Dívida conhecida
 
 - `internal/app.App`, `internal/api` e `cmd/devlan` ainda acumulam responsabilidades;
-- operações fora das fatias críticas de R-05c ainda chamam diretamente a fachada
-  legada de `internal/app` e serão convergidas em R-05e;
 - ainda há globais por ponteiro, DTOs duplicados e listas genéricas exigidas por
   integrações de framework;
-- CLI, HTTP e Wails ainda não convergem integralmente nos mesmos casos de uso;
+- a porta estendida de aplicação ainda será decomposta em portas menores em
+  R-06;
 - timeouts HTTP/SSE, permissões do estado, bundles de suporte e lifecycle
   concorrente precisam de testes adicionais;
 - validação completa exige máquinas Windows+WSL reais e não deve ser simulada

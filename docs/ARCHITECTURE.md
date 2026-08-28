@@ -56,12 +56,12 @@ sua API administrativa também é loopback-only.
 clientes Caddy legados ficam privados ao pacote e só participam de migração ou
 rollback explícitos.
 
-As fatias críticas de projeto, configuração, modo e read model são compostas
-por `application.Commands`/`application.Queries`; HTTP e Wails compartilham as
-instâncias do servidor, enquanto a CLI compõe as mesmas abstrações. O caminho
-compartilhado de salvar/aplicar e reload usa o reconciliador de aplicação sob o
-lock do Store; as demais operações ainda usam a fachada de `internal/app` e
-serão migradas em R-05e.
+Todas as mutações e consultas usadas por HTTP, CLI e Wails atravessam
+`application.Commands`/`application.Queries`; HTTP e Wails compartilham as
+instâncias compostas pelo shell, enquanto a CLI compõe as mesmas abstrações.
+`internal/app` implementa a fronteira de valores e mantém os adaptadores
+privados à composição. A porta estendida ainda será decomposta em portas
+menores em R-06.
 
 O fluxo de mutação converge em persistir a intenção e reconciliar recursos por
 `plan → validate → stage → commit → reload → healthcheck`, com recuperação por
@@ -94,15 +94,14 @@ editados manualmente. Detalhes estão em
 
 ### Limitações estruturais atuais
 
-Os fluxos funcionam, e as fatias críticas já atravessam `application`, mas
+Os fluxos funcionam, e todos os transportes atravessam `application`, mas
 `app.App`, API e CLI ainda concentram responsabilidades. As implementações de
 `internal/app`, `internal/api`, `cmd/devlan` e `internal/domain` já estão
-divididas por assunto, porém há DTOs duplicados, operações fora da fatia crítica
-que ainda usam a fachada legada, registros genéricos de integrações de framework
-e orquestração repetida no Wails. O cache de read model é criado e encerrado pelo
-`api.Server`, mas ainda há pontos que dificultam testes de lifecycle e fazem uma
-mudança atravessar arquivos grandes. A solução é evolução incremental orientada
-por testes, não uma troca de stack.
+divididas por assunto, porém há uma porta estendida temporária, DTOs de
+compatibilidade e registros genéricos de integrações de framework. O cache de
+read model é criado e encerrado pelo `api.Server`, mas ainda há pontos que
+dificultam testes de lifecycle e fazem uma mudança atravessar arquivos grandes.
+A solução é evolução incremental orientada por testes, não uma troca de stack.
 
 ## Arquitetura alvo
 

@@ -3,6 +3,7 @@ package architecture
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -61,6 +62,41 @@ func TestRoutingModesCannotReturn(t *testing.T) {
 		})
 		if err != nil {
 			t.Fatalf("inspecionar arquitetura em %s: %v", directory, err)
+		}
+	}
+}
+
+// TestTransportsUseApplicationBoundary guards R-05e. Transport packages may
+// compose an App or a shell adapter at startup, but request/command handlers
+// must not reach through it to coordinate persistence or runtime adapters.
+func TestTransportsUseApplicationBoundary(t *testing.T) {
+	root := filepath.Join("..", "..")
+	directAdapter := regexp.MustCompile(`(?m)\b(?:service|a|s)\.(?:Store|WSL|PHP|Dev|Firewall|Telemetry|Detector|Caddy)\b`)
+	directStore := regexp.MustCompile(`(?m)\bconfig\.Store\b`)
+	for _, relative := range []string{"cmd/devlan", "internal/api", "internal/gui"} {
+		directory := filepath.Join(root, relative)
+		err := filepath.Walk(directory, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			text := string(data)
+			if directAdapter.MatchString(text) {
+				t.Errorf("transporte acessa adapter através de fachada em %s", path)
+			}
+			if directStore.MatchString(text) {
+				t.Errorf("transporte acessa config.Store em %s", path)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("inspecionar transporte em %s: %v", relative, err)
 		}
 	}
 }

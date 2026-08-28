@@ -40,12 +40,12 @@ func (s *Server) handleProjectLogs(writer http.ResponseWriter, request *http.Req
 	if l, err := strconv.Atoi(linesStr); err == nil && l > 0 {
 		lines = l
 	}
-	devLogs, err := s.service.ProjectDevLogs(request.Context(), name, lines)
+	devLogs, err := s.queries.ProjectDevLogs(request.Context(), name, lines)
 	if err == nil && strings.TrimSpace(devLogs) != "" {
 		writeJSON(writer, http.StatusOK, LogsResponse{Logs: devLogs})
 		return
 	}
-	globalLogs, _ := s.service.Logs("devlan")
+	globalLogs, _ := s.queries.Logs("devlan")
 	writeJSON(writer, http.StatusOK, LogsResponse{Logs: fmt.Sprintf("Nenhum log de servidor dev para %s.\n\nLogs do DevLAN:\n%s", name, globalLogs)})
 }
 
@@ -150,7 +150,7 @@ func (s *Server) handleProjectConfig(writer http.ResponseWriter, request *http.R
 		target := *update.TLSEnabled
 		s.startAsyncOperation(writer, request, "tls", update.Name, update.OperationID, 90*time.Second,
 			func(workCtx context.Context) (uint64, []string, error) {
-				result, _, err := s.service.SetProjectTLS(workCtx, update.Name, target)
+				result, _, err := s.commands.SetProjectTLS(workCtx, update.Name, target)
 				return result.Revision, result.Warnings, err
 			})
 		return
@@ -167,19 +167,19 @@ func (s *Server) handleProjectConfig(writer http.ResponseWriter, request *http.R
 		}
 	}
 	if update.TLSEnabled != nil {
-		if _, _, err := s.service.SetProjectTLS(ctx, update.Name, *update.TLSEnabled); err != nil {
+		if _, _, err := s.commands.SetProjectTLS(ctx, update.Name, *update.TLSEnabled); err != nil {
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
 		}
 	}
 	if update.PHPVersion != "" {
-		if _, err := s.service.SetProjectPHPVersion(ctx, update.Name, update.PHPVersion); err != nil {
+		if _, err := s.commands.SetProjectPHPVersion(ctx, update.Name, update.PHPVersion); err != nil {
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
 		}
 	}
 	if update.PHPPreset != "" {
-		if _, err := s.service.SetProjectPHPPreset(ctx, update.Name, update.PHPPreset); err != nil {
+		if _, err := s.commands.SetProjectPHPPreset(ctx, update.Name, update.PHPPreset); err != nil {
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
 		}
@@ -189,7 +189,7 @@ func (s *Server) handleProjectConfig(writer http.ResponseWriter, request *http.R
 		if !update.RoutePortAuto {
 			port = update.RoutePort
 		}
-		result, err := s.service.SetRoutePort(ctx, update.Name, port)
+		result, err := s.commands.SetRoutePort(ctx, update.Name, port)
 		if err != nil {
 			writeApplyError(writer, http.StatusConflict, result, err)
 			return
@@ -202,19 +202,19 @@ func (s *Server) handleProjectConfig(writer http.ResponseWriter, request *http.R
 		return
 	}
 	if update.StaticDir != "" {
-		if _, err := s.service.SetProjectStaticDir(ctx, update.Name, update.StaticDir); err != nil {
+		if _, err := s.commands.SetProjectStaticDir(ctx, update.Name, update.StaticDir); err != nil {
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
 		}
 	}
 	if update.DevCommand != "" {
-		if _, err := s.service.SetProjectDevCommand(ctx, update.Name, update.DevCommand); err != nil {
+		if _, err := s.commands.SetProjectDevCommand(ctx, update.Name, update.DevCommand); err != nil {
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
 		}
 	}
 	if update.DevPort > 0 {
-		if _, err := s.service.SetProjectDevPort(ctx, update.Name, update.DevPort); err != nil {
+		if _, err := s.commands.SetProjectDevPort(ctx, update.Name, update.DevPort); err != nil {
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
 		}
@@ -245,7 +245,7 @@ func (s *Server) handleProjectStart(writer http.ResponseWriter, request *http.Re
 	}
 	s.startAsyncOperation(writer, request, "start", input.Name, input.OperationID, 90*time.Second,
 		func(ctx context.Context) (uint64, []string, error) {
-			err := s.service.StartDev(ctx, input.Name)
+			err := s.commands.StartDev(ctx, input.Name)
 			return s.currentRevision(ctx), nil, err
 		})
 }
@@ -265,7 +265,7 @@ func (s *Server) handleProjectStop(writer http.ResponseWriter, request *http.Req
 	}
 	s.startAsyncOperation(writer, request, "stop", input.Name, input.OperationID, 45*time.Second,
 		func(ctx context.Context) (uint64, []string, error) {
-			err := s.service.StopDev(ctx, input.Name)
+			err := s.commands.StopDev(ctx, input.Name)
 			return s.currentRevision(ctx), nil, err
 		})
 }
@@ -285,7 +285,7 @@ func (s *Server) handleProjectRestart(writer http.ResponseWriter, request *http.
 	}
 	s.startAsyncOperation(writer, request, "restart", input.Name, input.OperationID, 90*time.Second,
 		func(ctx context.Context) (uint64, []string, error) {
-			err := s.service.RestartDev(ctx, input.Name)
+			err := s.commands.RestartDev(ctx, input.Name)
 			return s.currentRevision(ctx), nil, err
 		})
 }
@@ -302,7 +302,7 @@ func (s *Server) handleProjectBuild(writer http.ResponseWriter, request *http.Re
 		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
 		return
 	}
-	out, err := s.service.BuildProject(request.Context(), input.Name)
+	out, err := s.commands.BuildProject(request.Context(), input.Name)
 	if err != nil {
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
@@ -322,7 +322,7 @@ func (s *Server) handleProjectDeps(writer http.ResponseWriter, request *http.Req
 		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
 		return
 	}
-	out, err := s.service.InstallDeps(request.Context(), input.Name)
+	out, err := s.commands.InstallDeps(request.Context(), input.Name)
 	if err != nil {
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
@@ -346,7 +346,7 @@ func (s *Server) handleProjectTLS(writer http.ResponseWriter, request *http.Requ
 	}
 	s.startAsyncOperation(writer, request, "tls", input.Name, input.OperationID, 90*time.Second,
 		func(ctx context.Context) (uint64, []string, error) {
-			result, _, err := s.service.SetProjectTLS(ctx, input.Name, input.Enabled)
+			result, _, err := s.commands.SetProjectTLS(ctx, input.Name, input.Enabled)
 			return result.Revision, result.Warnings, err
 		})
 }

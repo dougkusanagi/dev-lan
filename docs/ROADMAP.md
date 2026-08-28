@@ -13,9 +13,6 @@ Subtarefas já entregues estão registradas em
 
 ### R-05 — Casos de uso e reconciliação
 
-- [ ] `R-05e` Fazer HTTP, CLI e o shell desktop chamarem somente casos de uso,
-  sem coordenar adaptadores diretamente.
-
 ### R-06 — Portas e adaptadores
 
 - [ ] `R-06b` Fazer os casos de uso consumirem portas pequenas para Store,

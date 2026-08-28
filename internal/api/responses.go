@@ -1,10 +1,8 @@
 package api
 
 import (
-	"github.com/dougkusanagi/dev-lan/internal/app"
 	"github.com/dougkusanagi/dev-lan/internal/application"
 	"github.com/dougkusanagi/dev-lan/internal/metrics"
-	"github.com/dougkusanagi/dev-lan/internal/platform"
 )
 
 // ErrorResponse is the stable error envelope shared by all HTTP handlers.
@@ -60,20 +58,20 @@ type HealthResponse struct {
 // Pointers distinguish omitted command-specific fields from values that the
 // legacy map response emitted explicitly, including null warnings.
 type CommandResponse struct {
-	Command       string                           `json:"command"`
-	Message       *string                          `json:"message,omitempty"`
-	Warnings      *[]string                        `json:"warnings,omitempty"`
-	Error         string                           `json:"error,omitempty"`
-	Projects      *[]ProjectView                   `json:"projects,omitempty"`
-	Status        *SystemStatusView                `json:"status,omitempty"`
-	Topology      *platform.TopologySnapshot       `json:"topology,omitempty"`
-	Caddy         *platform.CaddyServiceStatus     `json:"caddy,omitempty"`
-	Compatibility *platform.WSLCompatibilityReport `json:"compatibility,omitempty"`
-	Result        *application.ApplyResult         `json:"result,omitempty"`
-	Allocations   *[]app.RouteAllocation           `json:"allocations,omitempty"`
-	Paths         *[]string                        `json:"paths,omitempty"`
-	Checks        *[]app.Check                     `json:"checks,omitempty"`
-	URL           *string                          `json:"url,omitempty"`
+	Command       string                              `json:"command"`
+	Message       *string                             `json:"message,omitempty"`
+	Warnings      *[]string                           `json:"warnings,omitempty"`
+	Error         string                              `json:"error,omitempty"`
+	Projects      *[]ProjectView                      `json:"projects,omitempty"`
+	Status        *SystemStatusView                   `json:"status,omitempty"`
+	Topology      *application.TopologyStatus         `json:"topology,omitempty"`
+	Caddy         *application.CaddyStatus            `json:"caddy,omitempty"`
+	Compatibility *application.WSLCompatibilityReport `json:"compatibility,omitempty"`
+	Result        *application.ApplyResult            `json:"result,omitempty"`
+	Allocations   *[]application.RouteAllocation      `json:"allocations,omitempty"`
+	Paths         *[]string                           `json:"paths,omitempty"`
+	Checks        *[]application.DoctorCheck          `json:"checks,omitempty"`
+	URL           *string                             `json:"url,omitempty"`
 }
 
 // responsePayload is deliberately closed. A handler can only serialize one
@@ -97,7 +95,7 @@ type responsePayload interface {
 		MutationResult |
 		[]PHPVersionView |
 		[]DoctorCheckView |
-		app.TopologySnapshot |
+		application.TopologySnapshot |
 		*metrics.Snapshot |
 		CommandResponse
 }

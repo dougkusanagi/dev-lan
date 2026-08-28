@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dougkusanagi/dev-lan/internal/app"
+	"github.com/dougkusanagi/dev-lan/internal/application"
 )
 
 type operationWork func(context.Context) (revision uint64, warnings []string, workErr error)
@@ -26,18 +26,18 @@ func operationIDOrNew(id string) string {
 		}
 		return id
 	}
-	return app.NewOperationID()
+	return application.NewOperationID()
 }
 
 func (s *Server) startAsyncOperation(writer http.ResponseWriter, request *http.Request, operation, project, requestedID string, timeout time.Duration, work operationWork) {
 	id := operationIDOrNew(requestedID)
-	state, existed, err := s.service.BeginOperation(id, operation, project)
+	state, existed, err := s.commands.BeginOperation(id, operation, project)
 	if err != nil {
 		writeJSONError(writer, http.StatusBadRequest, err.Error())
 		return
 	}
 	if !existed {
-		s.service.SetOperationTransport(id, "http")
+		s.commands.SetOperationTransport(id, "http")
 		go s.runAsyncOperation(id, operation, project, timeout, work)
 	}
 	writeJSON(writer, http.StatusAccepted, s.operationResult(request.Context(), state))
@@ -52,7 +52,7 @@ func (s *Server) runAsyncOperation(id, operation, project string, timeout time.D
 	} else if operation == "stop" {
 		phase = "stopping"
 	}
-	s.service.UpdateOperation(id, phase, phase, 0, nil, nil, nil)
+	s.commands.UpdateOperation(id, phase, phase, 0, nil, nil, nil)
 	revision, warnings, err := work(ctx)
 	terminal := "ready"
 	if operation == "stop" {
@@ -71,14 +71,14 @@ func (s *Server) runAsyncOperation(id, operation, project string, timeout time.D
 	} else {
 		s.InvalidateReadModelCache()
 	}
-	state := s.service.UpdateOperation(id, terminal, terminal, revision, nil, warnings, err)
+	state := s.commands.UpdateOperation(id, terminal, terminal, revision, nil, warnings, err)
 	if state.OperationID == "" {
 		return
 	}
 }
 
 func (s *Server) operationResponse(ctx context.Context, id string) (MutationResult, bool) {
-	state, ok := s.service.Operation(id)
+	state, ok := s.queries.Operation(id)
 	if !ok {
 		return MutationResult{}, false
 	}

@@ -16,7 +16,7 @@ func (s *Server) Handler(token ...string) http.Handler {
 	if len(token) > 0 {
 		secret = token[0]
 	} else {
-		loaded, err := readToken(s.service.APIEndpointFiles().Token)
+		loaded, err := readToken(s.queries.EndpointFiles().Token)
 		if err == nil {
 			secret = loaded
 		}

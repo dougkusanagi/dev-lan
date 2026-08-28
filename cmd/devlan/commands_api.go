@@ -8,11 +8,12 @@ import (
 
 	localapi "github.com/dougkusanagi/dev-lan/internal/api"
 	"github.com/dougkusanagi/dev-lan/internal/app"
+	"github.com/dougkusanagi/dev-lan/internal/application"
 )
 
-func runAPI(ctx context.Context, service *app.App, args []string) error {
+func runAPI(ctx context.Context, service *app.App, commands *application.Commands, queries *application.Queries, args []string) error {
 	if len(args) == 0 || args[0] == "serve" {
-		server := localapi.New(service)
+		server := localapi.NewWithApplication(service, commands, queries)
 		endpoint, err := server.Start()
 		if err != nil {
 			return err
@@ -22,7 +23,7 @@ func runAPI(ctx context.Context, service *app.App, args []string) error {
 		return server.Close(context.Background())
 	}
 	if args[0] == "status" && len(args) == 1 {
-		client := localapi.NewClient(service)
+		client := localapi.NewClientFromFiles(queries.EndpointFiles())
 		response, err := client.Do(ctx, http.MethodGet, "/v1/health", nil)
 		if err != nil {
 			return fmt.Errorf("API local indisponível: %w", err)

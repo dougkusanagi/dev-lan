@@ -115,12 +115,6 @@ func (a *App) SetRoutePort(ctx context.Context, selector string, port *int) (App
 	return result, err
 }
 
-type RouteAllocation struct {
-	Path   string `json:"path"`
-	Port   int    `json:"port"`
-	Orphan bool   `json:"orphan"`
-}
-
 // RouteAllocations returns the persisted automatic assignments without
 // triggering discovery or changing state. An orphan is merely reported; it
 // remains reserved until the explicit prune command is used.

@@ -9,15 +9,13 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/dougkusanagi/dev-lan/internal/app"
 	"github.com/dougkusanagi/dev-lan/internal/application"
 	"github.com/dougkusanagi/dev-lan/internal/domain"
-	"github.com/dougkusanagi/dev-lan/internal/platform"
 )
 
-func runRoute(ctx context.Context, service *app.App, queries *application.Queries, args []string) error {
+func runRoute(ctx context.Context, commands *application.Commands, queries *application.Queries, args []string) error {
 	if len(args) > 0 && args[0] == "allocations" {
-		return runRouteAllocations(ctx, service, args[1:])
+		return runRouteAllocations(ctx, commands, queries, args[1:])
 	}
 	if len(args) == 0 {
 		cfg, err := queries.Config(ctx)
@@ -37,7 +35,7 @@ func runRoute(ctx context.Context, service *app.App, queries *application.Querie
 			if p.RoutePort != nil {
 				override = "customizada"
 			}
-			fmt.Fprintf(writer, "%s\t%d\t%s\t%s\t%s\n", p.Name, port, domain.LocalDevURL(p.Name), routeURL(cfg, p, port), override)
+			fmt.Fprintf(writer, "%s\t%d\t%s\t%s\t%s\n", p.Name, port, domain.LocalDevURL(p.Name), routeURL(cfg, p, port, queries.LANAddress()), override)
 		}
 		if err := writer.Flush(); err != nil {
 			return err
@@ -64,7 +62,7 @@ func runRoute(ctx context.Context, service *app.App, queries *application.Querie
 			override = "customizada"
 		}
 		fmt.Printf("Projeto %s: porta LAN %d (%s)\n", name, eff.EffectiveRoutePort(p), override)
-		fmt.Printf("Local: %s\nLAN: %s\n", domain.LocalDevURL(p.Name), routeURL(cfg, p, eff.EffectiveRoutePort(p)))
+		fmt.Printf("Local: %s\nLAN: %s\n", domain.LocalDevURL(p.Name), routeURL(cfg, p, eff.EffectiveRoutePort(p), queries.LANAddress()))
 		fmt.Println("\n💡 Nota: Na rede local (LAN), cookies HTTP não são isolados por porta no mesmo IP.")
 		return nil
 	}
@@ -79,7 +77,7 @@ func runRoute(ctx context.Context, service *app.App, queries *application.Querie
 		}
 		port = &parsed
 	}
-	res, err := service.SetRoutePort(ctx, name, port)
+	res, err := commands.SetRoutePort(ctx, name, port)
 	printWarnings(res.Warnings)
 	if err != nil {
 		return err
@@ -88,9 +86,9 @@ func runRoute(ctx context.Context, service *app.App, queries *application.Querie
 	return nil
 }
 
-func runRouteAllocations(ctx context.Context, service *app.App, args []string) error {
+func runRouteAllocations(ctx context.Context, commands *application.Commands, queries *application.Queries, args []string) error {
 	if len(args) == 0 {
-		allocations, err := service.RouteAllocations(ctx)
+		allocations, err := queries.RouteAllocations(ctx)
 		if err != nil {
 			return err
 		}
@@ -118,7 +116,7 @@ func runRouteAllocations(ctx context.Context, service *app.App, args []string) e
 	} else if len(args) != 1 {
 		return fmt.Errorf("uso: devlan route allocations prune [--dry-run]")
 	}
-	paths, result, err := service.PruneRouteAllocations(ctx, dryRun)
+	paths, result, err := commands.PruneRouteAllocations(ctx, dryRun)
 	printWarnings(result.Warnings)
 	if err != nil {
 		return err
@@ -138,19 +136,15 @@ func runRouteAllocations(ctx context.Context, service *app.App, args []string) e
 	return nil
 }
 
-func routeURL(cfg domain.Config, project domain.Project, port int) string {
-	host := cfg.LANAddress
+func routeURL(cfg domain.Config, project domain.Project, port int, host string) string {
 	if host == "" || host == "auto" {
-		host, _ = platform.LANAddress()
-		if host == "" {
-			host = "localhost"
-		}
+		host = "localhost"
 	}
 	resolved := domain.ResolvedProject{Project: project, RoutePort: port}
 	return resolved.URL(host, cfg.WindowsPort, cfg.HTTPSPort, cfg.SecureProject(project))
 }
 
-func runExpose(ctx context.Context, service *app.App, args []string) error {
+func runExpose(ctx context.Context, commands *application.Commands, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("uso: devlan expose NAME [--duration 30m|1h|2h]")
 	}
@@ -169,7 +163,7 @@ func runExpose(ctx context.Context, service *app.App, args []string) error {
 			return fmt.Errorf("opção desconhecida %s", arg)
 		}
 	}
-	res, projName, err := service.ExposeProject(ctx, name, duration)
+	res, projName, err := commands.ExposeProject(ctx, name, duration)
 	printWarnings(res.Warnings)
 	if err != nil {
 		return err
@@ -182,11 +176,11 @@ func runExpose(ctx context.Context, service *app.App, args []string) error {
 	return nil
 }
 
-func runUnexpose(ctx context.Context, service *app.App, args []string) error {
+func runUnexpose(ctx context.Context, commands *application.Commands, args []string) error {
 	if len(args) != 1 {
 		return fmt.Errorf("uso: devlan unexpose NAME")
 	}
-	res, projName, err := service.UnexposeProject(ctx, args[0])
+	res, projName, err := commands.UnexposeProject(ctx, args[0])
 	printWarnings(res.Warnings)
 	if err != nil {
 		return err
@@ -195,7 +189,7 @@ func runUnexpose(ctx context.Context, service *app.App, args []string) error {
 	return nil
 }
 
-func runAllowlist(ctx context.Context, service *app.App, queries *application.Queries, args []string) error {
+func runAllowlist(ctx context.Context, commands *application.Commands, queries *application.Queries, args []string) error {
 	if len(args) == 0 {
 		cfg, err := queries.Config(ctx)
 		if err != nil {
@@ -224,7 +218,7 @@ func runAllowlist(ctx context.Context, service *app.App, queries *application.Qu
 		if len(args) < 3 {
 			return fmt.Errorf("uso: devlan allowlist set default|NAME CIDR...")
 		}
-		res, err := service.SetAllowlist(ctx, args[1], args[2:])
+		res, err := commands.SetAllowlist(ctx, args[1], args[2:])
 		printWarnings(res.Warnings)
 		if err != nil {
 			return err
@@ -235,7 +229,7 @@ func runAllowlist(ctx context.Context, service *app.App, queries *application.Qu
 		if len(args) < 3 {
 			return fmt.Errorf("uso: devlan allowlist add default|NAME CIDR...")
 		}
-		res, err := service.AddAllowlist(ctx, args[1], args[2:])
+		res, err := commands.AddAllowlist(ctx, args[1], args[2:])
 		printWarnings(res.Warnings)
 		if err != nil {
 			return err
@@ -246,7 +240,7 @@ func runAllowlist(ctx context.Context, service *app.App, queries *application.Qu
 		if len(args) < 3 {
 			return fmt.Errorf("uso: devlan allowlist remove default|NAME CIDR...")
 		}
-		res, err := service.RemoveAllowlist(ctx, args[1], args[2:])
+		res, err := commands.RemoveAllowlist(ctx, args[1], args[2:])
 		printWarnings(res.Warnings)
 		if err != nil {
 			return err
@@ -257,7 +251,7 @@ func runAllowlist(ctx context.Context, service *app.App, queries *application.Qu
 		if len(args) != 2 {
 			return fmt.Errorf("uso: devlan allowlist clear default|NAME")
 		}
-		res, err := service.ClearAllowlist(ctx, args[1])
+		res, err := commands.ClearAllowlist(ctx, args[1])
 		printWarnings(res.Warnings)
 		if err != nil {
 			return err

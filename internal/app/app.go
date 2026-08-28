@@ -11,6 +11,7 @@ import (
 
 	"github.com/dougkusanagi/dev-lan/internal/config"
 	"github.com/dougkusanagi/dev-lan/internal/detect"
+	"github.com/dougkusanagi/dev-lan/internal/metrics"
 	"github.com/dougkusanagi/dev-lan/internal/platform"
 	"github.com/dougkusanagi/dev-lan/internal/telemetry"
 )
@@ -50,6 +51,8 @@ type App struct {
 	operationMu          sync.Mutex
 	operations           map[string]OperationState
 	operationSubscribers map[*operationSubscriber]struct{}
+	metricsMu            sync.Mutex
+	metricsCollectors    map[string]*metrics.Collector
 }
 
 func (a *App) edgeCaddy() platform.CaddyClient {

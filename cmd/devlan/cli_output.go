@@ -9,10 +9,8 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/dougkusanagi/dev-lan/internal/app"
 	"github.com/dougkusanagi/dev-lan/internal/application"
 	"github.com/dougkusanagi/dev-lan/internal/domain"
-	"github.com/dougkusanagi/dev-lan/internal/platform"
 )
 
 func printProjects(ctx context.Context, queries *application.Queries, filter string, asJSON bool) error {
@@ -20,19 +18,11 @@ func printProjects(ctx context.Context, queries *application.Queries, filter str
 	if err != nil {
 		return err
 	}
-	effective, err := queries.EffectiveConfig(
-		platform.WithWSLOperation(ctx, platform.WSLOperationDiscovery), cfg,
-	)
+	effective, err := queries.EffectiveConfig(ctx, cfg)
 	if err != nil {
 		return err
 	}
-	host := cfg.LANAddress
-	if host == "auto" {
-		host, err = platform.LANAddress()
-		if err != nil {
-			host = "localhost"
-		}
-	}
+	host := queries.LANAddress()
 	if len(effective.Projects) == 0 {
 		if asJSON {
 			fmt.Println("[]")
@@ -143,22 +133,21 @@ func sslState(enabled bool) string {
 	return "off"
 }
 
-func printStatus(ctx context.Context, queries *application.Queries, service *app.App, dataDir string) error {
-	ctx = platform.WithWSLOperation(ctx, platform.WSLOperationStatus)
+func printStatus(ctx context.Context, queries *application.Queries, dataDir string) error {
 	cfg, err := queries.Config(ctx)
 	if err != nil {
 		return err
 	}
-	if current, generated, diverged := service.CheckLANAddressDivergence(); diverged {
+	if current, generated, diverged := queries.CheckLANAddressDivergence(); diverged {
 		fmt.Fprintf(os.Stderr, "[aviso] O IP da rede local mudou de %s para %s. Execute `devlan reload` para atualizar o Caddy.\n", generated, current)
 	}
-	fmt.Printf("DevLAN %s (%s)\n", version, app.RuntimeDescription())
+	fmt.Printf("DevLAN %s (%s)\n", version, application.RuntimeDescription())
 	fmt.Printf("Dados: %s\n", dataDir)
 	fmt.Printf("Padrão: %s | LAN HTTP: %d | LAN HTTPS: %d | SSL: %s | pool: %d-%d\n", cfg.DefaultMode, cfg.WindowsPort, cfg.HTTPSPort, sslState(cfg.TLSEnabled), cfg.RouteBasePort, cfg.RouteBasePort+cfg.RoutePortCount-1)
-	caddyStatus := service.CaddyStatus(ctx)
-	topology := service.CaddyTopologyStatus(ctx)
+	caddyStatus := queries.CaddyStatus(ctx)
+	topology := queries.TopologyStatus(ctx)
 	fmt.Printf("Caddy WSL único: disponível=%t ativo=%t systemd=%t live=%t | topologia=%s\n", caddyStatus.Available, caddyStatus.Running, caddyStatus.Systemd, caddyStatus.Live, topology.Topology)
-	if versions, versionErr := service.PHPVersions(ctx); versionErr == nil {
+	if versions, versionErr := queries.PHPVersions(ctx); versionErr == nil {
 		labels := make([]string, 0, len(versions))
 		for _, version := range versions {
 			status := "detectada"
@@ -184,19 +173,19 @@ func printWarnings(warnings []string) {
 	}
 }
 
-func printUninstallPlan(plan app.UninstallPlan, dryRun bool) {
+func printUninstallPlan(plan application.UninstallPlan, dryRun bool) {
 	if dryRun {
 		fmt.Println("Plano de desinstalação (nenhuma alteração foi feita):")
 	} else {
 		fmt.Println("Resultado da desinstalação:")
 	}
-	counts := map[app.UninstallAction]int{}
+	counts := map[application.UninstallAction]int{}
 	for _, item := range plan.Items {
 		counts[item.Action]++
 		fmt.Printf("  %-9s %-24s %s\n", item.Action, item.ID, item.Detail)
 	}
 	fmt.Printf("Resumo: remover=%d restaurar=%d preservar=%d conflito=%d pendente=%d falha=%d\n",
-		counts[app.UninstallRemove], counts[app.UninstallRestore], counts[app.UninstallPreserve], counts[app.UninstallConflict], counts[app.UninstallPending], counts[app.UninstallFailed])
+		counts[application.UninstallRemove], counts[application.UninstallRestore], counts[application.UninstallPreserve], counts[application.UninstallConflict], counts[application.UninstallPending], counts[application.UninstallFailed])
 	if plan.ProjectCount > 0 {
 		fmt.Printf("Projetos preservados: %d\n", plan.ProjectCount)
 	}

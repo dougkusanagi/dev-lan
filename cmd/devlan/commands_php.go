@@ -6,10 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/dougkusanagi/dev-lan/internal/app"
 	"github.com/dougkusanagi/dev-lan/internal/application"
 	"github.com/dougkusanagi/dev-lan/internal/domain"
-	"github.com/dougkusanagi/dev-lan/internal/platform"
 )
 
 func runMode(ctx context.Context, commands *application.Commands, args []string) error {
@@ -51,12 +49,12 @@ func runMode(ctx context.Context, commands *application.Commands, args []string)
 	return nil
 }
 
-func runPHP(ctx context.Context, service *app.App, queries *application.Queries, args []string) error {
+func runPHP(ctx context.Context, commands *application.Commands, queries *application.Queries, args []string) error {
 	if len(args) == 0 || args[0] == "list" {
 		if len(args) > 1 {
 			return fmt.Errorf("uso: devlan php list")
 		}
-		versions, err := service.PHPVersions(platform.WithWSLOperation(ctx, platform.WSLOperationStatus))
+		versions, err := queries.PHPVersions(ctx)
 		if err != nil {
 			return err
 		}
@@ -90,7 +88,7 @@ func runPHP(ctx context.Context, service *app.App, queries *application.Queries,
 		if err != nil {
 			return err
 		}
-		result, err := service.PHPInstall(ctx, args[1], extensions)
+		result, err := commands.PHPInstall(ctx, args[1], extensions)
 		printWarnings(result.Warnings)
 		if err != nil {
 			return err
@@ -102,7 +100,7 @@ func runPHP(ctx context.Context, service *app.App, queries *application.Queries,
 		if len(args) != 2 {
 			return fmt.Errorf("uso: devlan php remove VERSION")
 		}
-		result, err := service.PHPRemove(ctx, args[1])
+		result, err := commands.PHPRemove(ctx, args[1])
 		printWarnings(result.Warnings)
 		if err != nil {
 			return err
@@ -117,9 +115,9 @@ func runPHP(ctx context.Context, service *app.App, queries *application.Queries,
 		var result application.ApplyResult
 		var err error
 		if args[1] == "default" {
-			result, err = service.SetDefaultPHPVersion(ctx, args[2])
+			result, err = commands.SetDefaultPHPVersion(ctx, args[2])
 		} else {
-			result, err = service.SetProjectPHPVersion(ctx, args[1], args[2])
+			result, err = commands.SetProjectPHPVersion(ctx, args[1], args[2])
 		}
 		printWarnings(result.Warnings)
 		if err != nil {
@@ -148,7 +146,7 @@ func runPHP(ctx context.Context, service *app.App, queries *application.Queries,
 		if err != nil {
 			return err
 		}
-		result, err := service.SetPHPVersionExtensions(ctx, args[1], extensions)
+		result, err := commands.SetPHPVersionExtensions(ctx, args[1], extensions)
 		printWarnings(result.Warnings)
 		if err != nil {
 			return err
@@ -157,13 +155,13 @@ func runPHP(ctx context.Context, service *app.App, queries *application.Queries,
 		return nil
 
 	case "pool":
-		return runPHPPool(ctx, service, queries, args[1:])
+		return runPHPPool(ctx, commands, queries, args[1:])
 
 	case "preset":
 		if len(args) != 3 {
 			return fmt.Errorf("uso: devlan php preset NAME laravel|symfony|generic|inherit")
 		}
-		result, err := service.SetProjectPHPPreset(ctx, args[1], args[2])
+		result, err := commands.SetProjectPHPPreset(ctx, args[1], args[2])
 		printWarnings(result.Warnings)
 		if err != nil {
 			return err
@@ -179,7 +177,7 @@ func runPHP(ctx context.Context, service *app.App, queries *application.Queries,
 		if len(args) == 2 {
 			selector = args[1]
 		}
-		page, err := service.PHPInfo(ctx, selector)
+		page, err := queries.PHPInfo(ctx, selector)
 		if err != nil {
 			return err
 		}
@@ -215,7 +213,7 @@ func parseExtensionValues(values []string) ([]string, error) {
 	return result, nil
 }
 
-func runPHPPool(ctx context.Context, service *app.App, queries *application.Queries, args []string) error {
+func runPHPPool(ctx context.Context, commands *application.Commands, queries *application.Queries, args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("uso: devlan php pool default|VERSION|NAME [shared|isolated] [opções]")
 	}
@@ -224,12 +222,12 @@ func runPHPPool(ctx context.Context, service *app.App, queries *application.Quer
 		if err != nil {
 			return err
 		}
-		result, err := service.SetPHPGlobalPool(ctx, pool)
+		result, err := commands.SetPHPGlobalPool(ctx, pool)
 		printWarnings(result.Warnings)
 		return err
 	}
 	if len(args) >= 2 && (args[1] == "shared" || args[1] == "isolated") {
-		result, err := service.SetProjectPHPIsolated(ctx, args[0], args[1] == "isolated")
+		result, err := commands.SetProjectPHPIsolated(ctx, args[0], args[1] == "isolated")
 		printWarnings(result.Warnings)
 		return err
 	}
@@ -249,7 +247,7 @@ func runPHPPool(ctx context.Context, service *app.App, queries *application.Quer
 	if err != nil {
 		return err
 	}
-	result, err := service.SetPHPVersionPool(ctx, args[0], pool)
+	result, err := commands.SetPHPVersionPool(ctx, args[0], pool)
 	printWarnings(result.Warnings)
 	return err
 }
@@ -289,7 +287,7 @@ func parsePoolOptions(args []string, base domain.PHPFPMPoolConfig) (domain.PHPFP
 	return base, nil
 }
 
-func runComposer(ctx context.Context, service *app.App, args []string) error {
+func runComposer(ctx context.Context, commands *application.Commands, args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("uso: devlan composer VERSION|NAME [--environment auto|system|per-version] -- ARGUMENTOS | composer config default|NAME ENV")
 	}
@@ -297,7 +295,7 @@ func runComposer(ctx context.Context, service *app.App, args []string) error {
 		if len(args) != 3 {
 			return fmt.Errorf("uso: devlan composer config default|NAME auto|system|per-version")
 		}
-		result, err := service.SetComposerEnvironment(ctx, args[1], args[2])
+		result, err := commands.SetComposerEnvironment(ctx, args[1], args[2])
 		printWarnings(result.Warnings)
 		if err != nil {
 			return err
@@ -323,7 +321,7 @@ func runComposer(ctx context.Context, service *app.App, args []string) error {
 		}
 		composerArgs = append(composerArgs, args[index])
 	}
-	output, err := service.RunComposer(ctx, selector, environment, composerArgs)
+	output, err := commands.RunComposer(ctx, selector, environment, composerArgs)
 	if output != "" {
 		fmt.Print(output)
 		if !strings.HasSuffix(output, "\n") {

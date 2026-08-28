@@ -14,55 +14,6 @@ import (
 	"github.com/dougkusanagi/dev-lan/internal/platform"
 )
 
-type UninstallOptions struct {
-	DryRun           bool
-	KeepData         bool
-	KeepDependencies bool
-	Purge            bool
-	Yes              bool
-}
-
-type UninstallAction string
-
-const (
-	UninstallRemove   UninstallAction = "remove"
-	UninstallRestore  UninstallAction = "restore"
-	UninstallPreserve UninstallAction = "preserve"
-	UninstallConflict UninstallAction = "conflict"
-	UninstallPending  UninstallAction = "pending"
-	UninstallFailed   UninstallAction = "failed"
-)
-
-type UninstallItem struct {
-	ID           string          `json:"id"`
-	Scope        string          `json:"scope"`
-	Kind         string          `json:"kind"`
-	Target       string          `json:"target"`
-	Action       UninstallAction `json:"action"`
-	Detail       string          `json:"detail,omitempty"`
-	Distribution string          `json:"distribution,omitempty"`
-}
-
-type UninstallPlan struct {
-	Version          int             `json:"version"`
-	DataDir          string          `json:"dataDir"`
-	Manifest         bool            `json:"manifest"`
-	Legacy           bool            `json:"legacy"`
-	ProjectCount     int             `json:"projectCount"`
-	KeepData         bool            `json:"keepData"`
-	KeepDependencies bool            `json:"keepDependencies"`
-	Purge            bool            `json:"purge"`
-	Pending          bool            `json:"pending"`
-	Items            []UninstallItem `json:"items"`
-	Warnings         []string        `json:"warnings,omitempty"`
-}
-
-type UninstallResult struct {
-	ApplyResult
-	Plan      UninstallPlan `json:"plan"`
-	Completed bool          `json:"completed"`
-}
-
 func (a *App) ensureInstallationManifest(ctx context.Context) error {
 	resources := a.managedInstallResources()
 	if os.Getenv("DEVLAN_TEST_MOCK") != "1" && a.WSL.Distribution != "" {
@@ -252,17 +203,6 @@ func (a *App) wslResourceChangedSinceApply(ctx context.Context, resource config.
 	return err == nil && current != resource.ManagedSHA256
 }
 
-func (o UninstallOptions) validate() error {
-	if o.Purge && !o.Yes {
-		return errors.New("uninstall --purge exige confirmação explícita com --yes")
-	}
-	return nil
-}
-
-// Validate lets the CLI reject unsafe option combinations before it touches
-// the Windows service, startup integration or desktop shortcut.
-func (o UninstallOptions) Validate() error { return o.validate() }
-
 // managedInstallResources is deliberately a closed list. New resources must
 // be added here and to the manifest contract; uninstall never recursively
 // searches a user's home directory or a project for files to delete.
@@ -339,7 +279,7 @@ func mergeManifestResources(defaults []config.ManifestResource, manifest config.
 }
 
 func (a *App) PlanUninstall(ctx context.Context, options UninstallOptions) (UninstallPlan, error) {
-	if err := options.validate(); err != nil {
+	if err := options.Validate(); err != nil {
 		return UninstallPlan{}, err
 	}
 	manifest, present, err := a.Store.LoadManifest()
@@ -533,7 +473,7 @@ func (a *App) Uninstall(ctx context.Context) (ApplyResult, error) {
 }
 
 func (a *App) UninstallWithOptions(ctx context.Context, options UninstallOptions) (UninstallResult, error) {
-	if err := options.validate(); err != nil {
+	if err := options.Validate(); err != nil {
 		return UninstallResult{}, err
 	}
 	plan, err := a.PlanUninstall(ctx, options)

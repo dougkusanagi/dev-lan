@@ -8,11 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/dougkusanagi/dev-lan/internal/application"
 	"github.com/dougkusanagi/dev-lan/internal/platform"
 )
 
@@ -117,7 +117,7 @@ func (a *App) appendLog(message string) error {
 }
 
 func RuntimeDescription() string {
-	return fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)
+	return application.RuntimeDescription()
 }
 
 func extractCaddyLANAddress(caddyfilePath string) string {

@@ -22,7 +22,7 @@ type Client struct {
 }
 
 // NewClient creates a local API client from the application-owned discovery
-// files. CLI and tray callers never need direct access to config.Store.
+// files. CLI and tray callers never need direct access to persistent state.
 func NewClient(service *app.App) Client {
 	return NewClientFromFiles(service.APIEndpointFiles())
 }

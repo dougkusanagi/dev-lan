@@ -7,11 +7,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/dougkusanagi/dev-lan/internal/app"
-	"github.com/dougkusanagi/dev-lan/internal/platform"
+	"github.com/dougkusanagi/dev-lan/internal/application"
 )
 
-func runTopology(ctx context.Context, service *app.App, args []string) error {
+func runTopology(ctx context.Context, commands *application.Commands, queries *application.Queries, args []string) error {
 	subcommand := "status"
 	asJSON := false
 	confirmed := false
@@ -36,7 +35,7 @@ func runTopology(ctx context.Context, service *app.App, args []string) error {
 
 	switch subcommand {
 	case "check":
-		report := service.WSLCompatibility(ctx)
+		report := queries.Compatibility(ctx)
 		if asJSON {
 			return encoder.Encode(report)
 		}
@@ -47,7 +46,7 @@ func runTopology(ctx context.Context, service *app.App, args []string) error {
 		}
 		return nil
 	case "repair":
-		result, err := service.RepairM8(ctx)
+		result, err := commands.RepairM8(ctx)
 		printWarnings(result.Warnings)
 		if err != nil {
 			return err
@@ -61,9 +60,9 @@ func runTopology(ctx context.Context, service *app.App, args []string) error {
 		if !confirmed {
 			fmt.Fprintln(os.Stderr, "A migração reinicia o WSL inteiro e encerra todas as distribuições em execução.")
 			fmt.Fprintln(os.Stderr, "Repita com `devlan topology migrate --yes` somente após salvar o trabalho em todas as distribuições.")
-			return platform.ErrWSLShutdownConfirmation
+			return application.ErrWSLShutdownConfirmation
 		}
-		result, err := service.MigrateToSingleCaddy(ctx, true)
+		result, err := commands.MigrateTopology(ctx, true)
 		if asJSON {
 			_ = encoder.Encode(result)
 		}
@@ -75,12 +74,12 @@ func runTopology(ctx context.Context, service *app.App, args []string) error {
 		}
 		return nil
 	default:
-		snapshot := service.CaddyTopologyStatus(ctx)
-		status := service.CaddyStatus(ctx)
+		snapshot := queries.TopologyStatus(ctx)
+		status := queries.CaddyStatus(ctx)
 		if asJSON {
 			return encoder.Encode(struct {
-				Topology platform.TopologySnapshot   `json:"topology"`
-				Caddy    platform.CaddyServiceStatus `json:"caddy"`
+				Topology application.TopologyStatus `json:"topology"`
+				Caddy    application.CaddyStatus    `json:"caddy"`
 			}{Topology: snapshot, Caddy: status})
 		}
 		fmt.Printf("Topologia: %s\n", snapshot.Topology)
@@ -92,7 +91,7 @@ func runTopology(ctx context.Context, service *app.App, args []string) error {
 	}
 }
 
-func stringMigrationSteps(steps []platform.MigrationStep) []string {
+func stringMigrationSteps(steps []application.MigrationStep) []string {
 	result := make([]string, 0, len(steps))
 	for _, step := range steps {
 		result = append(result, string(step))

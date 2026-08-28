@@ -2,34 +2,14 @@ package app
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strconv"
 	"strings"
 	"time"
-)
 
-// OperationState is the transport-neutral progress record used by HTTP and
-// Wails. ProjectState is JSON at the transport boundary so the application
-// layer does not import the API read model and create a package cycle.
-type OperationState struct {
-	OperationID  string
-	Operation    string
-	ProjectName  string
-	Transport    string
-	Phase        string
-	Status       string
-	Revision     uint64
-	ProjectState json.RawMessage
-	Warnings     []string
-	Error        string
-	StartedAt    time.Time
-	UpdatedAt    time.Time
-	FinishedAt   time.Time
-	PhaseMs      map[string]int64
-}
+	"github.com/dougkusanagi/dev-lan/internal/application"
+)
 
 type operationSubscriber struct {
 	channel chan OperationState
@@ -40,11 +20,7 @@ const operationRetention = 15 * time.Minute
 // NewOperationID is shared by transports so a client can safely retry a
 // mutation without accidentally starting it twice.
 func NewOperationID() string {
-	var bytes [16]byte
-	if _, err := rand.Read(bytes[:]); err == nil {
-		return hex.EncodeToString(bytes[:])
-	}
-	return hex.EncodeToString([]byte(time.Now().UTC().Format("20060102150405.000000000")))
+	return application.NewOperationID()
 }
 
 func normalizeOperationID(id string) string {

@@ -58,7 +58,7 @@ func (s *Server) handleConfigExport(writer http.ResponseWriter, request *http.Re
 		methodNotAllowed(writer, http.MethodPost)
 		return
 	}
-	data, err := s.service.ExportConfig()
+	data, err := s.queries.ExportConfig()
 	if err != nil {
 		writeJSONError(writer, http.StatusInternalServerError, err.Error())
 		return
@@ -78,7 +78,7 @@ func (s *Server) handleConfigImport(writer http.ResponseWriter, request *http.Re
 		writeJSONError(writer, http.StatusBadRequest, "ler corpo da requisição: "+err.Error())
 		return
 	}
-	res, err := s.service.ImportConfig(request.Context(), data)
+	res, err := s.commands.ImportConfig(request.Context(), data)
 	if err != nil {
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
@@ -91,7 +91,7 @@ func (s *Server) handleReload(writer http.ResponseWriter, request *http.Request)
 		methodNotAllowed(writer, http.MethodPost)
 		return
 	}
-	result, err := s.service.Reload(request.Context())
+	result, err := s.commands.Reload(request.Context())
 	if err != nil {
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
@@ -126,7 +126,7 @@ func (s *Server) handlePHPInstall(writer http.ResponseWriter, request *http.Requ
 		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
 		return
 	}
-	res, err := s.service.PHPInstall(request.Context(), input.Version, input.Extensions)
+	res, err := s.commands.PHPInstall(request.Context(), input.Version, input.Extensions)
 	if err != nil {
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
@@ -147,7 +147,7 @@ func (s *Server) handlePHPRemove(writer http.ResponseWriter, request *http.Reque
 		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
 		return
 	}
-	res, err := s.service.PHPRemove(request.Context(), input.Version)
+	res, err := s.commands.PHPRemove(request.Context(), input.Version)
 	if err != nil {
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
@@ -168,7 +168,7 @@ func (s *Server) handlePHPDefault(writer http.ResponseWriter, request *http.Requ
 		writeJSONError(writer, http.StatusBadRequest, "parâmetros inválidos")
 		return
 	}
-	res, err := s.service.SetDefaultPHPVersion(request.Context(), input.Version)
+	res, err := s.commands.SetDefaultPHPVersion(request.Context(), input.Version)
 	if err != nil {
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return

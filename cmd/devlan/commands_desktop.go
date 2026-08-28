@@ -17,7 +17,7 @@ import (
 	"github.com/dougkusanagi/dev-lan/internal/platform"
 )
 
-func runGUI(ctx context.Context, service *app.App, queries *application.Queries, dataDir string, args []string) error {
+func runGUI(ctx context.Context, service *app.App, commands *application.Commands, queries *application.Queries, dataDir string, args []string) error {
 	foreground := false
 	for _, arg := range args {
 		if arg == "--foreground" || arg == "-f" {
@@ -37,14 +37,14 @@ func runGUI(ctx context.Context, service *app.App, queries *application.Queries,
 	}
 
 	targetURL := "https://devlan.localhost/"
-	if !service.CaddyStatus(ctx).Live {
+	if !queries.CaddyStatus(ctx).Live {
 		targetURL = fmt.Sprintf("http://127.0.0.1:%d/", uiPort)
 	}
 
 	if foreground {
 		fmt.Printf("DevLAN GUI Web Server ativo em %s (porta %d)\n", targetURL, uiPort)
 		fmt.Println("Pressione Ctrl+C para encerrar.")
-		server := localapi.New(service)
+		server := localapi.NewWithApplication(service, commands, queries)
 		endpoint, err := server.Start()
 		if err != nil && !errors.Is(err, localapi.ErrAlreadyRunning) {
 			return err
@@ -58,7 +58,7 @@ func runGUI(ctx context.Context, service *app.App, queries *application.Queries,
 	}
 
 	// 1. Check if the server is already responsive
-	client := localapi.NewClient(service)
+	client := localapi.NewClientFromFiles(queries.EndpointFiles())
 	checkCtx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
 	res, checkErr := client.Do(checkCtx, http.MethodGet, "/v1/health", nil)
 	cancel()

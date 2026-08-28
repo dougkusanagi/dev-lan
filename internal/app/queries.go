@@ -8,14 +8,6 @@ import (
 	"github.com/dougkusanagi/dev-lan/internal/domain"
 )
 
-// APIEndpointFiles identifies the two managed files needed by a local API
-// client. It deliberately exposes neither the Store nor other persistence
-// artifacts to a transport.
-type APIEndpointFiles struct {
-	Endpoint string
-	Token    string
-}
-
 // Config returns the authoritative configuration snapshot to application
 // queries. Transports use this boundary instead of reaching into Store.
 func (a *App) Config() (domain.Config, error) {

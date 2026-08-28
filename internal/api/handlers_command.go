@@ -135,12 +135,12 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 			writeJSONError(writer, http.StatusBadRequest, "uso: topology [status|check]")
 			return
 		}
-		topology := s.service.CaddyTopologyStatus(ctx)
-		caddy := s.service.CaddyStatus(ctx)
+		topology := s.queries.TopologyStatus(ctx)
+		caddy := s.queries.CaddyStatus(ctx)
 		response.Topology = &topology
 		response.Caddy = &caddy
 		if len(input.Args) == 1 && input.Args[0] == "check" {
-			compatibility := s.service.WSLCompatibility(ctx)
+			compatibility := s.queries.Compatibility(ctx)
 			response.Compatibility = &compatibility
 		}
 	case "reload":
@@ -148,7 +148,7 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 			writeJSONError(writer, http.StatusBadRequest, "uso: reload")
 			return
 		}
-		result, err := s.service.Reload(ctx)
+		result, err := s.commands.Reload(ctx)
 		if err != nil {
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
@@ -158,7 +158,7 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 	case "route":
 		if len(input.Args) > 0 && input.Args[0] == "allocations" {
 			if len(input.Args) == 1 {
-				allocations, err := s.service.RouteAllocations(ctx)
+				allocations, err := s.queries.RouteAllocations(ctx)
 				if err != nil {
 					writeJSONError(writer, http.StatusInternalServerError, err.Error())
 					return
@@ -167,7 +167,7 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 				break
 			}
 			if len(input.Args) == 2 && input.Args[1] == "prune" {
-				paths, result, err := s.service.PruneRouteAllocations(ctx, false)
+				paths, result, err := s.commands.PruneRouteAllocations(ctx, false)
 				if err != nil {
 					writeJSONError(writer, http.StatusConflict, err.Error())
 					return
@@ -177,7 +177,7 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 				break
 			}
 			if len(input.Args) == 3 && input.Args[1] == "prune" && input.Args[2] == "--dry-run" {
-				paths, result, err := s.service.PruneRouteAllocations(ctx, true)
+				paths, result, err := s.commands.PruneRouteAllocations(ctx, true)
 				if err != nil {
 					writeJSONError(writer, http.StatusInternalServerError, err.Error())
 					return
@@ -202,7 +202,7 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 			}
 			port = &parsed
 		}
-		result, err := s.service.SetRoutePort(ctx, input.Args[0], port)
+		result, err := s.commands.SetRoutePort(ctx, input.Args[0], port)
 		if err != nil {
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
@@ -219,7 +219,7 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 		if len(input.Args) == 1 {
 			name = input.Args[0]
 		}
-		checks, err := s.service.Doctor(ctx, name)
+		checks, err := s.queries.Doctor(ctx, name)
 		if err != nil {
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
@@ -238,7 +238,7 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 			writeJSONError(writer, http.StatusBadRequest, "open no WSL exige NAME")
 			return
 		}
-		url, err := s.service.Open(ctx, name)
+		url, err := s.commands.Open(ctx, name)
 		if err != nil {
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return

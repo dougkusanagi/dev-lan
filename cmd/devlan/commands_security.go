@@ -6,12 +6,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/dougkusanagi/dev-lan/internal/app"
 	"github.com/dougkusanagi/dev-lan/internal/application"
-	"github.com/dougkusanagi/dev-lan/internal/platform"
 )
 
-func runAuth(ctx context.Context, service *app.App, args []string) error {
+func runAuth(ctx context.Context, commands *application.Commands, args []string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("uso: devlan auth enable default|NAME USERNAME PASSWORD | devlan auth disable default|NAME")
 	}
@@ -22,7 +20,7 @@ func runAuth(ctx context.Context, service *app.App, args []string) error {
 		if len(args) != 4 {
 			return fmt.Errorf("uso: devlan auth enable default|NAME USERNAME PASSWORD")
 		}
-		res, err := service.SetAuth(ctx, target, true, args[2], args[3])
+		res, err := commands.SetAuth(ctx, target, true, args[2], args[3])
 		printWarnings(res.Warnings)
 		if err != nil {
 			return err
@@ -30,7 +28,7 @@ func runAuth(ctx context.Context, service *app.App, args []string) error {
 		fmt.Printf("Autenticação HTTP ativada para %s (usuário: %s).\n", target, args[2])
 		return nil
 	case "disable":
-		res, err := service.DisableAuth(ctx, target)
+		res, err := commands.DisableAuth(ctx, target)
 		printWarnings(res.Warnings)
 		if err != nil {
 			return err
@@ -42,9 +40,9 @@ func runAuth(ctx context.Context, service *app.App, args []string) error {
 	}
 }
 
-func runCA(ctx context.Context, service *app.App, args []string) error {
+func runCA(ctx context.Context, commands *application.Commands, queries *application.Queries, args []string) error {
 	if len(args) == 0 || args[0] == "info" {
-		info, err := service.CAInfo(ctx)
+		info, err := queries.CAInfo(ctx)
 		if err != nil {
 			return err
 		}
@@ -65,14 +63,14 @@ func runCA(ctx context.Context, service *app.App, args []string) error {
 		if len(args) > 1 {
 			target = args[1]
 		}
-		savedPath, err := service.ExportCA(ctx, target)
+		savedPath, err := commands.ExportCA(ctx, target)
 		if err != nil {
 			return err
 		}
 		fmt.Printf("Certificado raiz exportado com sucesso para: %s\n", savedPath)
 		return nil
 	case "rotate":
-		res, err := service.RotateCA(ctx)
+		res, err := commands.RotateCA(ctx)
 		printWarnings(res.Warnings)
 		if err != nil {
 			return err
@@ -84,13 +82,14 @@ func runCA(ctx context.Context, service *app.App, args []string) error {
 	}
 }
 
-func runSecurity(ctx context.Context, service *app.App, queries *application.Queries, args []string) error {
+func runSecurity(ctx context.Context, commands *application.Commands, queries *application.Queries, args []string) error {
 	if len(args) == 0 || args[0] == "posture" {
 		cfg, err := queries.Config(ctx)
 		if err != nil {
 			return err
 		}
-		isPublic, netDetail, _ := platform.NetworkProfile(ctx)
+		network := queries.NetworkProfile(ctx)
+		isPublic, netDetail := network.Public, network.Detail
 		fmt.Println("=== Postura de Segurança DevLAN ===")
 		if isPublic {
 			fmt.Printf("[ALERTA] Perfil de rede: %s (recomenda-se modo Privado ou uso de Allowlist/Auth)\n", netDetail)
@@ -116,7 +115,7 @@ func runSecurity(ctx context.Context, service *app.App, queries *application.Que
 				lines = l
 			}
 		}
-		logs, err := service.SecurityAuditLogs(ctx, lines)
+		logs, err := queries.SecurityAuditLogs(ctx, lines)
 		if err != nil {
 			return err
 		}

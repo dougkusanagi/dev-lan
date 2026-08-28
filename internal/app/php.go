@@ -17,13 +17,6 @@ import (
 
 var defaultPHPExtensions = []string{"bcmath", "curl", "gd", "intl", "mbstring", "mysql", "pgsql", "xml", "zip"}
 
-type PHPVersionStatus struct {
-	Version    string
-	Installed  bool
-	Configured bool
-	Extensions []string
-}
-
 func (a *App) PHPVersions(ctx context.Context) ([]PHPVersionStatus, error) {
 	cfg, err := a.Store.Load()
 	if err != nil {

@@ -28,7 +28,8 @@ type ProjectConfigUpdate = localapi.ProjectConfigUpdate
 type MutationResult = localapi.MutationResult
 
 type App struct {
-	service               *app.App
+	commands              *application.Commands
+	queries               *application.Queries
 	ctx                   context.Context
 	api                   *localapi.Server
 	ownsAPI               bool
@@ -36,7 +37,9 @@ type App struct {
 }
 
 func NewApp(service *app.App) *App {
-	return &App{service: service, api: localapi.New(service)}
+	commands := application.NewCommands(service, service)
+	queries := application.NewQueries(service)
+	return &App{commands: commands, queries: queries, api: localapi.NewWithApplication(service, commands, queries)}
 }
 
 func (a *App) Startup(ctx context.Context) {
@@ -48,12 +51,12 @@ func (a *App) Startup(ctx context.Context) {
 	if _, err := a.api.Start(); err == nil {
 		a.ownsAPI = true
 	} else if !errors.Is(err, localapi.ErrAlreadyRunning) {
-		a.service.Audit("API_GUI_WARN", "UI não iniciou a API local: "+err.Error())
+		a.commands.Audit("API_GUI_WARN", "UI não iniciou a API local: "+err.Error())
 	}
 	go func() {
 		startupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		_, _ = a.service.Reload(startupCtx)
+		_, _ = a.commands.Reload(startupCtx)
 	}()
 }
 
@@ -62,7 +65,7 @@ func (a *App) Shutdown(ctx context.Context) {
 		a.operationEventsCancel()
 		a.operationEventsCancel = nil
 	}
-	_ = a.service.CloseDevProxies()
+	_ = a.commands.CloseDevProxies()
 	if a.ownsAPI {
 		_ = a.api.Close(ctx)
 		a.ownsAPI = false
@@ -75,7 +78,7 @@ func (a *App) startOperationEvents() {
 	}
 	eventCtx, cancel := context.WithCancel(context.Background())
 	a.operationEventsCancel = cancel
-	updates, stop := a.service.SubscribeOperations(eventCtx)
+	updates, stop := a.queries.SubscribeOperations(eventCtx)
 	go func() {
 		defer stop()
 		for {
@@ -120,10 +123,10 @@ func (a *App) GetStatus() (SystemStatusView, error) {
 
 // GetTopology exposes the detailed single-edge diagnostic model to the Wails
 // shell. It delegates to the same read boundary as the HTTP API.
-func (a *App) GetTopology() (app.TopologySnapshot, error) {
+func (a *App) GetTopology() (application.TopologySnapshot, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	return localapi.BuildTopologyView(ctx, a.service), nil
+	return a.queries.Topology(ctx), nil
 }
 
 func (a *App) GetOverview(filter string) (OverviewView, error) {
@@ -133,7 +136,7 @@ func (a *App) GetOverview(filter string) (OverviewView, error) {
 }
 
 func (a *App) GetMetrics(project, rawRange string) (*metrics.Snapshot, error) {
-	return localapi.BuildMetricsSnapshot(a.service, project, rawRange)
+	return a.api.BuildMetricsSnapshot(context.Background(), project, rawRange)
 }
 
 func (a *App) GetGlobalConfig() (GlobalConfigView, error) {
@@ -149,7 +152,7 @@ func (a *App) GetPHPVersions() ([]PHPVersionView, error) {
 func (a *App) InstallPHPVersion(version string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	_, err := a.service.PHPInstall(ctx, version, nil)
+	_, err := a.commands.PHPInstall(ctx, version, nil)
 	if err == nil {
 		a.api.InvalidateColdReadModelCache()
 	}
@@ -159,7 +162,7 @@ func (a *App) InstallPHPVersion(version string) error {
 func (a *App) RemovePHPVersion(version string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	_, err := a.service.PHPRemove(ctx, version)
+	_, err := a.commands.PHPRemove(ctx, version)
 	if err == nil {
 		a.api.InvalidateColdReadModelCache()
 	}
@@ -169,7 +172,7 @@ func (a *App) RemovePHPVersion(version string) error {
 func (a *App) SetDefaultPHPVersion(version string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	_, err := a.service.SetDefaultPHPVersion(ctx, version)
+	_, err := a.commands.SetDefaultPHPVersion(ctx, version)
 	if err == nil {
 		a.api.InvalidateColdReadModelCache()
 	}
@@ -211,17 +214,17 @@ func (a *App) SaveProjectConfig(update ProjectConfigUpdate) error {
 		}
 	}
 	if update.TLSEnabled != nil {
-		if _, _, err := a.service.SetProjectTLS(ctx, update.Name, *update.TLSEnabled); err != nil {
+		if _, _, err := a.commands.SetProjectTLS(ctx, update.Name, *update.TLSEnabled); err != nil {
 			return err
 		}
 	}
 	if update.PHPVersion != "" {
-		if _, err := a.service.SetProjectPHPVersion(ctx, update.Name, update.PHPVersion); err != nil {
+		if _, err := a.commands.SetProjectPHPVersion(ctx, update.Name, update.PHPVersion); err != nil {
 			return err
 		}
 	}
 	if update.PHPPreset != "" {
-		if _, err := a.service.SetProjectPHPPreset(ctx, update.Name, update.PHPPreset); err != nil {
+		if _, err := a.commands.SetProjectPHPPreset(ctx, update.Name, update.PHPPreset); err != nil {
 			return err
 		}
 	}
@@ -230,22 +233,22 @@ func (a *App) SaveProjectConfig(update ProjectConfigUpdate) error {
 		if !update.RoutePortAuto {
 			port = update.RoutePort
 		}
-		if _, err := a.service.SetRoutePort(ctx, update.Name, port); err != nil {
+		if _, err := a.commands.SetRoutePort(ctx, update.Name, port); err != nil {
 			return err
 		}
 	}
 	if update.StaticDir != "" {
-		if _, err := a.service.SetProjectStaticDir(ctx, update.Name, update.StaticDir); err != nil {
+		if _, err := a.commands.SetProjectStaticDir(ctx, update.Name, update.StaticDir); err != nil {
 			return err
 		}
 	}
 	if update.DevCommand != "" {
-		if _, err := a.service.SetProjectDevCommand(ctx, update.Name, update.DevCommand); err != nil {
+		if _, err := a.commands.SetProjectDevCommand(ctx, update.Name, update.DevCommand); err != nil {
 			return err
 		}
 	}
 	if update.DevPort > 0 {
-		if _, err := a.service.SetProjectDevPort(ctx, update.Name, update.DevPort); err != nil {
+		if _, err := a.commands.SetProjectDevPort(ctx, update.Name, update.DevPort); err != nil {
 			return err
 		}
 	}
@@ -261,7 +264,7 @@ func (a *App) SaveProjectConfigResult(update ProjectConfigUpdate, operationID st
 		update.RoutePort == nil && !update.RoutePortAuto && update.StaticDir == "" && update.DevCommand == "" && update.DevPort == 0 {
 		return a.acceptProjectOperation("tls", update.Name, operationID, 90*time.Second,
 			func(ctx context.Context) (uint64, []string, error) {
-				result, _, err := a.service.SetProjectTLS(ctx, update.Name, *update.TLSEnabled)
+				result, _, err := a.commands.SetProjectTLS(ctx, update.Name, *update.TLSEnabled)
 				return result.Revision, result.Warnings, err
 			})
 	}
@@ -274,7 +277,7 @@ func (a *App) SaveProjectConfigResult(update ProjectConfigUpdate, operationID st
 }
 
 func (a *App) GetOperation(operationID string) (MutationResult, error) {
-	state, ok := a.service.Operation(operationID)
+	state, ok := a.queries.Operation(operationID)
 	if !ok {
 		return MutationResult{}, fmt.Errorf("operação não encontrada: %s", operationID)
 	}
@@ -284,7 +287,7 @@ func (a *App) GetOperation(operationID string) (MutationResult, error) {
 func (a *App) StartDevOperation(name, operationID string) (MutationResult, error) {
 	return a.acceptProjectOperation("start", name, operationID, 90*time.Second,
 		func(ctx context.Context) (uint64, []string, error) {
-			err := a.service.StartDev(ctx, name)
+			err := a.commands.StartDev(ctx, name)
 			return a.api.QueryRevision(context.Background()), nil, err
 		})
 }
@@ -292,7 +295,7 @@ func (a *App) StartDevOperation(name, operationID string) (MutationResult, error
 func (a *App) StopDevOperation(name, operationID string) (MutationResult, error) {
 	return a.acceptProjectOperation("stop", name, operationID, 45*time.Second,
 		func(ctx context.Context) (uint64, []string, error) {
-			err := a.service.StopDev(ctx, name)
+			err := a.commands.StopDev(ctx, name)
 			return a.api.QueryRevision(context.Background()), nil, err
 		})
 }
@@ -300,7 +303,7 @@ func (a *App) StopDevOperation(name, operationID string) (MutationResult, error)
 func (a *App) RestartDevOperation(name, operationID string) (MutationResult, error) {
 	return a.acceptProjectOperation("restart", name, operationID, 90*time.Second,
 		func(ctx context.Context) (uint64, []string, error) {
-			err := a.service.RestartDev(ctx, name)
+			err := a.commands.RestartDev(ctx, name)
 			return a.api.QueryRevision(context.Background()), nil, err
 		})
 }
@@ -309,16 +312,16 @@ type guiOperationWork func(context.Context) (uint64, []string, error)
 
 func (a *App) acceptProjectOperation(operation, project, operationID string, timeout time.Duration, work guiOperationWork) (MutationResult, error) {
 	if strings.TrimSpace(operationID) == "" {
-		operationID = app.NewOperationID()
+		operationID = application.NewOperationID()
 	} else if len(operationID) > 96 {
 		operationID = operationID[:96]
 	}
-	state, existed, err := a.service.BeginOperation(operationID, operation, project)
+	state, existed, err := a.commands.BeginOperation(operationID, operation, project)
 	if err != nil {
 		return MutationResult{}, err
 	}
 	if !existed {
-		a.service.SetOperationTransport(operationID, "wails")
+		a.commands.SetOperationTransport(operationID, "wails")
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
@@ -328,7 +331,7 @@ func (a *App) acceptProjectOperation(operation, project, operationID string, tim
 			} else if operation == "stop" {
 				phase = "stopping"
 			}
-			a.service.UpdateOperation(operationID, phase, phase, 0, nil, nil, nil)
+			a.commands.UpdateOperation(operationID, phase, phase, 0, nil, nil, nil)
 			revision, warnings, workErr := work(ctx)
 			terminal := "ready"
 			if operation == "stop" {
@@ -345,7 +348,7 @@ func (a *App) acceptProjectOperation(operation, project, operationID string, tim
 			} else {
 				a.api.InvalidateReadModelCache()
 			}
-			a.service.UpdateOperation(operationID, terminal, terminal, revision, nil, warnings, workErr)
+			a.commands.UpdateOperation(operationID, terminal, terminal, revision, nil, warnings, workErr)
 		}()
 	}
 	return a.api.BuildOperationResult(context.Background(), state), nil
@@ -353,11 +356,11 @@ func (a *App) acceptProjectOperation(operation, project, operationID string, tim
 
 func (a *App) resultForCompleted(operation, project, operationID string, ctx context.Context, warnings []string) MutationResult {
 	if strings.TrimSpace(operationID) == "" {
-		operationID = app.NewOperationID()
+		operationID = application.NewOperationID()
 	}
-	state, _, _ := a.service.BeginOperation(operationID, operation, project)
-	a.service.SetOperationTransport(operationID, "wails")
-	state = a.service.UpdateOperation(operationID, "ready", "ready", a.api.QueryRevision(context.Background()), nil, warnings, nil)
+	state, _, _ := a.commands.BeginOperation(operationID, operation, project)
+	a.commands.SetOperationTransport(operationID, "wails")
+	state = a.commands.UpdateOperation(operationID, "ready", "ready", a.api.QueryRevision(context.Background()), nil, warnings, nil)
 	a.api.InvalidateReadModelCache()
 	return a.api.BuildOperationResult(ctx, state)
 }
@@ -365,7 +368,7 @@ func (a *App) resultForCompleted(operation, project, operationID string, ctx con
 func (a *App) LinkProject(name, path string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	_, _, err := a.api.LinkProject(ctx, name, path)
+	_, _, err := a.commands.LinkProject(ctx, application.LinkProjectCommand{Name: name, Path: path})
 	if err == nil {
 		a.api.InvalidateReadModelCache()
 	}
@@ -375,7 +378,7 @@ func (a *App) LinkProject(name, path string) error {
 func (a *App) UnlinkProject(name string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	_, _, err := a.api.UnlinkProject(ctx, name)
+	_, _, err := a.commands.UnlinkProject(ctx, application.UnlinkProjectCommand{Name: name})
 	if err == nil {
 		a.api.InvalidateReadModelCache()
 	}
@@ -385,7 +388,7 @@ func (a *App) UnlinkProject(name string) error {
 func (a *App) HideProject(name string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	_, err := a.api.IgnoreProject(ctx, name)
+	_, err := a.commands.IgnoreProject(ctx, application.IgnoreProjectCommand{Selector: name})
 	if err == nil {
 		a.api.InvalidateReadModelCache()
 	}
@@ -395,7 +398,7 @@ func (a *App) HideProject(name string) error {
 func (a *App) ParkDir(path string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	_, _, err := a.api.ParkDirectory(ctx, path)
+	_, _, err := a.commands.ParkDirectory(ctx, application.ParkDirectoryCommand{Path: path})
 	if err == nil {
 		a.api.InvalidateReadModelCache()
 	}
@@ -405,7 +408,7 @@ func (a *App) ParkDir(path string) error {
 func (a *App) UnparkDir(path string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	_, _, err := a.api.UnparkDirectory(ctx, path)
+	_, _, err := a.commands.UnparkDirectory(ctx, application.UnparkDirectoryCommand{Path: path})
 	if err == nil {
 		a.api.InvalidateReadModelCache()
 	}
@@ -415,7 +418,7 @@ func (a *App) UnparkDir(path string) error {
 func (a *App) StartDev(name string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	err := a.service.StartDev(ctx, name)
+	err := a.commands.StartDev(ctx, name)
 	if err == nil {
 		a.api.InvalidateHotReadModelCache()
 	}
@@ -425,7 +428,7 @@ func (a *App) StartDev(name string) error {
 func (a *App) StopDev(name string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	err := a.service.StopDev(ctx, name)
+	err := a.commands.StopDev(ctx, name)
 	if err == nil {
 		a.api.InvalidateHotReadModelCache()
 	}
@@ -435,7 +438,7 @@ func (a *App) StopDev(name string) error {
 func (a *App) RestartDev(name string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	err := a.service.RestartDev(ctx, name)
+	err := a.commands.RestartDev(ctx, name)
 	if err == nil {
 		a.api.InvalidateHotReadModelCache()
 	}
@@ -445,13 +448,13 @@ func (a *App) RestartDev(name string) error {
 func (a *App) BuildProject(name string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	return a.service.BuildProject(ctx, name)
+	return a.commands.BuildProject(ctx, name)
 }
 
 func (a *App) InstallDeps(name string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	return a.service.InstallDeps(ctx, name)
+	return a.commands.InstallDeps(ctx, name)
 }
 
 func (a *App) GetProjectLogs(name string, lines int) (string, error) {
@@ -461,11 +464,11 @@ func (a *App) GetProjectLogs(name string, lines int) (string, error) {
 	if lines <= 0 {
 		lines = 100
 	}
-	devLogs, err := a.service.ProjectDevLogs(ctx, name, lines)
+	devLogs, err := a.queries.ProjectDevLogs(ctx, name, lines)
 	if err == nil && strings.TrimSpace(devLogs) != "" {
 		return devLogs, nil
 	}
-	globalLogs, globalErr := a.service.Logs("devlan")
+	globalLogs, globalErr := a.queries.Logs("devlan")
 	if globalErr == nil && strings.TrimSpace(globalLogs) != "" {
 		return fmt.Sprintf("Nenhum log de servidor dev disponível para %s.\n\nEventos do DevLAN:\n%s", name, globalLogs), nil
 	}
@@ -475,7 +478,7 @@ func (a *App) GetProjectLogs(name string, lines int) (string, error) {
 func (a *App) RunDoctor(name string) ([]DoctorCheckView, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	return localapi.BuildDoctorChecksView(ctx, a.service, name)
+	return a.api.BuildDoctorChecksView(ctx, name)
 }
 
 func (a *App) ApplyDoctorFix(action, target string) error {
@@ -485,19 +488,19 @@ func (a *App) ApplyDoctorFix(action, target string) error {
 	var err error
 	switch action {
 	case "reload":
-		_, err = a.service.Reload(ctx)
+		_, err = a.commands.Reload(ctx)
 	case "firewall":
-		err = a.service.ReconcileFirewall(ctx)
+		err = a.commands.ReconcileFirewall(ctx)
 	case "topology", "topology-repair":
-		_, err = a.service.RepairM8(ctx)
+		_, err = a.commands.RepairM8(ctx)
 	case "trust":
-		err = a.service.Trust(ctx)
+		err = a.commands.Trust(ctx)
 	case "restart-dev":
 		if target != "" {
-			err = a.service.RestartDev(ctx, target)
+			err = a.commands.RestartDev(ctx, target)
 		}
 	default:
-		_, err = a.service.Reload(ctx)
+		_, err = a.commands.Reload(ctx)
 	}
 	if err == nil {
 		a.api.InvalidateReadModelCache()
@@ -523,7 +526,7 @@ func (a *App) CopyURL(rawURL string) error {
 func (a *App) Reload() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	_, err := a.service.Reload(ctx)
+	_, err := a.commands.Reload(ctx)
 	if err == nil {
 		a.api.InvalidateReadModelCache()
 	}
@@ -531,7 +534,7 @@ func (a *App) Reload() error {
 }
 
 func (a *App) ExportConfigJSON() (string, error) {
-	data, err := a.service.ExportConfig()
+	data, err := a.queries.ExportConfig()
 	if err != nil {
 		return "", err
 	}
@@ -541,13 +544,13 @@ func (a *App) ExportConfigJSON() (string, error) {
 func (a *App) ExportDiagnostic() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	return a.service.DiagnosticBundle(ctx, "")
+	return a.commands.DiagnosticBundle(ctx, "")
 }
 
 func (a *App) TrustCA() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	err := a.service.Trust(ctx)
+	err := a.commands.Trust(ctx)
 	if err == nil {
 		a.api.InvalidateColdReadModelCache()
 	}
@@ -557,7 +560,7 @@ func (a *App) TrustCA() error {
 func (a *App) GetSecurityAudit(lines int) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	return a.service.SecurityAuditLogs(ctx, lines)
+	return a.queries.SecurityAuditLogs(ctx, lines)
 }
 
 func openBrowser(target string) error {

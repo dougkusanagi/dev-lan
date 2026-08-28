@@ -15,12 +15,6 @@ import (
 // ErrPasswordHashUnavailable is returned before any configuration write when
 // Caddy cannot produce a password hash. A runtime failure must never cause a
 
-type Check struct {
-	Name   string
-	Status string
-	Detail string
-}
-
 func (a *App) Doctor(ctx context.Context, projectName string) ([]Check, error) {
 	ctx = platform.WithWSLOperation(ctx, platform.WSLOperationDoctor)
 	cfg, err := a.Store.Load()

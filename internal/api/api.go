@@ -83,7 +83,7 @@ func (s *Server) Start() (Endpoint, error) {
 	if s.listener != nil {
 		return s.endpoint, nil
 	}
-	if err := s.service.EnsureState(); err != nil {
+	if err := s.commands.EnsureState(); err != nil {
 		return Endpoint{}, err
 	}
 	cfg, err := s.queries.Config(context.Background())
@@ -98,7 +98,7 @@ func (s *Server) Start() (Endpoint, error) {
 	}
 	expectedPort := strconv.Itoa(uiPort)
 
-	files := s.service.APIEndpointFiles()
+	files := s.queries.EndpointFiles()
 	if _, err := os.Stat(files.Endpoint); err == nil {
 		if endpoint, readErr := ReadEndpoint(files.Endpoint, files.Token); readErr == nil {
 			_, port, _ := net.SplitHostPort(endpoint.Address)
@@ -171,12 +171,12 @@ func (s *Server) Start() (Endpoint, error) {
 	for _, item := range listeners {
 		go func(current net.Listener) {
 			if err := server.Serve(current); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				s.service.Audit("API_STOP", "servidor local encerrado: "+err.Error())
+				s.commands.Audit("API_STOP", "servidor local encerrado: "+err.Error())
 			}
 		}(item)
 	}
 
-	s.service.Audit("API_START", "API local autenticada em "+endpoint.Address)
+	s.commands.Audit("API_START", "API local autenticada em "+endpoint.Address)
 	return endpoint, nil
 }
 
@@ -192,7 +192,7 @@ func (s *Server) Close(ctx context.Context) error {
 	s.mu.Lock()
 	server := s.httpServer
 	listeners := s.listeners
-	endpointPath := s.service.APIEndpointFiles().Endpoint
+	endpointPath := s.queries.EndpointFiles().Endpoint
 	readModelCache := s.readModelCache
 	s.listener = nil
 	s.listeners = nil
@@ -208,6 +208,6 @@ func (s *Server) Close(ctx context.Context) error {
 		_ = listener.Close()
 	}
 	_ = os.Remove(endpointPath)
-	s.service.Audit("API_STOP", "API local encerrada")
+	s.commands.Audit("API_STOP", "API local encerrada")
 	return err
 }

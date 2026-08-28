@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/dougkusanagi/dev-lan/internal/platform"
 	"github.com/wailsapp/wails/v2/pkg/menu"
 	"github.com/wailsapp/wails/v2/pkg/menu/keys"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -51,8 +50,9 @@ func BuildAppMenu(ctx context.Context, guiApp *App) *menu.Menu {
 func BuildTrayMenu(ctx context.Context, guiApp *App) *menu.Menu {
 	trayMenu := menu.NewMenu()
 
-	lanIP, err := platform.LANAddress()
-	if err != nil {
+	status, err := guiApp.GetStatus()
+	lanIP := status.LANIP
+	if err != nil || lanIP == "" {
 		lanIP = "127.0.0.1"
 	}
 	trayMenu.AddText(fmt.Sprintf("DevLAN (IP: %s)", lanIP), nil, func(_ *menu.CallbackData) {})

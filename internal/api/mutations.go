@@ -9,7 +9,7 @@ import (
 	"github.com/dougkusanagi/dev-lan/internal/application"
 )
 
-func operationResult(ctx context.Context, service *app.App, queries *application.Queries, cache *ReadModelCache, state app.OperationState) MutationResult {
+func operationResult(ctx context.Context, queries *application.Queries, cache *ReadModelCache, state application.OperationState) MutationResult {
 	result := MutationResult{
 		OperationID: state.OperationID,
 		Operation:   state.Operation,
@@ -37,8 +37,8 @@ func operationResult(ctx context.Context, service *app.App, queries *application
 	// A terminal result always tries to include a fresh authoritative project
 	// view. If the read model is temporarily unavailable, the operation itself
 	// remains valid and the frontend will retry through the overview coordinator.
-	if result.ProjectState == nil && service != nil && state.ProjectName != "" && isTerminalPhase(state.Phase) {
-		if views, err := buildProjectViews(ctx, service, queries, cache, state.ProjectName); err == nil {
+	if result.ProjectState == nil && queries != nil && state.ProjectName != "" && isTerminalPhase(state.Phase) {
+		if views, err := buildProjectViews(ctx, queries, cache, state.ProjectName); err == nil {
 			for _, view := range views {
 				if view.Name == state.ProjectName {
 					result.ProjectState = &view
@@ -63,7 +63,7 @@ func formatTime(value time.Time) string {
 	return value.UTC().Format(time.RFC3339Nano)
 }
 
-func operationDurationMs(state app.OperationState) int64 {
+func operationDurationMs(state application.OperationState) int64 {
 	if state.StartedAt.IsZero() {
 		return 0
 	}
@@ -83,20 +83,20 @@ func isTerminalPhase(phase string) bool {
 	}
 }
 
-func acceptedResult(state app.OperationState) MutationResult {
-	return operationResult(context.Background(), nil, nil, nil, state)
+func acceptedResult(state application.OperationState) MutationResult {
+	return operationResult(context.Background(), nil, nil, state)
 }
 
-func (s *Server) operationResult(ctx context.Context, state app.OperationState) MutationResult {
-	return operationResult(ctx, s.service, s.queries, s.readModelCache, state)
+func (s *Server) operationResult(ctx context.Context, state application.OperationState) MutationResult {
+	return operationResult(ctx, s.queries, s.readModelCache, state)
 }
 
 // BuildOperationResult is exported for the Wails adapter, which shares the
 // same operation registry but has no HTTP request handler.
 func BuildOperationResult(ctx context.Context, service *app.App, state app.OperationState) MutationResult {
-	return operationResult(ctx, service, application.NewQueries(service), NewReadModelCache(), state)
+	return operationResult(ctx, application.NewQueries(service), NewReadModelCache(), state)
 }
 
-func (s *Server) BuildOperationResult(ctx context.Context, state app.OperationState) MutationResult {
-	return operationResult(ctx, s.service, s.queries, s.readModelCache, state)
+func (s *Server) BuildOperationResult(ctx context.Context, state application.OperationState) MutationResult {
+	return operationResult(ctx, s.queries, s.readModelCache, state)
 }
