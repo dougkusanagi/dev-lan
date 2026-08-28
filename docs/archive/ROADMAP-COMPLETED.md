@@ -32,6 +32,15 @@ retroativamente.
 - [x] `R-03b` Separar as responsabilidades restantes de `internal/app/app.go`
   em arquivos focados de firewall, instalação, PHP, TLS, reconciliação,
   diagnóstico, migração e configuração, sem mudar pacote ou comportamento.
+- [x] `R-03c` Separar lifecycle do servidor, rotas, middleware, SPA, handlers,
+  descoberta de endpoint e cliente de `internal/api/api.go`, preservando
+  pacote, rotas e contratos HTTP.
+- [x] `R-03d` Separar o bootstrap da CLI e suas famílias de comandos em arquivos
+  focados (configuração, topologia, API/desktop, lifecycle, PHP/dev, saída,
+  rotas e segurança), preservando parsing, saída e códigos de retorno.
+- [x] `R-03e` Dividir os modelos de domínio por agregado em arquivos focados de
+  configuração, projeto, PHP/runtime, rede e segurança, mantendo um único
+  `package domain` sem ciclos ou mudança de contrato.
 - [x] `R-04a` Introduzir views tipadas para topologia, overview, mutações e
   configuração, verificadas contra o contrato TypeScript.
 - [x] `R-05a` Remover de CLI, HTTP e Wails o acesso direto a `config.Store` no

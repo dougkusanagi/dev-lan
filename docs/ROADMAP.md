@@ -14,12 +14,6 @@ Subtarefas já entregues estão registradas em
 ### R-01 — Contratos observáveis
 
 
-### R-03 — Divisão interna dos pacotes
-
-- [ ] `R-03c` Separar servidor, middleware, rotas e handlers de `internal/api`.
-- [ ] `R-03d` Separar bootstrap e famílias de comandos de `cmd/devlan`.
-- [ ] `R-03e` Dividir os modelos de domínio por agregado sem criar ciclos.
-
 ### R-04 — Tipos e lifecycle explícitos
 
 - [ ] `R-04b` Substituir respostas e fronteiras `map[string]any`/`any` restantes
