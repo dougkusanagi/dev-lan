@@ -101,12 +101,12 @@ func (a *App) Logs(component string) (string, error) {
 	return string(data), err
 }
 
-func (a *App) appendLog(format string, values ...any) error {
+func (a *App) appendLog(message string) error {
 	if err := a.Store.Ensure(); err != nil {
 		return err
 	}
 	stamp := a.now().Format(time.RFC3339)
-	line := fmt.Sprintf("%s %s\n", stamp, fmt.Sprintf(format, values...))
+	line := fmt.Sprintf("%s %s\n", stamp, message)
 	file, err := os.OpenFile(filepath.Join(a.Store.Paths().LogsDir, "devlan.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return err

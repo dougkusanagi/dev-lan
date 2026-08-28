@@ -16,8 +16,6 @@ Subtarefas já entregues estão registradas em
 
 ### R-04 — Tipos e lifecycle explícitos
 
-- [ ] `R-04b` Substituir respostas e fronteiras `map[string]any`/`any` restantes
-  por DTOs explícitos, preservando o JSON atual.
 - [ ] `R-04c` Remover campos públicos de compatibilidade após migrar todos os
   composition roots e testes.
 - [ ] `R-04d` Substituir caches e registries globais por dependências com

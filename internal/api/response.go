@@ -7,14 +7,14 @@ import (
 	"net/http"
 )
 
-func writeJSON(writer http.ResponseWriter, status int, value any) {
+func writeJSON[T responsePayload](writer http.ResponseWriter, status int, value T) {
 	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(value)
 }
 
 func writeJSONError(writer http.ResponseWriter, status int, message string) {
-	writeJSON(writer, status, map[string]string{"error": message})
+	writeJSON(writer, status, ErrorResponse{Error: message})
 }
 
 func methodNotAllowed(writer http.ResponseWriter, allowed string) {

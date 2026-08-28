@@ -31,17 +31,14 @@ func runTopology(ctx context.Context, service *app.App, args []string) error {
 		}
 	}
 
-	encode := func(value any) error {
-		encoder := json.NewEncoder(os.Stdout)
-		encoder.SetIndent("", "  ")
-		return encoder.Encode(value)
-	}
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
 
 	switch subcommand {
 	case "check":
 		report := service.WSLCompatibility(ctx)
 		if asJSON {
-			return encode(report)
+			return encoder.Encode(report)
 		}
 		fmt.Printf("Windows: %s (build %d)\n", report.WindowsVersion, report.WindowsBuild)
 		fmt.Printf("WSL: %s | WSL2: %t | mirrored: %t | systemd: %t | loopback: %t | LAN: %t\n", report.WSLVersion, report.WSL2, report.MirroredNetworking, report.Systemd, report.LoopbackBidirectional, report.LANReachable)
@@ -56,7 +53,7 @@ func runTopology(ctx context.Context, service *app.App, args []string) error {
 			return err
 		}
 		if asJSON {
-			return encode(result)
+			return encoder.Encode(result)
 		}
 		fmt.Println("Topologia Caddy WSL único reconciliada (sem wsl --shutdown).")
 		return nil
@@ -68,7 +65,7 @@ func runTopology(ctx context.Context, service *app.App, args []string) error {
 		}
 		result, err := service.MigrateToSingleCaddy(ctx, true)
 		if asJSON {
-			_ = encode(result)
+			_ = encoder.Encode(result)
 		}
 		if err != nil {
 			return err
@@ -81,7 +78,10 @@ func runTopology(ctx context.Context, service *app.App, args []string) error {
 		snapshot := service.CaddyTopologyStatus(ctx)
 		status := service.CaddyStatus(ctx)
 		if asJSON {
-			return encode(map[string]any{"topology": snapshot, "caddy": status})
+			return encoder.Encode(struct {
+				Topology platform.TopologySnapshot   `json:"topology"`
+				Caddy    platform.CaddyServiceStatus `json:"caddy"`
+			}{Topology: snapshot, Caddy: status})
 		}
 		fmt.Printf("Topologia: %s\n", snapshot.Topology)
 		fmt.Printf("Caddy WSL único: disponível=%t ativo=%t systemd=%t live=%t (%s)\n", status.Available, status.Running, status.Systemd, status.Live, status.Detail)

@@ -42,13 +42,11 @@ func (s *Server) handleProjectLogs(writer http.ResponseWriter, request *http.Req
 	}
 	devLogs, err := s.service.ProjectDevLogs(request.Context(), name, lines)
 	if err == nil && strings.TrimSpace(devLogs) != "" {
-		writeJSON(writer, http.StatusOK, map[string]string{"logs": devLogs})
+		writeJSON(writer, http.StatusOK, LogsResponse{Logs: devLogs})
 		return
 	}
 	globalLogs, _ := s.service.Logs("devlan")
-	writeJSON(writer, http.StatusOK, map[string]string{
-		"logs": fmt.Sprintf("Nenhum log de servidor dev para %s.\n\nLogs do DevLAN:\n%s", name, globalLogs),
-	})
+	writeJSON(writer, http.StatusOK, LogsResponse{Logs: fmt.Sprintf("Nenhum log de servidor dev para %s.\n\nLogs do DevLAN:\n%s", name, globalLogs)})
 }
 
 func (s *Server) handleProjectLink(writer http.ResponseWriter, request *http.Request) {
@@ -69,10 +67,7 @@ func (s *Server) handleProjectLink(writer http.ResponseWriter, request *http.Req
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{
-		"message":  fmt.Sprintf("Projeto %s vinculado.", proj.Name),
-		"warnings": res.Warnings,
-	})
+	writeJSON(writer, http.StatusOK, MessageResponse{Message: fmt.Sprintf("Projeto %s vinculado.", proj.Name), Warnings: res.Warnings})
 	InvalidateReadModelCache(s.service)
 }
 
@@ -93,10 +88,7 @@ func (s *Server) handleProjectUnlink(writer http.ResponseWriter, request *http.R
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{
-		"message":  fmt.Sprintf("Projeto %s desvinculado.", proj.Name),
-		"warnings": res.Warnings,
-	})
+	writeJSON(writer, http.StatusOK, MessageResponse{Message: fmt.Sprintf("Projeto %s desvinculado.", proj.Name), Warnings: res.Warnings})
 	InvalidateReadModelCache(s.service)
 }
 
@@ -117,10 +109,7 @@ func (s *Server) handleProjectHide(writer http.ResponseWriter, request *http.Req
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{
-		"message":  fmt.Sprintf("Projeto %s ocultado.", input.Name),
-		"warnings": res.Warnings,
-	})
+	writeJSON(writer, http.StatusOK, MessageResponse{Message: fmt.Sprintf("Projeto %s ocultado.", input.Name), Warnings: res.Warnings})
 	InvalidateReadModelCache(s.service)
 }
 
@@ -141,10 +130,7 @@ func (s *Server) handleProjectUnhide(writer http.ResponseWriter, request *http.R
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{
-		"message":  fmt.Sprintf("Projeto %s restaurado.", input.Path),
-		"warnings": res.Warnings,
-	})
+	writeJSON(writer, http.StatusOK, MessageResponse{Message: fmt.Sprintf("Projeto %s restaurado.", input.Path), Warnings: res.Warnings})
 	InvalidateReadModelCache(s.service)
 }
 
@@ -208,11 +194,9 @@ func (s *Server) handleProjectConfig(writer http.ResponseWriter, request *http.R
 			writeApplyError(writer, http.StatusConflict, result, err)
 			return
 		}
-		writeJSON(writer, http.StatusOK, map[string]any{
-			"message":  "Configuração do projeto salva.",
-			"status":   result.Status,
-			"revision": result.Revision,
-			"warnings": result.Warnings,
+		writeJSON(writer, http.StatusOK, ApplyResponse{
+			Message: "Configuração do projeto salva.", Status: result.Status,
+			Revision: result.Revision, Warnings: result.Warnings,
 		})
 		InvalidateReadModelCache(s.service)
 		return
@@ -236,15 +220,13 @@ func (s *Server) handleProjectConfig(writer http.ResponseWriter, request *http.R
 		}
 	}
 	InvalidateReadModelCache(s.service)
-	writeJSON(writer, http.StatusOK, map[string]string{"message": "Configuração do projeto salva."})
+	writeJSON(writer, http.StatusOK, MessageOnlyResponse{Message: "Configuração do projeto salva."})
 }
 
 func writeApplyError(writer http.ResponseWriter, status int, result app.ApplyResult, err error) {
-	writeJSON(writer, status, map[string]any{
-		"error":    err.Error(),
-		"status":   result.Status,
-		"revision": result.Revision,
-		"warnings": result.Warnings,
+	writeJSON(writer, status, ApplyErrorResponse{
+		Error: err.Error(), Status: result.Status,
+		Revision: result.Revision, Warnings: result.Warnings,
 	})
 }
 
@@ -325,7 +307,7 @@ func (s *Server) handleProjectBuild(writer http.ResponseWriter, request *http.Re
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]string{"output": out})
+	writeJSON(writer, http.StatusOK, OutputResponse{Output: out})
 }
 
 func (s *Server) handleProjectDeps(writer http.ResponseWriter, request *http.Request) {
@@ -345,7 +327,7 @@ func (s *Server) handleProjectDeps(writer http.ResponseWriter, request *http.Req
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]string{"output": out})
+	writeJSON(writer, http.StatusOK, OutputResponse{Output: out})
 }
 
 func (s *Server) handleProjectTLS(writer http.ResponseWriter, request *http.Request) {
@@ -386,10 +368,7 @@ func (s *Server) handlePark(writer http.ResponseWriter, request *http.Request) {
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{
-		"message":  fmt.Sprintf("Pasta %s estacionada.", park.Path),
-		"warnings": res.Warnings,
-	})
+	writeJSON(writer, http.StatusOK, MessageResponse{Message: fmt.Sprintf("Pasta %s estacionada.", park.Path), Warnings: res.Warnings})
 	InvalidateReadModelCache(s.service)
 }
 
@@ -410,9 +389,6 @@ func (s *Server) handleUnpark(writer http.ResponseWriter, request *http.Request)
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{
-		"message":  fmt.Sprintf("Pasta %s desestacionada.", park.Path),
-		"warnings": res.Warnings,
-	})
+	writeJSON(writer, http.StatusOK, MessageResponse{Message: fmt.Sprintf("Pasta %s desestacionada.", park.Path), Warnings: res.Warnings})
 	InvalidateReadModelCache(s.service)
 }

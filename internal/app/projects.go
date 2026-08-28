@@ -70,7 +70,7 @@ func (a *App) Link(ctx context.Context, name, projectPath string) (domain.Projec
 	if err != nil {
 		return domain.Project{}, result, err
 	}
-	_ = a.appendLog("link %s %s", project.Name, project.Path)
+	_ = a.appendLog(fmt.Sprintf("link %s %s", project.Name, project.Path))
 	a.recordTelemetry("link", map[string]string{"mode": string(detected.Kind), "result": "ok"})
 	return project, result, nil
 }
@@ -88,7 +88,7 @@ func (a *App) Unlink(ctx context.Context, name string) (domain.Project, ApplyRes
 	if err != nil {
 		return domain.Project{}, result, err
 	}
-	_ = a.appendLog("unlink %s", project.Name)
+	_ = a.appendLog(fmt.Sprintf("unlink %s", project.Name))
 	a.recordTelemetry("unlink", map[string]string{"result": "ok"})
 	return project, result, nil
 }
@@ -114,7 +114,7 @@ func (a *App) IgnoreProject(ctx context.Context, selector string) (ApplyResult, 
 	}
 	result, err := a.saveAndApply(ctx, cfg, true)
 	if err == nil {
-		_ = a.appendLog("projeto estacionado ocultado %s", selected.Name)
+		_ = a.appendLog(fmt.Sprintf("projeto estacionado ocultado %s", selected.Name))
 	}
 	return result, err
 }
@@ -129,7 +129,7 @@ func (a *App) UnignoreProject(ctx context.Context, projectPath string) (ApplyRes
 	}
 	result, err := a.saveAndApply(ctx, cfg, true)
 	if err == nil {
-		_ = a.appendLog("projeto estacionado exibido novamente %s", projectPath)
+		_ = a.appendLog(fmt.Sprintf("projeto estacionado exibido novamente %s", projectPath))
 	}
 	return result, err
 }
@@ -158,7 +158,7 @@ func (a *App) Park(ctx context.Context, projectPath string) (domain.Park, ApplyR
 	if err != nil {
 		return domain.Park{}, result, err
 	}
-	_ = a.appendLog("park %s", park.Path)
+	_ = a.appendLog(fmt.Sprintf("park %s", park.Path))
 	return park, result, nil
 }
 
@@ -176,7 +176,7 @@ func (a *App) Unpark(ctx context.Context, projectPath string) (domain.Park, Appl
 	if err != nil {
 		return domain.Park{}, result, err
 	}
-	_ = a.appendLog("unpark %s", park.Path)
+	_ = a.appendLog(fmt.Sprintf("unpark %s", park.Path))
 	return park, result, nil
 }
 
@@ -190,7 +190,7 @@ func (a *App) SetDefaultMode(ctx context.Context, mode domain.Mode) (ApplyResult
 	}
 	result, err := a.saveAndApply(ctx, cfg, true)
 	if err == nil {
-		_ = a.appendLog("modo global %s", mode)
+		_ = a.appendLog(fmt.Sprintf("modo global %s", mode))
 	}
 	return result, err
 }
@@ -206,9 +206,9 @@ func (a *App) SetProjectMode(ctx context.Context, name string, mode *domain.Mode
 	result, err := a.saveAndApply(ctx, cfg, true)
 	if err == nil {
 		if mode == nil {
-			_ = a.appendLog("modo do projeto %s herdado", name)
+			_ = a.appendLog(fmt.Sprintf("modo do projeto %s herdado", name))
 		} else {
-			_ = a.appendLog("modo do projeto %s %s", name, *mode)
+			_ = a.appendLog(fmt.Sprintf("modo do projeto %s %s", name, *mode))
 		}
 	}
 	return result, err

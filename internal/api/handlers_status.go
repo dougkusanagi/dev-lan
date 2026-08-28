@@ -18,10 +18,9 @@ func (s *Server) handleHealth(writer http.ResponseWriter, request *http.Request)
 		methodNotAllowed(writer, http.MethodGet)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{
-		"status":  "ok",
-		"version": ProtocolVersion,
-		"runtime": runtime.GOOS + "/" + runtime.GOARCH,
+	writeJSON(writer, http.StatusOK, HealthResponse{
+		Status: "ok", Version: ProtocolVersion,
+		Runtime: runtime.GOOS + "/" + runtime.GOARCH,
 	})
 }
 

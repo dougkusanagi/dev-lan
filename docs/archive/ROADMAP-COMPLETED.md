@@ -321,5 +321,20 @@ para fechar o gate após reboot, VPN/troca de IP e `wsl --shutdown`.
 - [x] Preservar projetos e oferecer políticas explícitas keep/purge.
 - [x] Adicionar operações longas com ID, consulta de estado e eventos SSE.
 
+## R-04b — DTOs explícitos nas fronteiras
+
+- [x] Substituir respostas HTTP e payloads do cliente WSL construídos com
+  `map[string]any` por DTOs explícitos, mantendo os nomes e valores JSON
+  existentes, inclusive distinção entre campos omitidos e `null`.
+- [x] Tipar as saídas da CLI de update/telemetria/topologia, o parser de
+  resultados do Hyper-V Firewall e o helper de logs da aplicação.
+- [x] Fechar `writeJSON` com um conjunto de payloads permitido pelo compilador e
+  adicionar testes de contrato e regra arquitetural contra o retorno de tipos
+  dinâmicos nas fronteiras migradas.
+
+**Gate:** suíte Go, `go vet`, validação/build do frontend e `git diff --check`
+passam. `go test -race ./...` permanece dependente de CGo e de um compilador C
+disponível no ambiente.
+
 O restante foi migrado para o [roadmap vigente](../ROADMAP.md), sem duplicar
 caixas abertas neste histórico.

@@ -25,33 +25,33 @@ func runWSLClient(ctx context.Context, dataDir, command string, args []string) e
 	if err != nil {
 		return fmt.Errorf("controlador Windows indisponível: %w (inicie `devlan service start` ou a UI)", err)
 	}
-	if message, ok := payload["message"].(string); ok && message != "" {
-		fmt.Println(message)
+	if payload.Message != nil && *payload.Message != "" {
+		fmt.Println(*payload.Message)
 	}
 	if command == "links" || command == "status" || command == "doctor" || command == "route" || command == "topology" {
 		if command == "links" {
-			if projects, ok := payload["projects"]; ok {
-				data, _ := json.MarshalIndent(projects, "", "  ")
+			if payload.Projects != nil {
+				data, _ := json.MarshalIndent(*payload.Projects, "", "  ")
 				fmt.Println(string(data))
 			}
 		} else if command == "status" {
-			if status, ok := payload["status"]; ok {
-				data, _ := json.MarshalIndent(status, "", "  ")
+			if payload.Status != nil {
+				data, _ := json.MarshalIndent(*payload.Status, "", "  ")
 				fmt.Println(string(data))
 			}
 		} else if command == "doctor" {
-			if checks, ok := payload["checks"]; ok {
-				data, _ := json.MarshalIndent(checks, "", "  ")
+			if payload.Checks != nil {
+				data, _ := json.MarshalIndent(*payload.Checks, "", "  ")
 				fmt.Println(string(data))
 			}
 		} else if command == "topology" {
 			data, _ := json.MarshalIndent(payload, "", "  ")
 			fmt.Println(string(data))
-		} else if allocations, ok := payload["allocations"]; ok {
-			data, _ := json.MarshalIndent(allocations, "", "  ")
+		} else if payload.Allocations != nil {
+			data, _ := json.MarshalIndent(*payload.Allocations, "", "  ")
 			fmt.Println(string(data))
-		} else if paths, ok := payload["paths"]; ok {
-			data, _ := json.MarshalIndent(paths, "", "  ")
+		} else if payload.Paths != nil {
+			data, _ := json.MarshalIndent(*payload.Paths, "", "  ")
 			fmt.Println(string(data))
 		}
 	}

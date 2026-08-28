@@ -80,7 +80,7 @@ func UnmarshalExport(data []byte) (domain.Config, error) {
 	if err := decoder.Decode(&bundle); err != nil {
 		return domain.Config{}, fmt.Errorf("ler arquivo de configuração exportado: %w", err)
 	}
-	var trailing any
+	var trailing json.RawMessage
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		if err == nil {
 			return domain.Config{}, fmt.Errorf("arquivo de configuração exportado contém dados após o JSON principal")

@@ -49,7 +49,7 @@ func (a *App) SetAuth(ctx context.Context, selector string, enabled bool, userna
 	}
 	result, err := a.saveAndApply(ctx, cfg, true)
 	if err == nil {
-		_ = a.appendLog("auth %s enabled=%t user=%s", selector, enabled, username)
+		_ = a.appendLog(fmt.Sprintf("auth %s enabled=%t user=%s", selector, enabled, username))
 		_ = a.Store.AppendSecurityAudit("AUTH_SET", fmt.Sprintf("target=%s enabled=%t user=%s", selector, enabled, username))
 	}
 	return result, err

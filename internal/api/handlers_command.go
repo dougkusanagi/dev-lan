@@ -36,7 +36,9 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 	ctx, cancel := context.WithTimeout(request.Context(), 45*time.Second)
 	defer cancel()
 
-	response := map[string]any{"command": input.Command}
+	response := CommandResponse{Command: input.Command}
+	setMessage := func(message string) { response.Message = &message }
+	setWarnings := func(warnings []string) { response.Warnings = &warnings }
 	switch input.Command {
 	case "link":
 		if len(input.Args) != 2 {
@@ -48,8 +50,8 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
 		}
-		response["message"] = fmt.Sprintf("Projeto %s registrado: %s", project.Name, project.Path)
-		response["warnings"] = result.Warnings
+		setMessage(fmt.Sprintf("Projeto %s registrado: %s", project.Name, project.Path))
+		setWarnings(result.Warnings)
 	case "unlink":
 		if len(input.Args) != 1 {
 			writeJSONError(writer, http.StatusBadRequest, "uso: unlink NAME")
@@ -60,8 +62,8 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
 		}
-		response["message"] = fmt.Sprintf("Projeto %s removido do registro.", project.Name)
-		response["warnings"] = result.Warnings
+		setMessage(fmt.Sprintf("Projeto %s removido do registro.", project.Name))
+		setWarnings(result.Warnings)
 	case "park":
 		if len(input.Args) == 2 && (input.Args[0] == "ignore" || input.Args[0] == "unignore") {
 			var result app.ApplyResult
@@ -75,8 +77,8 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 				writeJSONError(writer, http.StatusConflict, err.Error())
 				return
 			}
-			response["message"] = fmt.Sprintf("Projeto %s: %s", input.Args[0], input.Args[1])
-			response["warnings"] = result.Warnings
+			setMessage(fmt.Sprintf("Projeto %s: %s", input.Args[0], input.Args[1]))
+			setWarnings(result.Warnings)
 			break
 		}
 		if len(input.Args) != 1 {
@@ -88,8 +90,8 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
 		}
-		response["message"] = fmt.Sprintf("Diretório estacionado: %s", park.Path)
-		response["warnings"] = result.Warnings
+		setMessage(fmt.Sprintf("Diretório estacionado: %s", park.Path))
+		setWarnings(result.Warnings)
 	case "unpark":
 		if len(input.Args) != 1 {
 			writeJSONError(writer, http.StatusBadRequest, "uso: unpark PATH")
@@ -100,8 +102,8 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
 		}
-		response["message"] = fmt.Sprintf("Diretório removido dos estacionados: %s", park.Path)
-		response["warnings"] = result.Warnings
+		setMessage(fmt.Sprintf("Diretório removido dos estacionados: %s", park.Path))
+		setWarnings(result.Warnings)
 	case "links":
 		if len(input.Args) > 1 {
 			writeJSONError(writer, http.StatusBadRequest, "uso: links [FILTRO]")
@@ -116,7 +118,7 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 			writeJSONError(writer, http.StatusInternalServerError, err.Error())
 			return
 		}
-		response["projects"] = views
+		response.Projects = &views
 	case "status":
 		if len(input.Args) != 0 {
 			writeJSONError(writer, http.StatusBadRequest, "uso: status")
@@ -127,16 +129,19 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 			writeJSONError(writer, http.StatusInternalServerError, err.Error())
 			return
 		}
-		response["status"] = statusView
+		response.Status = &statusView
 	case "topology":
 		if len(input.Args) > 1 || (len(input.Args) == 1 && input.Args[0] != "status" && input.Args[0] != "check") {
 			writeJSONError(writer, http.StatusBadRequest, "uso: topology [status|check]")
 			return
 		}
-		response["topology"] = s.service.CaddyTopologyStatus(ctx)
-		response["caddy"] = s.service.CaddyStatus(ctx)
+		topology := s.service.CaddyTopologyStatus(ctx)
+		caddy := s.service.CaddyStatus(ctx)
+		response.Topology = &topology
+		response.Caddy = &caddy
 		if len(input.Args) == 1 && input.Args[0] == "check" {
-			response["compatibility"] = s.service.WSLCompatibility(ctx)
+			compatibility := s.service.WSLCompatibility(ctx)
+			response.Compatibility = &compatibility
 		}
 	case "reload":
 		if len(input.Args) != 0 {
@@ -148,8 +153,8 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
 		}
-		response["result"] = result
-		response["message"] = "Configurações recarregadas."
+		response.Result = &result
+		setMessage("Configurações recarregadas.")
 	case "route":
 		if len(input.Args) > 0 && input.Args[0] == "allocations" {
 			if len(input.Args) == 1 {
@@ -158,7 +163,7 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 					writeJSONError(writer, http.StatusInternalServerError, err.Error())
 					return
 				}
-				response["allocations"] = allocations
+				response.Allocations = &allocations
 				break
 			}
 			if len(input.Args) == 2 && input.Args[1] == "prune" {
@@ -167,8 +172,8 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 					writeJSONError(writer, http.StatusConflict, err.Error())
 					return
 				}
-				response["paths"] = paths
-				response["result"] = result
+				response.Paths = &paths
+				response.Result = &result
 				break
 			}
 			if len(input.Args) == 3 && input.Args[1] == "prune" && input.Args[2] == "--dry-run" {
@@ -177,8 +182,8 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 					writeJSONError(writer, http.StatusInternalServerError, err.Error())
 					return
 				}
-				response["paths"] = paths
-				response["result"] = result
+				response.Paths = &paths
+				response.Result = &result
 				break
 			}
 			writeJSONError(writer, http.StatusBadRequest, "uso: route allocations [prune [--dry-run]]")
@@ -202,9 +207,9 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
 		}
-		response["result"] = result
-		response["warnings"] = result.Warnings
-		response["message"] = "Porta LAN atualizada."
+		response.Result = &result
+		setWarnings(result.Warnings)
+		setMessage("Porta LAN atualizada.")
 	case "doctor":
 		if len(input.Args) > 1 {
 			writeJSONError(writer, http.StatusBadRequest, "uso: doctor [NAME]")
@@ -219,7 +224,7 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
 		}
-		response["checks"] = checks
+		response.Checks = &checks
 	case "open":
 		if len(input.Args) > 1 {
 			writeJSONError(writer, http.StatusBadRequest, "uso: open [NAME]")
@@ -238,8 +243,8 @@ func (s *Server) handleCommand(writer http.ResponseWriter, request *http.Request
 			writeJSONError(writer, http.StatusConflict, err.Error())
 			return
 		}
-		response["url"] = url
-		response["message"] = url
+		response.URL = &url
+		setMessage(url)
 	default:
 		writeJSONError(writer, http.StatusNotFound, "comando não permitido pelo protocolo WSL: "+input.Command)
 		return

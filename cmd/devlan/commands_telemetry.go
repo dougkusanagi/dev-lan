@@ -8,6 +8,12 @@ import (
 	"github.com/dougkusanagi/dev-lan/internal/app"
 )
 
+type telemetryStatusOutput struct {
+	Enabled  bool   `json:"enabled"`
+	Endpoint string `json:"endpoint"`
+	Queued   int    `json:"queued"`
+}
+
 func runTelemetry(ctx context.Context, service *app.App, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("uso: devlan telemetry status|enable ENDPOINT|disable|send")
@@ -26,10 +32,8 @@ func runTelemetry(ctx context.Context, service *app.App, args []string) error {
 		if err != nil {
 			return err
 		}
-		data, _ := json.MarshalIndent(map[string]any{
-			"enabled":  consent.Enabled,
-			"endpoint": consent.Endpoint,
-			"queued":   queued,
+		data, _ := json.MarshalIndent(telemetryStatusOutput{
+			Enabled: consent.Enabled, Endpoint: consent.Endpoint, Queued: queued,
 		}, "", "  ")
 		fmt.Println(string(data))
 		return nil

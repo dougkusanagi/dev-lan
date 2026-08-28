@@ -47,7 +47,7 @@ func (s *Server) handleConfig(writer http.ResponseWriter, request *http.Request)
 			return
 		}
 		InvalidateReadModelCache(s.service)
-		writeJSON(writer, http.StatusOK, map[string]string{"message": "Configuração global salva."})
+		writeJSON(writer, http.StatusOK, MessageOnlyResponse{Message: "Configuração global salva."})
 		return
 	}
 	methodNotAllowed(writer, http.MethodGet+", "+http.MethodPost)
@@ -83,10 +83,7 @@ func (s *Server) handleConfigImport(writer http.ResponseWriter, request *http.Re
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{
-		"message":  "Configuração importada e aplicada com sucesso.",
-		"warnings": res.Warnings,
-	})
+	writeJSON(writer, http.StatusOK, MessageResponse{Message: "Configuração importada e aplicada com sucesso.", Warnings: res.Warnings})
 }
 
 func (s *Server) handleReload(writer http.ResponseWriter, request *http.Request) {
@@ -100,10 +97,7 @@ func (s *Server) handleReload(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 	InvalidateReadModelCache(s.service)
-	writeJSON(writer, http.StatusOK, map[string]any{
-		"message": "Configurações recarregadas com sucesso.",
-		"result":  result,
-	})
+	writeJSON(writer, http.StatusOK, ReloadResponse{Message: "Configurações recarregadas com sucesso.", Result: result})
 }
 
 func (s *Server) handlePHPVersions(writer http.ResponseWriter, request *http.Request) {
@@ -137,10 +131,7 @@ func (s *Server) handlePHPInstall(writer http.ResponseWriter, request *http.Requ
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{
-		"message":  fmt.Sprintf("PHP %s instalado.", input.Version),
-		"warnings": res.Warnings,
-	})
+	writeJSON(writer, http.StatusOK, MessageResponse{Message: fmt.Sprintf("PHP %s instalado.", input.Version), Warnings: res.Warnings})
 	InvalidateColdReadModelCache(s.service)
 }
 
@@ -161,10 +152,7 @@ func (s *Server) handlePHPRemove(writer http.ResponseWriter, request *http.Reque
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{
-		"message":  fmt.Sprintf("PHP %s removido.", input.Version),
-		"warnings": res.Warnings,
-	})
+	writeJSON(writer, http.StatusOK, MessageResponse{Message: fmt.Sprintf("PHP %s removido.", input.Version), Warnings: res.Warnings})
 	InvalidateColdReadModelCache(s.service)
 }
 
@@ -185,9 +173,6 @@ func (s *Server) handlePHPDefault(writer http.ResponseWriter, request *http.Requ
 		writeJSONError(writer, http.StatusConflict, err.Error())
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{
-		"message":  fmt.Sprintf("PHP padrão alterado para %s.", input.Version),
-		"warnings": res.Warnings,
-	})
+	writeJSON(writer, http.StatusOK, MessageResponse{Message: fmt.Sprintf("PHP padrão alterado para %s.", input.Version), Warnings: res.Warnings})
 	InvalidateColdReadModelCache(s.service)
 }

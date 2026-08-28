@@ -37,7 +37,8 @@ As tarefas e critérios de aceite ficam em [ROADMAP.md](ROADMAP.md).
 
 - `internal/app.App`, `internal/api` e `cmd/devlan` acumulam responsabilidades e
   acessos diretos à persistência;
-- algumas fronteiras usam `any`, globais por ponteiro e DTOs duplicados;
+- ainda há globais por ponteiro, DTOs duplicados e listas genéricas exigidas por
+  integrações de framework;
 - CLI, HTTP e Wails ainda não convergem integralmente nos mesmos casos de uso;
 - timeouts HTTP/SSE, permissões do estado, bundles de suporte e lifecycle
   concorrente precisam de testes adicionais;

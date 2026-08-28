@@ -82,8 +82,9 @@ editados manualmente. Detalhes estão em
 Os fluxos funcionam, mas `app.App`, API e CLI ainda concentram responsabilidades,
 embora as implementações de `internal/app`, `internal/api`, `cmd/devlan` e
 `internal/domain` já estejam divididas por assunto. Há
-acesso de transportes ao store, DTOs duplicados, valores `any`, caches globais
-e orquestração repetida no Wails. Isso dificulta testes de lifecycle e faz uma
+acesso de transportes ao store, DTOs duplicados, registros genéricos de
+integrações de framework, caches globais e orquestração repetida no Wails. Isso
+dificulta testes de lifecycle e faz uma
 mudança atravessar arquivos grandes. A solução é evolução incremental orientada
 por testes, não uma troca de stack.
 

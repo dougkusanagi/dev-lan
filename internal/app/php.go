@@ -102,7 +102,7 @@ func (a *App) PHPInstall(ctx context.Context, version string, extensions []strin
 	}
 	result, err := a.saveAndApply(ctx, cfg, true)
 	if err == nil {
-		_ = a.appendLog("PHP %s instalado", version)
+		_ = a.appendLog(fmt.Sprintf("PHP %s instalado", version))
 	}
 	return result, err
 }
@@ -141,7 +141,7 @@ func (a *App) PHPRemove(ctx context.Context, version string) (ApplyResult, error
 	applyResult, err := a.saveAndApply(ctx, cfg, true)
 	result.Warnings = append(result.Warnings, applyResult.Warnings...)
 	if err == nil {
-		_ = a.appendLog("PHP %s removido", version)
+		_ = a.appendLog(fmt.Sprintf("PHP %s removido", version))
 	}
 	return result, err
 }
@@ -161,7 +161,7 @@ func (a *App) SetPHPVersionExtensions(ctx context.Context, version string, exten
 	}
 	result, err := a.saveAndApply(ctx, cfg, true)
 	if err == nil {
-		_ = a.appendLog("extensões PHP %s atualizadas", version)
+		_ = a.appendLog(fmt.Sprintf("extensões PHP %s atualizadas", version))
 	}
 	return result, err
 }
@@ -186,7 +186,7 @@ func (a *App) SetDefaultPHPVersion(ctx context.Context, version string) (ApplyRe
 	}
 	result, err := a.saveAndApply(ctx, cfg, true)
 	if err == nil {
-		_ = a.appendLog("PHP global %s", cfg.PHPDefaultVersion)
+		_ = a.appendLog(fmt.Sprintf("PHP global %s", cfg.PHPDefaultVersion))
 	}
 	return result, err
 }
@@ -246,7 +246,7 @@ func (a *App) SetProjectPHPVersion(ctx context.Context, selector, version string
 	}
 	result, err := a.saveAndApply(ctx, cfg, true)
 	if err == nil {
-		_ = a.appendLog("PHP do projeto %s: %s", name, version)
+		_ = a.appendLog(fmt.Sprintf("PHP do projeto %s: %s", name, version))
 	}
 	return result, err
 }
@@ -271,7 +271,7 @@ func (a *App) SetProjectPHPPreset(ctx context.Context, selector, value string) (
 	}
 	result, err := a.saveAndApply(ctx, cfg, true)
 	if err == nil {
-		_ = a.appendLog("preset PHP do projeto %s: %s", name, value)
+		_ = a.appendLog(fmt.Sprintf("preset PHP do projeto %s: %s", name, value))
 	}
 	return result, err
 }
@@ -291,7 +291,7 @@ func (a *App) SetProjectPHPIsolated(ctx context.Context, selector string, isolat
 	cfg.Projects[index].PHPIsolatedPool = &isolated
 	result, err := a.saveAndApply(ctx, cfg, true)
 	if err == nil {
-		_ = a.appendLog("pool PHP do projeto %s: %t", name, isolated)
+		_ = a.appendLog(fmt.Sprintf("pool PHP do projeto %s: %t", name, isolated))
 	}
 	return result, err
 }

@@ -27,7 +27,7 @@ func (a *App) SetProjectStaticDir(ctx context.Context, selector, staticDir strin
 	cfg.Projects[index].StaticDir = val
 	result, err := a.saveAndApply(ctx, cfg, true)
 	if err == nil {
-		_ = a.appendLog("static_dir %s %s", name, staticDir)
+		_ = a.appendLog(fmt.Sprintf("static_dir %s %s", name, staticDir))
 	}
 	return result, err
 }
@@ -48,7 +48,7 @@ func (a *App) SetProjectDevPort(ctx context.Context, selector string, port int) 
 	cfg.Projects[index].DevPort = val
 	result, err := a.saveAndApply(ctx, cfg, true)
 	if err == nil {
-		_ = a.appendLog("dev_port %s %d", name, port)
+		_ = a.appendLog(fmt.Sprintf("dev_port %s %d", name, port))
 	}
 	return result, err
 }
@@ -69,7 +69,7 @@ func (a *App) SetProjectDevCommand(ctx context.Context, selector, devCmd string)
 	cfg.Projects[index].DevCommand = val
 	result, err := a.saveAndApply(ctx, cfg, true)
 	if err == nil {
-		_ = a.appendLog("dev_command %s %s", name, devCmd)
+		_ = a.appendLog(fmt.Sprintf("dev_command %s %s", name, devCmd))
 	}
 	return result, err
 }
@@ -90,7 +90,7 @@ func (a *App) SetProjectPackageManager(ctx context.Context, selector, pm string)
 	cfg.Projects[index].PackageManager = val
 	result, err := a.saveAndApply(ctx, cfg, true)
 	if err == nil {
-		_ = a.appendLog("package_manager %s %s", name, pm)
+		_ = a.appendLog(fmt.Sprintf("package_manager %s %s", name, pm))
 	}
 	return result, err
 }
@@ -109,7 +109,7 @@ func (a *App) SetRoutePort(ctx context.Context, selector string, port *int) (App
 	}
 	result, err := a.saveAndApply(ctx, cfg, true)
 	if err == nil {
-		_ = a.appendLog("porta LAN %s: port=%v", name, port)
+		_ = a.appendLog(fmt.Sprintf("porta LAN %s: port=%v", name, port))
 		_ = a.Store.AppendSecurityAudit("ROUTE_PORT_CHANGE", fmt.Sprintf("project=%s port=%v", name, port))
 	}
 	return result, err
@@ -187,7 +187,7 @@ func (a *App) PruneRouteAllocations(ctx context.Context, dryRun bool) ([]string,
 	}
 	result, err := a.saveAndApply(ctx, cfg, true)
 	if err == nil {
-		_ = a.appendLog("alocações de rota órfãs removidas: %d", len(orphanPaths))
+		_ = a.appendLog(fmt.Sprintf("alocações de rota órfãs removidas: %d", len(orphanPaths)))
 		_ = a.Store.AppendSecurityAudit("ROUTE_ALLOCATIONS_PRUNE", fmt.Sprintf("count=%d paths=%v", len(orphanPaths), orphanPaths))
 	}
 	return orphanPaths, result, err

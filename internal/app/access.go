@@ -31,7 +31,7 @@ func (a *App) SetAllowlist(ctx context.Context, selector string, cidrs []string)
 	}
 	result, err := a.saveAndApply(ctx, cfg, true)
 	if err == nil {
-		_ = a.appendLog("allowlist %s atualizada (%d CIDRs)", selector, len(cidrs))
+		_ = a.appendLog(fmt.Sprintf("allowlist %s atualizada (%d CIDRs)", selector, len(cidrs)))
 		_ = a.Store.AppendSecurityAudit("ALLOWLIST_SET", fmt.Sprintf("target=%s cidrs=%v", selector, cidrs))
 	}
 	return result, err
@@ -111,7 +111,7 @@ func (a *App) ExposeProject(ctx context.Context, selector string, duration time.
 	cfg.Projects[index].ExposedUntil = untilStr
 	result, err := a.saveAndApply(ctx, cfg, true)
 	if err == nil {
-		_ = a.appendLog("expose %s duration=%v", name, duration)
+		_ = a.appendLog(fmt.Sprintf("expose %s duration=%v", name, duration))
 		_ = a.Store.AppendSecurityAudit("EXPOSE_PROJECT", fmt.Sprintf("project=%s duration=%v until=%v", name, duration, untilStr))
 	}
 	return result, name, err
@@ -130,7 +130,7 @@ func (a *App) UnexposeProject(ctx context.Context, selector string) (ApplyResult
 	cfg.Projects[index].ExposedUntil = &past
 	result, err := a.saveAndApply(ctx, cfg, true)
 	if err == nil {
-		_ = a.appendLog("unexpose %s", name)
+		_ = a.appendLog(fmt.Sprintf("unexpose %s", name))
 		_ = a.Store.AppendSecurityAudit("UNEXPOSE_PROJECT", fmt.Sprintf("project=%s", name))
 	}
 	return result, name, err

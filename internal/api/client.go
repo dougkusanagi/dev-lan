@@ -40,25 +40,25 @@ func NewClientFromFiles(files app.APIEndpointFiles) Client {
 	return Client{EndpointFile: files.Endpoint, TokenFile: files.Token}
 }
 
-func (c Client) Command(ctx context.Context, command string, args []string) (map[string]any, error) {
+func (c Client) Command(ctx context.Context, command string, args []string) (CommandResponse, error) {
 	body, err := json.Marshal(commandRequest{Command: command, Args: args})
 	if err != nil {
-		return nil, err
+		return CommandResponse{}, err
 	}
 	response, err := c.Do(ctx, http.MethodPost, "/v1/command", strings.NewReader(string(body)))
 	if err != nil {
-		return nil, err
+		return CommandResponse{}, err
 	}
 	defer response.Body.Close()
-	var payload map[string]any
+	var payload CommandResponse
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
-		return nil, err
+		return CommandResponse{}, err
 	}
 	if response.StatusCode >= 400 {
-		if message, ok := payload["error"].(string); ok {
-			return nil, errors.New(message)
+		if payload.Error != "" {
+			return CommandResponse{}, errors.New(payload.Error)
 		}
-		return nil, fmt.Errorf("API local respondeu HTTP %d", response.StatusCode)
+		return CommandResponse{}, fmt.Errorf("API local respondeu HTTP %d", response.StatusCode)
 	}
 	return payload, nil
 }

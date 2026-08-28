@@ -87,7 +87,7 @@ func (s *Server) handleDoctorFix(writer http.ResponseWriter, request *http.Reque
 		_, _ = s.service.Reload(ctx)
 	}
 	InvalidateReadModelCache(s.service)
-	writeJSON(writer, http.StatusOK, map[string]string{"message": "Correção aplicada."})
+	writeJSON(writer, http.StatusOK, MessageOnlyResponse{Message: "Correção aplicada."})
 }
 
 func (s *Server) handleSecurityAudit(writer http.ResponseWriter, request *http.Request) {
@@ -105,7 +105,7 @@ func (s *Server) handleSecurityAudit(writer http.ResponseWriter, request *http.R
 		writeJSONError(writer, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]string{"logs": logs})
+	writeJSON(writer, http.StatusOK, LogsResponse{Logs: logs})
 }
 
 func (s *Server) handleSecurityTrust(writer http.ResponseWriter, request *http.Request) {
@@ -118,5 +118,5 @@ func (s *Server) handleSecurityTrust(writer http.ResponseWriter, request *http.R
 		return
 	}
 	InvalidateReadModelCache(s.service)
-	writeJSON(writer, http.StatusOK, map[string]string{"message": "Certificado raiz instalado e confiado."})
+	writeJSON(writer, http.StatusOK, MessageOnlyResponse{Message: "Certificado raiz instalado e confiado."})
 }

@@ -10,6 +10,15 @@ import (
 	devlanupdate "github.com/dougkusanagi/dev-lan/internal/update"
 )
 
+type updateCheckOutput struct {
+	Channel     devlanupdate.Channel `json:"channel"`
+	Current     string               `json:"current"`
+	Available   string               `json:"available"`
+	Update      bool                 `json:"update"`
+	SHA256      string               `json:"sha256"`
+	ArtifactURL string               `json:"artifact_url"`
+}
+
 func runUpdate(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("uso: devlan update check CHANNEL [MANIFEST_URL] | devlan update download CHANNEL MANIFEST_URL PATH")
@@ -39,13 +48,10 @@ func runUpdate(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		data, _ := json.MarshalIndent(map[string]any{
-			"channel":      channel,
-			"current":      version,
-			"available":    manifest.Version,
-			"update":       devlanupdate.IsNewer(version, manifest.Version),
-			"sha256":       manifest.SHA256,
-			"artifact_url": manifest.URL,
+		data, _ := json.MarshalIndent(updateCheckOutput{
+			Channel: channel, Current: version, Available: manifest.Version,
+			Update: devlanupdate.IsNewer(version, manifest.Version),
+			SHA256: manifest.SHA256, ArtifactURL: manifest.URL,
 		}, "", "  ")
 		fmt.Println(string(data))
 		return nil

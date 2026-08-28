@@ -121,7 +121,7 @@ func (a *App) DiagnosticBundle(ctx context.Context, targetPath string) (string, 
 	if err := diagnostic.Write(targetPath, manifest, entries); err != nil {
 		return "", err
 	}
-	_ = a.appendLog("diagnóstico exportado: %s", targetPath)
+	_ = a.appendLog(fmt.Sprintf("diagnóstico exportado: %s", targetPath))
 	return targetPath, nil
 }
 

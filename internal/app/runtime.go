@@ -53,10 +53,10 @@ func (a *App) StartDev(ctx context.Context, selector string) error {
 		startErr = a.Dev.StartDev(ctx, project, port, cmd)
 	}
 	if startErr != nil {
-		_ = a.appendLog("dev start %s falhou: %v", project.Name, startErr)
+		_ = a.appendLog(fmt.Sprintf("dev start %s falhou: %v", project.Name, startErr))
 		return startErr
 	}
-	_ = a.appendLog("dev start %s (porta %d)", project.Name, port)
+	_ = a.appendLog(fmt.Sprintf("dev start %s (porta %d)", project.Name, port))
 	return nil
 }
 
@@ -85,7 +85,7 @@ func (a *App) StopDev(ctx context.Context, selector string) error {
 	if stopErr != nil {
 		return stopErr
 	}
-	_ = a.appendLog("dev stop %s", project.Name)
+	_ = a.appendLog(fmt.Sprintf("dev stop %s", project.Name))
 	return nil
 }
 
@@ -109,7 +109,7 @@ func (a *App) RestartDev(ctx context.Context, selector string) error {
 	} else if err := a.Dev.RestartDev(ctx, project, port, cmd); err != nil {
 		return err
 	}
-	_ = a.appendLog("dev restart %s (porta %d)", project.Name, port)
+	_ = a.appendLog(fmt.Sprintf("dev restart %s (porta %d)", project.Name, port))
 	return nil
 }
 
@@ -133,7 +133,7 @@ func (a *App) BuildProject(ctx context.Context, selector string) (string, error)
 	pm := cfg.PackageManager(project)
 	out, err := a.Dev.Build(ctx, project, pm)
 	if err == nil {
-		_ = a.appendLog("build %s (%s)", project.Name, pm)
+		_ = a.appendLog(fmt.Sprintf("build %s (%s)", project.Name, pm))
 	}
 	return out, err
 }
@@ -154,7 +154,7 @@ func (a *App) InstallDeps(ctx context.Context, selector string) (string, error) 
 		if installErr != nil {
 			return strings.Join(outputs, "\n"), installErr
 		}
-		_ = a.appendLog("deps install %s (%s)", project.Name, pm)
+		_ = a.appendLog(fmt.Sprintf("deps install %s (%s)", project.Name, pm))
 	}
 	if a.projectHasManifest(ctx, project, "composer.json") {
 		out, installErr := a.RunComposer(ctx, project.Name, "", []string{"--working-dir=" + project.Path, "install", "--no-interaction"})
@@ -162,7 +162,7 @@ func (a *App) InstallDeps(ctx context.Context, selector string) (string, error) 
 		if installErr != nil {
 			return strings.Join(outputs, "\n"), installErr
 		}
-		_ = a.appendLog("deps install %s (composer)", project.Name)
+		_ = a.appendLog(fmt.Sprintf("deps install %s (composer)", project.Name))
 	}
 	if len(outputs) == 0 {
 		return "", fmt.Errorf("nenhum package.json ou composer.json encontrado em %s", project.Name)

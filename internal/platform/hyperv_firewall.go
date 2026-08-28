@@ -235,7 +235,7 @@ func (f HyperVFirewall) inspectVMSetting(ctx context.Context, spec HyperVFirewal
 	if err != nil {
 		return HyperVVMSettingState{}, err
 	}
-	var object map[string]any
+	var object map[string]json.RawMessage
 	if json.Unmarshal([]byte(strings.TrimSpace(out)), &object) == nil {
 		state := HyperVVMSettingState{}
 		for rawKey, rawValue := range object {
@@ -317,7 +317,7 @@ func parseHyperVRuleState(output string) HyperVFirewallRuleState {
 	// PowerShell emits compact JSON in production; the line parser below keeps
 	// the adapter convenient for simple test doubles and localized output.
 	state := HyperVFirewallRuleState{}
-	var object map[string]any
+	var object map[string]json.RawMessage
 	if json.Unmarshal([]byte(strings.TrimSpace(output)), &object) == nil {
 		for rawKey, rawValue := range object {
 			key := strings.ToLower(rawKey)
@@ -384,23 +384,29 @@ func parseHyperVRuleState(output string) HyperVFirewallRuleState {
 	return state
 }
 
-func jsonScalarString(value any) string {
-	switch item := value.(type) {
-	case string:
+func jsonScalarString(value json.RawMessage) string {
+	trimmed := strings.TrimSpace(string(value))
+	var item string
+	if json.Unmarshal(value, &item) == nil {
 		return item
-	case bool:
-		return strconv.FormatBool(item)
-	case float64:
-		return strconv.FormatFloat(item, 'f', -1, 64)
-	case []any:
-		parts := make([]string, 0, len(item))
-		for _, entry := range item {
+	}
+	var boolean bool
+	if json.Unmarshal(value, &boolean) == nil {
+		return strings.ToLower(trimmed)
+	}
+	var number json.Number
+	if json.Unmarshal(value, &number) == nil {
+		return number.String()
+	}
+	var items []json.RawMessage
+	if json.Unmarshal(value, &items) == nil {
+		parts := make([]string, 0, len(items))
+		for _, entry := range items {
 			parts = append(parts, jsonScalarString(entry))
 		}
 		return strings.Join(parts, ",")
-	default:
-		return fmt.Sprint(item)
 	}
+	return trimmed
 }
 
 func (f HyperVFirewall) Reconcile(ctx context.Context, spec HyperVFirewallSpec) error {
