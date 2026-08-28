@@ -13,8 +13,6 @@ Subtarefas já entregues estão registradas em
 
 ### R-01 — Contratos observáveis
 
-- [ ] `R-01e` Caracterizar em `app.App` link/unlink, reload, topology,
-  start/stop, overview, export/import e uninstall, incluindo rollback.
 
 ### R-03 — Divisão interna dos pacotes
 

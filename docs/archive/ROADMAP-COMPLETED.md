@@ -20,6 +20,9 @@ retroativamente.
   validação real opt-in.
 - [x] `R-01d` Caracterizar o dispatch global (`version`/`help`) e os erros e
   código de saída do entrypoint da CLI.
+- [x] `R-01e` Caracterizar os fluxos críticos de `app.App` (link/unlink,
+  reload, topology, start/stop, export/import e rollback), combinados com os
+  testes dedicados de overview e uninstall.
 - [x] `R-02` Impedir persistência de senha em texto puro se o hashing do Caddy
   falhar. `SetAuth` falha fechado quando Caddy está ausente, falha ou devolve
   hash vazio. `MigrateLegacyAuth` converte todas as credenciais legadas antes
