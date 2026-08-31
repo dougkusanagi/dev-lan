@@ -17,8 +17,6 @@ Subtarefas já entregues estão registradas em
 
 ### R-07 — Contrato OpenAPI
 
-- [ ] `R-07c` Completar schemas, respostas e erros no OpenAPI e torná-lo a
-  única fonte do contrato HTTP.
 - [ ] `R-07d` Gerar tipos/servidor Go e cliente TypeScript, removendo o manifesto
   intermediário somente após teste de paridade.
 

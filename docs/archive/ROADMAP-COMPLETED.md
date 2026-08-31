@@ -53,6 +53,9 @@ retroativamente.
   paridade das operações HTTP.
 - [x] `R-07b` Gerar e validar os tipos TypeScript a partir do manifesto de
   contrato durante a transição para OpenAPI.
+- [x] `R-07c` Completar `api/openapi.yaml` com as operações canônicas HTTP,
+  aliases de compatibilidade, schemas, respostas, erros, autenticação e
+  validação de paridade; o manifesto permanece somente como ponte até R-07d.
 - [x] `R-08a` Consolidar o dashboard no browser como GUI canônica, servido pela
   API loopback e por `devlan.localhost`.
 - [x] `R-09a` Executar no CI uma regra inicial de imports para proteger domínio

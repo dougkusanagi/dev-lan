@@ -221,8 +221,10 @@ npm run build
 npm run test:coverage
 ```
 
-O contrato canônico está em `internal/api/contract.json`. Para regenerar os
-tipos TypeScript após uma alteração deliberada:
+O contrato HTTP canônico está em `api/openapi.yaml`. Durante a transição, o
+`internal/api/contract.json` é apenas a ponte da geração TypeScript; o R-07d
+vai removê-la depois de validar a paridade dos geradores. Para regenerar os
+tipos atuais após uma alteração deliberada:
 
 ```powershell
 npm run contracts:generate

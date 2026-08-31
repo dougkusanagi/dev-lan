@@ -1,6 +1,7 @@
-// The browser contract is generated from internal/api/contract.json. Keep
-// application imports pointed at this stable module so generated files can be
-// replaced without changing component code.
+// The browser contract is temporarily generated from internal/api/contract.json
+// while the canonical HTTP contract lives in api/openapi.yaml. Keep
+// application imports pointed at this stable module until R-07d replaces the
+// generated source without changing component code.
 export type {
   DoctorCheck,
   GlobalConfig,

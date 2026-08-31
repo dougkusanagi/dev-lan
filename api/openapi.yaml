@@ -2,78 +2,1201 @@ openapi: 3.0.3
 info:
   title: DevLAN Local API
   version: "1"
-  description: Contrato HTTP autenticado do control plane local.
+  description: |
+    Contrato HTTP canônico do control plane local. As rotas /api/v1 são
+    canônicas; os aliases /v1 permanecem documentados para compatibilidade.
+    Mutações aceitam Bearer token ou o par header/cookie CSRF.
 servers:
-  - url: http://127.0.0.1
+  - url: http://127.0.0.1:{uiPort}
+    description: API e dashboard locais
+    variables:
+      uiPort: {default: "3210", description: Porta local configurada}
+  - url: https://devlan.localhost
+    description: Origem HTTPS local
+tags:
+  - {name: health, description: "Saúde, status e topologia"}
+  - {name: projects, description: Projetos e diretórios estacionados}
+  - {name: operations, description: Operações assíncronas e eventos}
+  - {name: configuration, description: Configuração e reload}
+  - {name: php, description: Runtimes PHP}
+  - {name: diagnostics, description: "Métricas, doctor e segurança"}
+  - {name: wsl, description: Protocolo do cliente Linux fino}
+x-devlan-compatibility:
+  canonicalBasePath: /api/v1
+  legacyBasePath: /v1
+  legacyAliases:
+    - /v1/health
+    - /v1/status
+    - /v1/topology
+    - /v1/overview
+    - /v1/operations/{operationId}
+    - /v1/events
+    - /v1/projects
+    - /v1/config
+    - /v1/reload
+    - /v1/command
 security:
   - devlanToken: []
+  - devlanCSRF: []
+    devlanCSRFCookie: []
 paths:
   /api/v1/health:
     get:
+      tags: [health]
       operationId: health
       security: []
       responses:
-        '200':
-          description: API disponível
-  /api/v1/overview:
-    get:
-      operationId: getOverview
-      responses:
-        '200': {description: Overview consolidado, content: {application/json: {schema: {$ref: '#/components/schemas/Overview'}}}}
-  /api/v1/projects:
-    get:
-      operationId: getProjects
-      responses:
-        '200': {description: Projetos, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/ProjectInfo'}}}}}
+        '200': {$ref: '#/components/responses/HealthOK'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+
   /api/v1/status:
     get:
+      tags: [health]
       operationId: getStatus
+      security: []
       responses:
-        '200': {description: Status, content: {application/json: {schema: {$ref: '#/components/schemas/SystemStatus'}}}}
-  /api/v1/config:
+        '200': {$ref: '#/components/responses/SystemStatusOK'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/topology:
     get:
-      operationId: getGlobalConfig
+      tags: [health]
+      operationId: getTopology
+      security: []
       responses:
-        '200': {description: Configuração global, content: {application/json: {schema: {$ref: '#/components/schemas/GlobalConfig'}}}}
-    post:
-      operationId: saveGlobalConfig
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/GlobalConfig'}}}}
-      responses: {'200': {description: Configuração salva}}
+        '200': {$ref: '#/components/responses/TopologyOK'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+
+  /api/v1/overview:
+    get:
+      tags: [health]
+      operationId: getOverview
+      security: []
+      parameters:
+        - {$ref: '#/components/parameters/Filter'}
+      responses:
+        '200': {$ref: '#/components/responses/OverviewOK'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
   /api/v1/operations/{operationId}:
     get:
+      tags: [operations]
       operationId: getOperation
+      security: []
       parameters:
-        - {name: operationId, in: path, required: true, schema: {type: string}}
+        - {$ref: '#/components/parameters/OperationId'}
       responses:
-        '200': {description: Operação, content: {application/json: {schema: {$ref: '#/components/schemas/MutationResult'}}}}
-  /api/v1/topology: {get: {operationId: getTopology, responses: {'200': {description: Topologia}}}}
-  /api/v1/metrics: {get: {operationId: getMetrics, responses: {'200': {description: Métricas}}}}
-  /api/v1/php/versions: {get: {operationId: getPHPVersions, responses: {'200': {description: PHP}}}}
-  /api/v1/projects/config: {post: {operationId: saveProjectConfig, responses: {'200': {description: Configuração salva}}}}
-  /api/v1/projects/link: {post: {operationId: linkProject, responses: {'200': {description: Projeto vinculado}}}}
-  /api/v1/projects/unlink: {post: {operationId: unlinkProject, responses: {'200': {description: Projeto desvinculado}}}}
-  /api/v1/projects/hide: {post: {operationId: hideProject, responses: {'200': {description: Projeto oculto}}}}
-  /api/v1/projects/start: {post: {operationId: startDev, responses: {'200': {description: Operação aceita}}}}
-  /api/v1/projects/stop: {post: {operationId: stopDev, responses: {'200': {description: Operação aceita}}}}
-  /api/v1/projects/restart: {post: {operationId: restartDev, responses: {'200': {description: Operação aceita}}}}
-  /api/v1/projects/build: {post: {operationId: buildProject, responses: {'200': {description: Build concluído}}}}
-  /api/v1/projects/deps: {post: {operationId: installDeps, responses: {'200': {description: Dependências instaladas}}}}
-  /api/v1/projects/logs: {get: {operationId: getProjectLogs, responses: {'200': {description: Logs}}}}
-  /api/v1/parks/park: {post: {operationId: parkDir, responses: {'200': {description: Diretório estacionado}}}}
-  /api/v1/parks/unpark: {post: {operationId: unparkDir, responses: {'200': {description: Diretório reativado}}}}
-  /api/v1/events: {get: {operationId: events, responses: {'200': {description: SSE}}}}
-  /api/v1/doctor: {get: {operationId: runDoctor, responses: {'200': {description: Diagnóstico}}}}
-  /api/v1/doctor/fix: {post: {operationId: applyDoctorFix, responses: {'200': {description: Correção aplicada}}}}
-  /api/v1/reload: {post: {operationId: reload, responses: {'200': {description: Recarregado}}}}
-  /api/v1/config/export: {post: {operationId: exportConfigJSON, responses: {'200': {description: Exportação}}}}
-  /api/v1/security/trust: {post: {operationId: trustCA, responses: {'200': {description: CA confiável}}}}
-  /api/v1/security/audit: {get: {operationId: getSecurityAudit, responses: {'200': {description: Auditoria}}}}
+        '200': {$ref: '#/components/responses/MutationOK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+
+  /api/v1/events:
+    get:
+      tags: [operations]
+      operationId: events
+      security: []
+      responses:
+        '200': {$ref: '#/components/responses/SSEOK'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/projects:
+    get:
+      tags: [projects]
+      operationId: getProjects
+      security: []
+      parameters:
+        - {$ref: '#/components/parameters/Filter'}
+      responses:
+        '200': {$ref: '#/components/responses/ProjectsOK'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/projects/logs:
+    get:
+      tags: [projects]
+      operationId: getProjectLogs
+      security: []
+      parameters:
+        - {$ref: '#/components/parameters/LogProjectName'}
+        - {$ref: '#/components/parameters/Lines'}
+      responses:
+        '200': {$ref: '#/components/responses/LogsOK'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+
+  /api/v1/projects/link:
+    post:
+      tags: [projects]
+      operationId: linkProject
+      requestBody: {$ref: '#/components/requestBodies/LinkProject'}
+      responses:
+        '200': {$ref: '#/components/responses/MessageOK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/projects/unlink:
+    post:
+      tags: [projects]
+      operationId: unlinkProject
+      requestBody: {$ref: '#/components/requestBodies/ProjectName'}
+      responses:
+        '200': {$ref: '#/components/responses/MessageOK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/projects/hide:
+    post:
+      tags: [projects]
+      operationId: hideProject
+      requestBody: {$ref: '#/components/requestBodies/ProjectName'}
+      responses:
+        '200': {$ref: '#/components/responses/MessageOK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/projects/unhide:
+    post:
+      tags: [projects]
+      operationId: unhideProject
+      requestBody: {$ref: '#/components/requestBodies/ProjectPath'}
+      responses:
+        '200': {$ref: '#/components/responses/MessageOK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/projects/config:
+    post:
+      tags: [projects]
+      operationId: saveProjectConfig
+      requestBody: {$ref: '#/components/requestBodies/ProjectConfig'}
+      responses:
+        '200': {$ref: '#/components/responses/ProjectConfigOK'}
+        '202': {$ref: '#/components/responses/MutationAccepted'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/projects/start:
+    post:
+      tags: [projects, operations]
+      operationId: startDev
+      requestBody: {$ref: '#/components/requestBodies/ProjectOperation'}
+      responses:
+        '202': {$ref: '#/components/responses/MutationAccepted'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+
+  /api/v1/projects/stop:
+    post:
+      tags: [projects, operations]
+      operationId: stopDev
+      requestBody: {$ref: '#/components/requestBodies/ProjectOperation'}
+      responses:
+        '202': {$ref: '#/components/responses/MutationAccepted'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+
+  /api/v1/projects/restart:
+    post:
+      tags: [projects, operations]
+      operationId: restartDev
+      requestBody: {$ref: '#/components/requestBodies/ProjectOperation'}
+      responses:
+        '202': {$ref: '#/components/responses/MutationAccepted'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+
+  /api/v1/projects/build:
+    post:
+      tags: [projects]
+      operationId: buildProject
+      requestBody: {$ref: '#/components/requestBodies/ProjectName'}
+      responses:
+        '200': {$ref: '#/components/responses/OutputOK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/projects/deps:
+    post:
+      tags: [projects]
+      operationId: installDeps
+      requestBody: {$ref: '#/components/requestBodies/ProjectName'}
+      responses:
+        '200': {$ref: '#/components/responses/OutputOK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/projects/tls:
+    post:
+      tags: [projects, operations]
+      operationId: setProjectTLS
+      requestBody: {$ref: '#/components/requestBodies/ProjectTLS'}
+      responses:
+        '202': {$ref: '#/components/responses/MutationAccepted'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+
+  /api/v1/parks/park:
+    post:
+      tags: [projects]
+      operationId: parkDir
+      requestBody: {$ref: '#/components/requestBodies/ProjectPath'}
+      responses:
+        '200': {$ref: '#/components/responses/MessageOK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/parks/unpark:
+    post:
+      tags: [projects]
+      operationId: unparkDir
+      requestBody: {$ref: '#/components/requestBodies/ProjectPath'}
+      responses:
+        '200': {$ref: '#/components/responses/MessageOK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/config:
+    get:
+      tags: [configuration]
+      operationId: getGlobalConfig
+      security: []
+      responses:
+        '200': {$ref: '#/components/responses/GlobalConfigOK'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    post:
+      tags: [configuration]
+      operationId: saveGlobalConfig
+      requestBody: {$ref: '#/components/requestBodies/GlobalConfig'}
+      responses:
+        '200': {$ref: '#/components/responses/MessageOnlyOK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/config/export:
+    post:
+      tags: [configuration]
+      operationId: exportConfigJSON
+      responses:
+        '200': {$ref: '#/components/responses/ExportOK'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/config/import:
+    post:
+      tags: [configuration]
+      operationId: importConfigJSON
+      requestBody: {$ref: '#/components/requestBodies/ExportBundle'}
+      responses:
+        '200': {$ref: '#/components/responses/MessageOK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/reload:
+    post:
+      tags: [configuration]
+      operationId: reload
+      responses:
+        '200': {$ref: '#/components/responses/ReloadOK'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/php/versions:
+    get:
+      tags: [php]
+      operationId: getPHPVersions
+      security: []
+      responses:
+        '200': {$ref: '#/components/responses/PHPVersionsOK'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/php/install:
+    post:
+      tags: [php]
+      operationId: installPHP
+      requestBody: {$ref: '#/components/requestBodies/PHPInstall'}
+      responses:
+        '200': {$ref: '#/components/responses/MessageOK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/php/remove:
+    post:
+      tags: [php]
+      operationId: removePHP
+      requestBody: {$ref: '#/components/requestBodies/PHPVersion'}
+      responses:
+        '200': {$ref: '#/components/responses/MessageOK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/php/default:
+    post:
+      tags: [php]
+      operationId: setPHPDefault
+      requestBody: {$ref: '#/components/requestBodies/PHPVersion'}
+      responses:
+        '200': {$ref: '#/components/responses/MessageOK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/metrics:
+    get:
+      tags: [diagnostics]
+      operationId: getMetrics
+      security: []
+      parameters:
+        - {$ref: '#/components/parameters/ProjectQuery'}
+        - {$ref: '#/components/parameters/MetricsRange'}
+      responses:
+        '200': {$ref: '#/components/responses/MetricsOK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+
+  /api/v1/doctor:
+    get:
+      tags: [diagnostics]
+      operationId: runDoctor
+      security: []
+      parameters:
+        - {$ref: '#/components/parameters/ProjectQuery'}
+      responses:
+        '200': {$ref: '#/components/responses/DoctorOK'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/doctor/fix:
+    post:
+      tags: [diagnostics]
+      operationId: applyDoctorFix
+      requestBody: {$ref: '#/components/requestBodies/DoctorFix'}
+      responses:
+        '200': {$ref: '#/components/responses/MessageOnlyOK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/security/audit:
+    get:
+      tags: [diagnostics]
+      operationId: getSecurityAudit
+      security: []
+      parameters:
+        - {$ref: '#/components/parameters/Lines'}
+      responses:
+        '200': {$ref: '#/components/responses/LogsOK'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/security/trust:
+    post:
+      tags: [diagnostics]
+      operationId: trustCA
+      responses:
+        '200': {$ref: '#/components/responses/MessageOnlyOK'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/command:
+    post:
+      tags: [wsl]
+      operationId: command
+      requestBody: {$ref: '#/components/requestBodies/Command'}
+      responses:
+        '200': {$ref: '#/components/responses/CommandOK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /v1/health: {x-devlan-alias-for: /api/v1/health}
+  /v1/status: {x-devlan-alias-for: /api/v1/status}
+  /v1/topology: {x-devlan-alias-for: /api/v1/topology}
+  /v1/overview: {x-devlan-alias-for: /api/v1/overview}
+  /v1/operations/{operationId}: {x-devlan-alias-for: "/api/v1/operations/{operationId}"}
+  /v1/events: {x-devlan-alias-for: /api/v1/events}
+  /v1/projects: {x-devlan-alias-for: /api/v1/projects}
+  /v1/config: {x-devlan-alias-for: /api/v1/config}
+  /v1/reload: {x-devlan-alias-for: /api/v1/reload}
+  /v1/command: {x-devlan-alias-for: /api/v1/command}
+
 components:
   securitySchemes:
-    devlanToken: {type: apiKey, in: header, name: Authorization}
+    devlanToken:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque local token
+    devlanCSRF:
+      type: apiKey
+      in: header
+      name: X-DevLAN-CSRF-Token
+      description: Deve coincidir com o cookie devlan_csrf.
+    devlanCSRFCookie:
+      type: apiKey
+      in: cookie
+      name: devlan_csrf
+
+  parameters:
+    Filter: {name: filter, in: query, required: false, schema: {type: string}}
+    LogProjectName: {name: name, in: query, required: false, schema: {type: string}}
+    ProjectQuery: {name: project, in: query, required: false, schema: {type: string}}
+    Lines: {name: lines, in: query, required: false, schema: {type: integer, minimum: 1, default: 100}}
+    MetricsRange:
+      name: range
+      in: query
+      required: false
+      schema: {$ref: '#/components/schemas/MetricsRange'}
+    OperationId:
+      name: operationId
+      in: path
+      required: true
+      schema: {type: string, minLength: 1}
+
+  requestBodies:
+    LinkProject: {$ref: '#/components/requestBodies/LinkProjectBody'}
+    LinkProjectBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/LinkProjectRequest'}}}}
+    ProjectName: {$ref: '#/components/requestBodies/ProjectNameBody'}
+    ProjectNameBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ProjectNameRequest'}}}}
+    ProjectPath: {$ref: '#/components/requestBodies/ProjectPathBody'}
+    ProjectPathBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ProjectPathRequest'}}}}
+    ProjectConfig: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ProjectConfigUpdate'}}}}
+    ProjectOperation: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ProjectOperationRequest'}}}}
+    ProjectTLS: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ProjectTLSRequest'}}}}
+    GlobalConfig: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/GlobalConfig'}}}}
+    ExportBundle: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ExportBundle'}}}}
+    PHPInstall: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PHPInstallRequest'}}}}
+    PHPVersion: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PHPVersionRequest'}}}}
+    DoctorFix: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/DoctorFixRequest'}}}}
+    Command: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CommandRequest'}}}}
+
+  responses:
+    HealthOK: {description: API disponível, content: {application/json: {schema: {$ref: '#/components/schemas/HealthResponse'}}}}
+    SystemStatusOK: {description: Estado agregado, content: {application/json: {schema: {$ref: '#/components/schemas/SystemStatus'}}}}
+    TopologyOK: {description: Topologia Windows/WSL, content: {application/json: {schema: {$ref: '#/components/schemas/TopologySnapshot'}}}}
+    OverviewOK: {description: Read model consolidado, content: {application/json: {schema: {$ref: '#/components/schemas/Overview'}}}}
+    MutationOK: {description: Estado da operação, content: {application/json: {schema: {$ref: '#/components/schemas/MutationResult'}}}}
+    MutationAccepted: {description: Operação aceita, content: {application/json: {schema: {$ref: '#/components/schemas/MutationResult'}}}}
+    SSEOK: {description: Stream de eventos, content: {text/event-stream: {schema: {type: string}}}}
+    ProjectsOK: {description: Projetos, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/ProjectInfo'}}}}}
+    LogsOK: {description: Logs, content: {application/json: {schema: {$ref: '#/components/schemas/LogsResponse'}}}}
+    MessageOK: {description: Mutação concluída, content: {application/json: {schema: {$ref: '#/components/schemas/MessageResponse'}}}}
+    MessageOnlyOK: {description: Mutação concluída, content: {application/json: {schema: {$ref: '#/components/schemas/MessageOnlyResponse'}}}}
+    ProjectConfigOK: {description: Configuração aplicada, content: {application/json: {schema: {$ref: '#/components/schemas/ProjectConfigResponse'}}}}
+    OutputOK: {description: Saída do comando, content: {application/json: {schema: {$ref: '#/components/schemas/OutputResponse'}}}}
+    GlobalConfigOK: {description: Configuração global, content: {application/json: {schema: {$ref: '#/components/schemas/GlobalConfig'}}}}
+    ExportOK: {description: Bundle sem segredos, content: {application/json: {schema: {$ref: '#/components/schemas/ExportBundle'}}}}
+    ReloadOK: {description: Configurações recarregadas, content: {application/json: {schema: {$ref: '#/components/schemas/ReloadResponse'}}}}
+    PHPVersionsOK: {description: Versões PHP, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/PHPVersion'}}}}}
+    MetricsOK: {description: Métricas ou null sem amostras, content: {application/json: {schema: {$ref: '#/components/schemas/MetricsSnapshot'}}}}
+    DoctorOK: {description: Checks do ambiente, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/DoctorCheck'}}}}}
+    CommandOK: {description: Resposta do cliente WSL, content: {application/json: {schema: {$ref: '#/components/schemas/CommandResponse'}}}}
+    BadRequest: {$ref: '#/components/responses/BadRequestBody'}
+    BadRequestBody: {description: Requisição inválida, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    Unauthorized: {$ref: '#/components/responses/UnauthorizedBody'}
+    UnauthorizedBody: {description: Token ou CSRF inválido, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    Forbidden: {$ref: '#/components/responses/ForbiddenBody'}
+    ForbiddenBody: {description: "Host, origem ou endereço remoto não permitido", content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    NotFound: {$ref: '#/components/responses/NotFoundBody'}
+    NotFoundBody: {description: Recurso não encontrado, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    MethodNotAllowed:
+      description: Método não permitido
+      headers: {Allow: {description: Métodos aceitos, schema: {type: string}}}
+      content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+    Conflict:
+      description: Operação rejeitada pelo estado atual
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - {$ref: '#/components/schemas/ErrorResponse'}
+              - {$ref: '#/components/schemas/ApplyErrorResponse'}
+    InternalError: {description: Falha interna, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+
   schemas:
-    ProjectInfo: {type: object, required: [name, path, kind, mode, effectiveMode, framework, url, lanUrl, localDevUrl, localDevState, lanPreviewState, tlsEnabled, status, devRunning], properties: {name: {type: string}, path: {type: string}, kind: {type: string}, mode: {type: string}, effectiveMode: {type: string}, framework: {type: string}, url: {type: string}, lanUrl: {type: string}, localDevUrl: {type: string}, localDevState: {type: string}, lanPreviewState: {type: string}, tlsEnabled: {type: boolean}, status: {type: string}, devRunning: {type: boolean}}}
-    SystemStatus: {type: object, properties: {lanIp: {type: string}, uiPort: {type: integer}, tlsEnabled: {type: boolean}, protocolVersion: {type: integer}}}
-    Overview: {type: object, required: [projects, status, phpVersions], properties: {projects: {type: array, items: {$ref: '#/components/schemas/ProjectInfo'}}, status: {$ref: '#/components/schemas/SystemStatus'}, phpVersions: {type: array, items: {type: object}}}}
-    GlobalConfig: {type: object, properties: {defaultMode: {type: string}, windowsPort: {type: integer}, httpsPort: {type: integer}, tlsEnabled: {type: boolean}, phpDefaultVersion: {type: string}, allowlist: {type: array, items: {type: string}}}}
-    MutationResult: {type: object, properties: {operationId: {type: string}, operation: {type: string}, phase: {type: string}, status: {type: string}, revision: {type: integer}}}
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties: {error: {type: string}}
+
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required: [status, version, runtime]
+      properties:
+        status: {type: string, example: ok}
+        version: {type: integer, format: int32}
+        runtime: {type: string, example: windows/amd64}
+
+    ProjectKind: {type: string, enum: [linked, parked]}
+    ProjectMode: {type: string, enum: ["", auto, php, dev, static]}
+    EffectiveProjectMode: {type: string, enum: [auto, php, dev, static]}
+    ProjectFramework: {type: string, description: Framework detectado ou configurado}
+    LocalDevState: {type: string, enum: [active, starting, stopped, available]}
+    LanPreviewState: {type: string, enum: [ready, paused]}
+    ProjectStatus: {type: string, enum: [ready, starting, stopped, degraded, error]}
+
+    ProjectInfo:
+      type: object
+      additionalProperties: false
+      required: [name, path, kind, mode, effectiveMode, framework, url, lanUrl, localDevUrl, localDevState, lanPreviewState, tlsEnabled, status, devRunning]
+      properties:
+        name: {type: string}
+        path: {type: string}
+        kind: {$ref: '#/components/schemas/ProjectKind'}
+        mode: {$ref: '#/components/schemas/ProjectMode'}
+        effectiveMode: {$ref: '#/components/schemas/EffectiveProjectMode'}
+        framework: {$ref: '#/components/schemas/ProjectFramework'}
+        url: {type: string}
+        lanUrl: {type: string}
+        localDevUrl: {type: string}
+        localDevState: {$ref: '#/components/schemas/LocalDevState'}
+        lanPreviewState: {$ref: '#/components/schemas/LanPreviewState'}
+        tlsEnabled: {type: boolean}
+        port: {type: integer, minimum: 1, maximum: 65535}
+        routePortOverride: {type: integer, minimum: 1, maximum: 65535}
+        status: {$ref: '#/components/schemas/ProjectStatus'}
+        statusDetail: {type: string}
+        phpVersion: {type: string}
+        packageManager: {type: string}
+        staticDir: {type: string}
+        devRunning: {type: boolean}
+        devPid: {type: integer, minimum: 0}
+        devPort: {type: integer, minimum: 1, maximum: 65535}
+        revision: {type: integer, format: int64, minimum: 0}
+
+    SystemStatus:
+      type: object
+      additionalProperties: false
+      required: [lanIp, windowsPort, httpsPort, routeBasePort, routePortCount, uiPort, tlsEnabled, defaultMode, phpDefaultVersion, windowsCaddyRunning, wslCaddyRunning, wslAvailable, firewallOk, phpVersions, totalProjects, protocolVersion]
+      properties:
+        lanIp: {type: string}
+        windowsPort: {type: integer, minimum: 1, maximum: 65535}
+        httpsPort: {type: integer, minimum: 1, maximum: 65535}
+        routeBasePort: {type: integer, minimum: 1, maximum: 65535}
+        routePortCount: {type: integer, minimum: 0}
+        uiPort: {type: integer, minimum: 1, maximum: 65535}
+        tlsEnabled: {type: boolean}
+        defaultMode: {$ref: '#/components/schemas/EffectiveProjectMode'}
+        phpDefaultVersion: {type: string}
+        windowsCaddyRunning: {type: boolean}
+        wslCaddyRunning: {type: boolean}
+        caddyRunning: {type: boolean}
+        caddyTopology: {type: string}
+        caddySystemd: {type: boolean}
+        caddyLive: {type: boolean}
+        mirroredConfigured: {type: boolean}
+        mirroredNetworking: {type: boolean}
+        hypervFirewallOk: {type: boolean}
+        caRootValid: {type: boolean}
+        caRootTrusted: {type: boolean}
+        wslAvailable: {type: boolean}
+        firewallOk: {type: boolean}
+        phpVersions: {type: array, items: {type: string}}
+        totalProjects: {type: integer, minimum: 0}
+        protocolVersion: {type: integer, format: int32}
+        revision: {type: integer, format: int64, minimum: 0}
+        observedAt: {type: string, format: date-time}
+
+    Overview:
+      type: object
+      additionalProperties: false
+      required: [projects, status, phpVersions]
+      properties:
+        projects: {type: array, items: {$ref: '#/components/schemas/ProjectInfo'}}
+        status: {$ref: '#/components/schemas/SystemStatus'}
+        phpVersions: {type: array, items: {$ref: '#/components/schemas/PHPVersion'}}
+        revision: {type: integer, format: int64, minimum: 0}
+        observedAt: {type: string, format: date-time}
+        meta: {$ref: '#/components/schemas/OverviewMeta'}
+
+    OverviewMeta:
+      type: object
+      additionalProperties: false
+      required: [cache, hotAgeMs, coldAgeMs, durationMs, wslCalls, wslCallsDelta, wslDurationMs, wslDurationDeltaMs]
+      properties:
+        cache: {type: string}
+        hotAgeMs: {type: integer, format: int64}
+        coldAgeMs: {type: integer, format: int64}
+        durationMs: {type: integer, format: int64}
+        wslCalls: {type: integer, format: int64}
+        wslCallsDelta: {type: integer, format: int64}
+        wslDurationMs: {type: integer, format: int64}
+        wslDurationDeltaMs: {type: integer, format: int64}
+
+    MutationResult:
+      type: object
+      additionalProperties: false
+      required: [operationId, operation, phase, status]
+      properties:
+        operationId: {type: string}
+        operation: {type: string}
+        phase: {type: string}
+        status: {type: string}
+        revision: {type: integer, format: int64, minimum: 0}
+        projectState: {$ref: '#/components/schemas/ProjectInfo'}
+        warnings: {type: array, items: {type: string}}
+        error: {type: string}
+        observedAt: {type: string, format: date-time}
+        startedAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        durationMs: {type: integer, format: int64}
+        phaseMs: {type: object, additionalProperties: {type: integer, format: int64}}
+
+    PHPVersion:
+      type: object
+      additionalProperties: false
+      required: [version, installed, configured]
+      properties:
+        version: {type: string}
+        installed: {type: boolean}
+        configured: {type: boolean}
+        extensions: {type: array, items: {type: string}}
+
+    DoctorCheck:
+      type: object
+      additionalProperties: false
+      required: [name, status, detail, fixable]
+      properties:
+        name: {type: string}
+        status: {type: string, enum: [OK, WARN, FAIL]}
+        detail: {type: string}
+        fixable: {type: boolean}
+        fixAction: {type: string}
+
+    GlobalConfig:
+      type: object
+      additionalProperties: false
+      required: [defaultMode, windowsPort, httpsPort, tlsEnabled, phpDefaultVersion, allowlist]
+      properties:
+        defaultMode: {$ref: '#/components/schemas/EffectiveProjectMode'}
+        windowsPort: {type: integer, minimum: 1, maximum: 65535}
+        httpsPort: {type: integer, minimum: 1, maximum: 65535}
+        tlsEnabled: {type: boolean}
+        phpDefaultVersion: {type: string}
+        allowlist: {type: array, items: {type: string}}
+
+    ProjectConfigUpdate:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: {type: string}
+        operationId: {type: string}
+        mode: {$ref: '#/components/schemas/ProjectMode'}
+        phpVersion: {type: string}
+        phpPreset: {type: string, enum: [laravel, symfony, generic]}
+        tlsEnabled: {type: boolean, nullable: true}
+        routePort: {type: integer, minimum: 1, maximum: 65535, nullable: true}
+        routePortAuto: {type: boolean}
+        staticDir: {type: string}
+        devCommand: {type: string}
+        devPort: {type: integer, minimum: 1, maximum: 65535}
+
+    LinkProjectRequest:
+      type: object
+      additionalProperties: false
+      required: [name, path]
+      properties: {name: {type: string}, path: {type: string}}
+    ProjectNameRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties: {name: {type: string}}
+    ProjectPathRequest:
+      type: object
+      additionalProperties: false
+      required: [path]
+      properties: {path: {type: string}}
+    ProjectOperationRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties: {name: {type: string}, operationId: {type: string}}
+    ProjectTLSRequest:
+      type: object
+      additionalProperties: false
+      required: [name, enabled]
+      properties: {name: {type: string}, enabled: {type: boolean}, operationId: {type: string}}
+    PHPInstallRequest:
+      type: object
+      additionalProperties: false
+      required: [version]
+      properties: {version: {type: string}, extensions: {type: array, items: {type: string}}}
+    PHPVersionRequest:
+      type: object
+      additionalProperties: false
+      required: [version]
+      properties: {version: {type: string}}
+    DoctorFixRequest:
+      type: object
+      additionalProperties: false
+      required: [action]
+      properties:
+        action: {type: string, description: "Ações conhecidas: reload, firewall, topology, topology-repair, trust ou restart-dev"}
+        target: {type: string}
+
+    MetricsRange: {type: string, enum: [15m, 1h, 24h, 7d]}
+    MetricsSnapshot:
+      type: object
+      nullable: true
+      additionalProperties: false
+      required: [project, range, generatedAt, excludedColdStarts, requests, requestsPerMinute, errorCount, errorRate, p50Ms, p95Ms, latencyBuckets, traffic, routes]
+      properties:
+        project: {type: string}
+        range: {$ref: '#/components/schemas/MetricsRange'}
+        generatedAt: {type: string, format: date-time}
+        excludedColdStarts: {type: integer, minimum: 0}
+        requests: {type: integer, minimum: 0}
+        requestsPerMinute: {type: number, format: double}
+        errorCount: {type: integer, minimum: 0}
+        errorRate: {type: number, format: double}
+        p50Ms: {type: number, format: double, nullable: true}
+        p95Ms: {type: number, format: double, nullable: true}
+        latencyBuckets: {type: array, items: {$ref: '#/components/schemas/LatencyBucket'}}
+        traffic: {type: array, items: {$ref: '#/components/schemas/TrafficPoint'}}
+        routes: {type: array, items: {$ref: '#/components/schemas/RouteSnapshot'}}
+    LatencyBucket:
+      type: object
+      additionalProperties: false
+      required: [upperBoundMs, count]
+      properties: {upperBoundMs: {type: integer, nullable: true}, count: {type: integer, minimum: 0}}
+    TrafficPoint:
+      type: object
+      additionalProperties: false
+      required: [at, requestsPerMinute]
+      properties: {at: {type: string, format: date-time}, requestsPerMinute: {type: number, format: double}}
+    RouteSnapshot:
+      type: object
+      additionalProperties: false
+      required: [method, normalizedPath, p50Ms, p95Ms, requests, errors]
+      properties:
+        method: {type: string}
+        normalizedPath: {type: string}
+        p50Ms: {type: number, format: double, nullable: true}
+        p95Ms: {type: number, format: double, nullable: true}
+        requests: {type: integer, minimum: 0}
+        errors: {type: integer, minimum: 0}
+
+    MessageResponse:
+      type: object
+      additionalProperties: false
+      required: [message, warnings]
+      properties:
+        message: {type: string}
+        warnings: {type: array, nullable: true, items: {type: string}}
+    MessageOnlyResponse:
+      type: object
+      additionalProperties: false
+      required: [message]
+      properties: {message: {type: string}}
+    LogsResponse:
+      type: object
+      additionalProperties: false
+      required: [logs]
+      properties: {logs: {type: string}}
+    OutputResponse:
+      type: object
+      additionalProperties: false
+      required: [output]
+      properties: {output: {type: string}}
+    ApplyResponse:
+      type: object
+      additionalProperties: false
+      required: [message, status, revision, warnings]
+      properties:
+        message: {type: string}
+        status: {type: string}
+        revision: {type: integer, format: int64}
+        warnings: {type: array, nullable: true, items: {type: string}}
+    ApplyErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error, status, revision, warnings]
+      properties:
+        error: {type: string}
+        status: {type: string}
+        revision: {type: integer, format: int64}
+        warnings: {type: array, nullable: true, items: {type: string}}
+    ProjectConfigResponse:
+      oneOf:
+        - {$ref: '#/components/schemas/MessageOnlyResponse'}
+        - {$ref: '#/components/schemas/ApplyResponse'}
+    ApplyResult:
+      type: object
+      additionalProperties: false
+      required: [Warnings]
+      description: Warnings preserva a capitalização histórica do DTO de aplicação embutido.
+      properties:
+        Warnings: {type: array, nullable: true, items: {type: string}}
+        status: {type: string}
+        revision: {type: integer, format: int64}
+    ReloadResponse:
+      type: object
+      additionalProperties: false
+      required: [message, result]
+      properties:
+        message: {type: string}
+        result: {$ref: '#/components/schemas/ApplyResult'}
+
+    CaddyStatus:
+      type: object
+      additionalProperties: false
+      required: [available, running, systemd, live, adminAddress]
+      properties:
+        available: {type: boolean}
+        running: {type: boolean}
+        systemd: {type: boolean}
+        live: {type: boolean}
+        adminAddress: {type: string}
+        configPath: {type: string}
+        detail: {type: string}
+    TopologyStatus:
+      type: object
+      additionalProperties: false
+      required: [topology, unifiedConfig, windowsConfig, wslConfig, windowsRunning, wslRunning]
+      properties:
+        topology: {type: string}
+        unifiedConfig: {type: boolean}
+        windowsConfig: {type: boolean}
+        wslConfig: {type: boolean}
+        windowsRunning: {type: boolean}
+        wslRunning: {type: boolean}
+    CompatibilityCheck:
+      type: object
+      additionalProperties: false
+      required: [name, status, detail]
+      properties: {name: {type: string}, status: {type: string}, detail: {type: string}}
+    PortConflict:
+      type: object
+      additionalProperties: false
+      required: [port, detail]
+      properties: {port: {type: integer}, detail: {type: string}}
+    WSLCompatibilityReport:
+      type: object
+      additionalProperties: false
+      required: [supported, wsl2, mirroredConfigured, mirroredNetworking, systemd, loopbackBidirectional, lanReachable, portConflicts, checks]
+      properties:
+        supported: {type: boolean}
+        windowsVersion: {type: string}
+        windowsBuild: {type: integer}
+        wslVersion: {type: string}
+        wsl2: {type: boolean}
+        mirroredConfigured: {type: boolean}
+        mirroredNetworking: {type: boolean}
+        systemd: {type: boolean}
+        loopbackBidirectional: {type: boolean}
+        lanReachable: {type: boolean}
+        portConflicts: {type: array, items: {$ref: '#/components/schemas/PortConflict'}}
+        checks: {type: array, items: {$ref: '#/components/schemas/CompatibilityCheck'}}
+    PortRange:
+      type: object
+      additionalProperties: false
+      required: [from, to]
+      properties: {from: {type: integer}, to: {type: integer}}
+    FirewallSpec:
+      type: object
+      additionalProperties: false
+      required: [ports, ranges, direction, action, protocol, profile, remote_ip, rule_name, rule_group, description]
+      properties:
+        ports: {type: array, items: {type: integer}}
+        ranges: {type: array, items: {$ref: '#/components/schemas/PortRange'}}
+        direction: {type: string}
+        action: {type: string}
+        protocol: {type: string}
+        profile: {type: string}
+        remote_ip: {type: string}
+        rule_name: {type: string}
+        rule_group: {type: string}
+        description: {type: string}
+    FirewallSnapshot:
+      type: object
+      additionalProperties: false
+      required: [healthy, spec]
+      properties:
+        healthy: {type: boolean}
+        spec: {$ref: '#/components/schemas/FirewallSpec'}
+        detail: {type: string}
+    HyperVFirewallSpec:
+      type: object
+      additionalProperties: false
+      required: [ruleName, displayName, ports, ranges, profile, remoteAddresses, vmCreatorId, defaultInboundAction, loopbackEnabled, allowHostPolicyMerge]
+      properties:
+        ruleName: {type: string}
+        displayName: {type: string}
+        ports: {type: array, items: {type: integer}}
+        ranges: {type: array, items: {$ref: '#/components/schemas/PortRange'}}
+        profile: {type: string}
+        remoteAddresses: {type: string}
+        vmCreatorId: {type: string}
+        defaultInboundAction: {type: string}
+        loopbackEnabled: {type: boolean}
+        allowHostPolicyMerge: {type: boolean}
+    HyperVFirewallRuleState:
+      type: object
+      additionalProperties: false
+      required: [Name, DisplayName, Enabled, Direction, Action, Protocol, LocalPorts, Profile, RemoteAddress, VMCreatorID]
+      description: Campos preservam a capitalização histórica do struct sem tags JSON.
+      properties:
+        Name: {type: string}
+        DisplayName: {type: string}
+        Enabled: {type: boolean}
+        Direction: {type: string}
+        Action: {type: string}
+        Protocol: {type: string}
+        LocalPorts: {type: string}
+        Profile: {type: string}
+        RemoteAddress: {type: string}
+        VMCreatorID: {type: string}
+    HyperVVMSettingState:
+      type: object
+      additionalProperties: false
+      required: [Name, DefaultInboundAction, LoopbackEnabled, AllowHostPolicyMerge]
+      description: Campos preservam a capitalização histórica do struct sem tags JSON.
+      properties:
+        Name: {type: string}
+        DefaultInboundAction: {type: string}
+        LoopbackEnabled: {type: boolean}
+        AllowHostPolicyMerge: {type: boolean}
+    HyperVFirewallStatus:
+      type: object
+      additionalProperties: false
+      required: [supported, healthy, spec]
+      properties:
+        supported: {type: boolean}
+        healthy: {type: boolean}
+        detail: {type: string}
+        rule: {$ref: '#/components/schemas/HyperVFirewallRuleState'}
+        setting: {$ref: '#/components/schemas/HyperVVMSettingState'}
+        spec: {$ref: '#/components/schemas/HyperVFirewallSpec'}
+    TopologySnapshot:
+      type: object
+      additionalProperties: false
+      required: [topology, caddy, compatibility, firewall]
+      properties:
+        topology: {$ref: '#/components/schemas/TopologyStatus'}
+        caddy: {$ref: '#/components/schemas/CaddyStatus'}
+        compatibility: {$ref: '#/components/schemas/WSLCompatibilityReport'}
+        firewall: {$ref: '#/components/schemas/FirewallSnapshot'}
+        hyperv: {$ref: '#/components/schemas/HyperVFirewallStatus'}
+        ca: {type: object, additionalProperties: {type: string}}
+        error: {type: string}
+
+    RouteAllocation:
+      type: object
+      additionalProperties: false
+      required: [path, port, orphan]
+      properties:
+        path: {type: string}
+        port: {type: integer}
+        orphan: {type: boolean}
+    CommandDoctorCheck:
+      type: object
+      additionalProperties: false
+      required: [Name, Status, Detail]
+      description: Campos preservam a capitalização histórica do struct sem tags JSON.
+      properties:
+        Name: {type: string}
+        Status: {type: string}
+        Detail: {type: string}
+    CommandRequest:
+      type: object
+      additionalProperties: false
+      required: [command]
+      properties:
+        command:
+          type: string
+          enum: [link, unlink, park, unpark, links, status, topology, reload, route, doctor, open]
+        args: {type: array, items: {type: string}}
+    CommandResponse:
+      type: object
+      additionalProperties: false
+      required: [command]
+      properties:
+        command: {type: string}
+        message: {type: string}
+        warnings: {type: array, nullable: true, items: {type: string}}
+        error: {type: string}
+        projects: {type: array, items: {$ref: '#/components/schemas/ProjectInfo'}}
+        status: {$ref: '#/components/schemas/SystemStatus'}
+        topology: {$ref: '#/components/schemas/TopologyStatus'}
+        caddy: {$ref: '#/components/schemas/CaddyStatus'}
+        compatibility: {$ref: '#/components/schemas/WSLCompatibilityReport'}
+        result: {$ref: '#/components/schemas/ApplyResult'}
+        allocations: {type: array, items: {$ref: '#/components/schemas/RouteAllocation'}}
+        paths: {type: array, items: {type: string}}
+        checks: {type: array, items: {$ref: '#/components/schemas/CommandDoctorCheck'}}
+        url: {type: string}
+
+    PHPFPMPoolConfig:
+      type: object
+      additionalProperties: false
+      required: [max_children, idle_timeout, max_requests]
+      properties:
+        max_children: {type: integer}
+        idle_timeout: {type: string}
+        max_requests: {type: integer}
+    ComposerConfig:
+      type: object
+      additionalProperties: false
+      required: [environment, binary]
+      properties:
+        environment: {type: string, enum: [per-version, system, auto]}
+        binary: {type: string}
+    PHPVersionConfig:
+      type: object
+      additionalProperties: false
+      required: [version]
+      properties:
+        version: {type: string}
+        extensions: {type: array, items: {type: string}}
+        socket: {type: string}
+        php_binary: {type: string}
+        fpm_binary: {type: string}
+        composer_binary: {type: string}
+        pool: {$ref: '#/components/schemas/PHPFPMPoolConfig'}
+    ExportProject:
+      type: object
+      additionalProperties: false
+      required: [name, path]
+      properties:
+        name: {type: string}
+        path: {type: string}
+        mode: {type: string, enum: [auto, php, dev, static]}
+        secure: {type: boolean}
+        php_version: {type: string}
+        php_preset: {type: string, enum: [laravel, symfony, generic]}
+        php_isolated_pool: {type: boolean}
+        php_fpm_pool: {$ref: '#/components/schemas/PHPFPMPoolConfig'}
+        composer_environment: {type: string, enum: [per-version, system, auto]}
+        static_dir: {type: string}
+        spa_fallback: {type: boolean}
+        dev_command: {type: string}
+        dev_port: {type: integer}
+        dev_framework: {type: string}
+        package_manager: {type: string}
+        idle_timeout: {type: string}
+        route_port: {type: integer}
+        allowlist: {type: array, items: {type: string}}
+    ExportPark:
+      type: object
+      additionalProperties: false
+      required: [path]
+      properties:
+        path: {type: string}
+        mode: {type: string, enum: [auto, php, dev, static]}
+        allowlist: {type: array, items: {type: string}}
+        ignored_paths: {type: array, items: {type: string}}
+    ExportConfig:
+      type: object
+      additionalProperties: false
+      required: [version, default_mode, lan_address, windows_port, https_port, tls_enabled, wsl_port, php_fpm_socket, php_default_version, php_versions, php_fpm_pool, composer, projects, parks]
+      properties:
+        version: {type: integer}
+        revision: {type: integer, format: int64}
+        default_mode: {type: string, enum: [auto, php, dev, static]}
+        route_base_port: {type: integer}
+        route_port_count: {type: integer}
+        route_port_allocations: {type: object, additionalProperties: {type: integer}}
+        lan_address: {type: string}
+        windows_port: {type: integer}
+        https_port: {type: integer}
+        ui_port: {type: integer}
+        tls_enabled: {type: boolean}
+        wsl_port: {type: integer}
+        php_fpm_socket: {type: string}
+        php_default_version: {type: string}
+        php_versions: {type: array, items: {$ref: '#/components/schemas/PHPVersionConfig'}}
+        php_fpm_pool: {$ref: '#/components/schemas/PHPFPMPoolConfig'}
+        composer: {$ref: '#/components/schemas/ComposerConfig'}
+        dev_base_port: {type: integer}
+        default_idle_timeout: {type: string}
+        allowlist: {type: array, items: {type: string}}
+        projects: {type: array, items: {$ref: '#/components/schemas/ExportProject'}}
+        parks: {type: array, items: {$ref: '#/components/schemas/ExportPark'}}
+    ExportBundle:
+      type: object
+      additionalProperties: false
+      required: [format, version, config]
+      properties:
+        format: {type: string, enum: [devlan-config]}
+        version: {type: integer, enum: [1]}
+        config: {$ref: '#/components/schemas/ExportConfig'}

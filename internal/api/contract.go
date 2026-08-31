@@ -4,8 +4,9 @@ import (
 	_ "embed"
 )
 
-// contractManifest is the single checked-in description used to generate the
-// browser types and to validate the JSON tags of the Go views in tests.
+// contractManifest is the transitional bridge used to generate browser types
+// until R-07d moves that generation to the canonical OpenAPI document. It is
+// not the source of truth for the HTTP surface.
 //
 //go:embed contract.json
 var contractManifest []byte

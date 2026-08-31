@@ -150,7 +150,7 @@ internal/
     wails/                shell fino sobre HTTP
   observability/          slog, métricas e support bundle
 api/
-  openapi.yaml            contrato externo, quando R-07 for aceito
+  openapi.yaml            contrato HTTP canônico após R-07c
 frontend/src/
   app/                    composição, router e providers
   features/               projects, topology, php, metrics, settings
@@ -186,8 +186,9 @@ Os contratos se dividem em:
 - **persistence records**: schema versionado, convertido para o domínio.
 
 Isso evita serializar agregados diretamente e remove `map[string]any` das
-fronteiras. Uma especificação OpenAPI pode gerar servidor/tipos Go e cliente
-TypeScript, mas sua adoção exige ADR e migração do contrato verificado atual.
+fronteiras. `api/openapi.yaml` é a fonte canônica do contrato HTTP; a geração
+completa de servidor/tipos Go e cliente TypeScript permanece planejada para o
+R-07d, após a migração do manifesto intermediário.
 
 ### Escolhas de implementação
 
@@ -199,6 +200,8 @@ TypeScript, mas sua adoção exige ADR e migração do contrato verificado atual
   completion, mas deve substituir parsing manual em uma fase isolada;
 - OpenAPI com `oapi-codegen`, `openapi-typescript` e `openapi-fetch` reduz a
   duplicação de DTOs se adotado como única fonte;
+- `kin-openapi` é usado somente nos testes para validar sintaxe, referências e
+  paridade do contrato canônico, sem entrar no runtime do control plane;
 - para um produto novo, SQLite puro Go seria uma boa base para estado
   operacional, mantendo TOML para preferências e arquivos para artefatos. No
   produto atual, essa troca só ocorre após medição e ADR;

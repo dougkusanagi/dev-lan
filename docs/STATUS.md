@@ -1,6 +1,6 @@
 # Estado atual
 
-**Verificado em:** 28/08/2026
+**Verificado em:** 31/08/2026
 **Branch de desenvolvimento:** `refactor/r-01-r-09`
 
 O DevLAN já funciona como um control plane Go no Windows com execution plane
@@ -37,6 +37,9 @@ Wails opcional.
   journal e rollback de configuração, artefatos e runtime;
 - métricas incrementais e limitadas, atribuídas por metadado confiável do Caddy,
   com suporte a rotação, truncamento e linhas grandes sem reter dados sensíveis;
+- contrato HTTP OpenAPI completo e validado para as rotas canônicas `/api/v1`,
+  com aliases `/v1` documentados; o manifesto TypeScript permanece apenas como
+  ponte até o R-07d;
 - manifesto de instalação e núcleo do uninstall conservador com dry-run,
   retenção/purge e relatório estruturado;
 - contratos frontend/backend verificados no build e suíte unitária/integrada.
