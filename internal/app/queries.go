@@ -6,6 +6,7 @@ import (
 
 	"github.com/dougkusanagi/dev-lan/internal/config"
 	"github.com/dougkusanagi/dev-lan/internal/domain"
+	"github.com/dougkusanagi/dev-lan/internal/platform"
 )
 
 // Config returns the authoritative configuration snapshot to application
@@ -46,6 +47,17 @@ func (a *App) Revision() uint64 {
 // caller such as the HTTP server or the optional Wails shell.
 func (a *App) Audit(event, details string) {
 	_ = a.Store.AppendSecurityAudit(event, details)
+}
+
+// CheckWSLAccess is a cheap startup preflight used by process supervisors.
+// It verifies that the current Windows identity can invoke the configured
+// WSL distribution; it deliberately does not require Caddy or project
+// runtimes to be running yet.
+func (a *App) CheckWSLAccess(ctx context.Context) error {
+	if _, err := a.WSL.RunOperation(ctx, platform.WSLOperationStatus, "/bin/true"); err != nil {
+		return fmt.Errorf("execution plane WSL indisponível para esta conta: %w", err)
+	}
+	return nil
 }
 
 // SaveGlobalSettings applies the validated global settings command owned by

@@ -10,10 +10,18 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
 )
+
+func currentUser() string {
+	if current, err := user.Current(); err == nil && current.Username != "" {
+		return current.Username
+	}
+	return "unknown"
+}
 
 func ensureToken(path string) (string, error) {
 	if token, err := readToken(path); err == nil {

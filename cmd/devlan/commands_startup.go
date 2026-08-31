@@ -18,7 +18,10 @@ func runStartup(ctx context.Context, dataDir string, args []string) error {
 		if len(args) > 2 {
 			return fmt.Errorf("uso: devlan startup enable [gui|service]")
 		}
-		mode := startup.ModeGUI
+		// The browser-first control plane must run in the user's session. A
+		// Windows SCM service defaults to LocalSystem and cannot see a WSL
+		// distribution registered for the interactive user.
+		mode := startup.ModeService
 		if len(args) == 2 {
 			parsed, err := startup.ParseMode(args[1])
 			if err != nil {

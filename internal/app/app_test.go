@@ -18,6 +18,21 @@ type successfulRunner struct{}
 
 func (successfulRunner) Run(context.Context, ...string) (string, error) { return "", nil }
 
+type unavailableInspector struct{}
+
+func (unavailableInspector) Exists(context.Context, string, string) (bool, error) {
+	return false, platform.ErrUnavailable
+}
+func (unavailableInspector) Directory(context.Context, string) (bool, error) {
+	return false, platform.ErrUnavailable
+}
+func (unavailableInspector) ListDirectories(context.Context, string) ([]string, error) {
+	return nil, platform.ErrUnavailable
+}
+func (unavailableInspector) ReadFile(context.Context, string, string) ([]byte, error) {
+	return nil, platform.ErrUnavailable
+}
+
 type fakePHPManager struct {
 	installed []string
 }
@@ -85,6 +100,27 @@ func TestParkDiscoversOnlyLaravelChildren(t *testing.T) {
 	}
 	if _, err := effective.Resolve("financeiro"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestParkKeepsLastKnownAllocatedProjectsWhenDiscoveryIsUnavailable(t *testing.T) {
+	service := New(t.TempDir())
+	service.Detector = detect.Detector{Inspector: unavailableInspector{}}
+	cfg := domain.NewConfig()
+	cfg.Parks = []domain.Park{{Path: "/home/dev"}}
+	cfg.RoutePortAllocations = map[string]int{"/home/dev/inventory": 8089}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	effective, err := service.EffectiveConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(effective.Projects) != 1 || effective.Projects[0].Name != "inventory" || effective.Projects[0].Path != "/home/dev/inventory" {
+		t.Fatalf("projeto estacionado conhecido desapareceu: %#v", effective.Projects)
+	}
+	if effective.EffectiveRoutePort(effective.Projects[0]) != 8089 {
+		t.Fatalf("porta persistida não preservada: %d", effective.EffectiveRoutePort(effective.Projects[0]))
 	}
 }
 

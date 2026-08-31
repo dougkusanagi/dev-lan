@@ -36,6 +36,7 @@ type Endpoint struct {
 	TokenFile string `json:"token_file"`
 	PID       int    `json:"pid"`
 	StartedAt string `json:"started_at"`
+	User      string `json:"user,omitempty"`
 }
 
 type Server struct {
@@ -145,6 +146,7 @@ func (s *Server) Start() (Endpoint, error) {
 		TokenFile: files.Token,
 		PID:       os.Getpid(),
 		StartedAt: time.Now().UTC().Format(time.RFC3339),
+		User:      currentUser(),
 	}
 
 	server := &http.Server{

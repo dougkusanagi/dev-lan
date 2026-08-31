@@ -365,11 +365,16 @@ devlan security audit --lines 50
 O serviço Windows opcional mantém a API local ativa sem depender da UI:
 
 ```powershell
-devlan service install|remove|start|stop|status
+devlan service install --system | remove|start|stop|status
 devlan startup enable [gui|service]
 devlan startup disable|status
 devlan api serve|status
 ```
+
+Quando o runtime usa uma distro WSL registrada para o usuário, prefira
+`devlan startup enable service`. A instalação SCM exige `--system` de forma
+explícita porque o Windows executa esse serviço como `LocalSystem`, que pode
+não enxergar a distro WSL do usuário interativo.
 
 O protocolo exige token Bearer e aceita somente conexões loopback. O token e o
 endpoint efêmero ficam em `api.token` e `api.endpoint.json` dentro do diretório

@@ -215,7 +215,7 @@ func (s *Server) BuildProjectViews(ctx context.Context, filter string) ([]Projec
 	return buildProjectViews(ctx, s.queries, s.readModelCache, filter)
 }
 
-func buildSystemStatusView(cfg domain.Config, phpVersions []application.PHPVersionStatus, caddyStatus application.CaddyStatus, health application.SystemHealthSnapshot, host, observedAt string) SystemStatusView {
+func buildSystemStatusView(cfg domain.Config, totalProjects int, phpVersions []application.PHPVersionStatus, caddyStatus application.CaddyStatus, health application.SystemHealthSnapshot, host, observedAt string) SystemStatusView {
 	vers := make([]string, 0, len(phpVersions))
 	for _, version := range phpVersions {
 		vers = append(vers, version.Version)
@@ -245,7 +245,7 @@ func buildSystemStatusView(cfg domain.Config, phpVersions []application.PHPVersi
 		WSLAvailable:        health.WSLAvailable,
 		FirewallOk:          health.FirewallOK,
 		PHPVersions:         vers,
-		TotalProjects:       len(cfg.Projects),
+		TotalProjects:       totalProjects,
 		ProtocolVersion:     ProtocolVersion,
 		Revision:            cfg.Revision,
 		ObservedAt:          observedAt,
@@ -294,7 +294,7 @@ func buildOverviewView(ctx context.Context, queries *application.Queries, cache 
 	}
 	return OverviewView{
 		Projects:    renderProjectViews(runtime, filter),
-		Status:      buildSystemStatusView(runtime.cfg, health.PHPVersions, runtime.caddyStatus, health, runtime.host, observedAt),
+		Status:      buildSystemStatusView(runtime.cfg, len(runtime.effective.Projects), health.PHPVersions, runtime.caddyStatus, health, runtime.host, observedAt),
 		PHPVersions: phpVersionViews(health.PHPVersions),
 		Revision:    runtime.cfg.Revision,
 		ObservedAt:  observedAt,
@@ -327,7 +327,7 @@ func buildStatusView(ctx context.Context, queries *application.Queries, cache *R
 	now := queries.Now()
 	caddyStatus := queries.CaddyStatus(ctx)
 	health, _ := cache.cachedCold(ctx, queries, now, caddyStatus)
-	return buildSystemStatusView(cfg, health.PHPVersions, caddyStatus, health, queries.LANAddress(), now.UTC().Format(time.RFC3339Nano)), nil
+	return buildSystemStatusView(cfg, len(cfg.Projects), health.PHPVersions, caddyStatus, health, queries.LANAddress(), now.UTC().Format(time.RFC3339Nano)), nil
 }
 
 func BuildStatusView(ctx context.Context, service *app.App) (SystemStatusView, error) {

@@ -5,26 +5,48 @@ estado autoritativo continua em `%LOCALAPPDATA%/DevLAN` (ou no
 valor de `DEVLAN_HOME`); os diretórios dos projetos nunca fazem parte de um
 backup ou diagnóstico automático.
 
-## Serviço Windows e inicialização
+## Agente do usuário e serviço Windows
 
-O serviço é opcional e independente da janela Wails. Ele inicia a API local,
-recarrega a configuração gerenciada e permanece disponível mesmo quando a UI
-está fechada:
+Para instalações com WSL por usuário, o caminho normal é iniciar a API na
+sessão interativa:
 
 ```powershell
-devlan service install
+devlan startup enable service
+devlan startup status
+```
+
+Esse comando grava uma entrada em `HKCU` e mantém a API disponível sem a UI,
+com a mesma identidade que possui a distro WSL.
+
+O serviço SCM é uma opção avançada para ambientes em que a conta do sistema
+possui acesso ao WSL:
+
+```powershell
+devlan service install --system
 devlan service start
 devlan service status
 devlan service stop
 devlan service remove
 ```
 
-`service install` registra `DevLAN` no Service Control Manager com início
-automático no boot. A operação exige um terminal elevado. A conta do serviço
-não recebe acesso aos diretórios de projetos além das ACLs que o fluxo normal
-já configura para Caddy/PHP-FPM.
+`service install --system` registra `DevLAN` no Service Control Manager com
+início automático no boot e exige um terminal elevado. O DevLAN executa um
+preflight de acesso ao WSL antes de abrir a API; se a conta não enxergar a
+distro configurada, o serviço falha claramente e não assume a porta 3210.
 
-Para iniciar apenas no login do usuário:
+Para uma instalação legada que criou o serviço como `LocalSystem`, pare-o e
+deixe o agente do usuário assumir a API:
+
+```powershell
+# PowerShell como Administrador
+sc.exe stop DevLAN
+sc.exe config DevLAN start= demand
+
+# PowerShell normal, como o usuário que possui a distro WSL
+devlan startup enable service
+```
+
+Para controlar o início no login do usuário:
 
 ```powershell
 devlan startup enable gui
@@ -33,10 +55,14 @@ devlan startup status
 devlan startup disable
 ```
 
-O modo `service` da inicialização de login inicia o servidor de API em uma
-sessão interativa quando o SCM não pode ser configurado; em instalações
-normais, prefira o serviço Windows.
+O modo `service` inicia o servidor de API em uma sessão interativa. O modo
+`gui` abre o shell Wails explicitamente. O comando sem modo usa `service`.
 O valor é gravado somente em `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+
+Locks órfãos são recuperados pelo PID quando o processo proprietário morreu.
+Se a recuperação não for possível, o fallback conservador continua sendo a
+expiração por idade; nenhum projeto dentro de um park é removido durante essa
+operação.
 
 ## API local autenticada
 

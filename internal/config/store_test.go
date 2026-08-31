@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -74,6 +75,36 @@ func TestStoreLockIsSharedAcrossProcesses(t *testing.T) {
 		t.Fatal("segundo lock deveria aguardar e falhar por timeout")
 	}
 	close(release)
+}
+
+func TestStoreReclaimsLockOwnedByDeadProcess(t *testing.T) {
+	store := NewStore(t.TempDir())
+	if err := os.WriteFile(store.Paths().Lock, []byte("2147483647\n2026-01-01T00:00:00Z\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	if err := store.WithLock(context.Background(), func() error {
+		called = true
+		return nil
+	}); err != nil {
+		t.Fatalf("lock órfão deveria ser recuperado: %v", err)
+	}
+	if !called {
+		t.Fatal("operação não executada após recuperação do lock")
+	}
+}
+
+func TestStoreDoesNotReclaimLockOwnedByCurrentProcess(t *testing.T) {
+	store := NewStore(t.TempDir())
+	data := []byte(strconv.Itoa(os.Getpid()) + "\n2026-01-01T00:00:00Z\n")
+	if err := os.WriteFile(store.Paths().Lock, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	if err := store.WithLock(ctx, func() error { return nil }); err == nil {
+		t.Fatal("lock de processo vivo não deveria ser recuperado")
+	}
 }
 
 func TestStoreRoundTripAndTOML(t *testing.T) {

@@ -52,7 +52,7 @@ Operação:
   config import PATH          valida e importa uma configuração
   diagnostic [PATH]           gera pacote único de diagnóstico sanitizado
   api serve|status            API local autenticada para CLI/UI/serviço
-  service install|...         instala e controla o serviço Windows opcional
+  service install --system|... instala o serviço Windows opcional (avançado)
   startup enable|disable      configura início automático no login
   telemetry status|...        telemetria opt-in, sanitizada e manual
   update check|download       consulta/prepara artefato com SHA-256
@@ -145,7 +145,7 @@ func printCommandUsage(command string) {
 		"config":     "uso: devlan config export [PATH] | devlan config import PATH",
 		"diagnostic": "uso: devlan diagnostic [PATH]",
 		"api":        "uso: devlan api serve | devlan api status",
-		"service":    "uso: devlan service install|remove|start|stop|status|run",
+		"service":    "uso: devlan service install --system | remove|start|stop|status|run",
 		"startup":    "uso: devlan startup enable [gui|service] | disable | status",
 		"telemetry":  "uso: devlan telemetry status|enable ENDPOINT|disable|send",
 		"update":     "uso: devlan update check CHANNEL [MANIFEST_URL] | devlan update download CHANNEL MANIFEST_URL PATH",

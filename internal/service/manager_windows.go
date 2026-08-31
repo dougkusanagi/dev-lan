@@ -106,6 +106,12 @@ type backgroundProgram struct {
 func (program *backgroundProgram) Execute(_ []string, requests <-chan svc.ChangeRequest, statuses chan<- svc.Status) (bool, uint32) {
 	statuses <- svc.Status{State: svc.StartPending, WaitHint: 10_000}
 	background := app.New(program.dataDir)
+	preflightContext, preflightCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer preflightCancel()
+	if err := background.CheckWSLAccess(preflightContext); err != nil {
+		background.Audit("SERVICE_START_FAILED", err.Error())
+		return false, 1
+	}
 	server := api.New(background)
 	if _, err := server.Start(); err != nil {
 		return false, 1

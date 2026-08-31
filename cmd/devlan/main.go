@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	localapi "github.com/dougkusanagi/dev-lan/internal/api"
 	"github.com/dougkusanagi/dev-lan/internal/app"
 	"github.com/dougkusanagi/dev-lan/internal/application"
 	"github.com/dougkusanagi/dev-lan/internal/desktop"
@@ -75,6 +77,9 @@ func run(args []string) error {
 		ctx, cancel = context.WithTimeout(context.Background(), cliCommandTimeout(command, args))
 	}
 	defer cancel()
+	if forwarded, err := forwardCommandIfActive(ctx, queries.EndpointFiles(), command, args); forwarded {
+		return err
+	}
 
 	switch command {
 	case "install":
@@ -282,6 +287,27 @@ func run(args []string) error {
 	case "reload":
 		if len(args) != 0 {
 			return fmt.Errorf("uso: devlan reload")
+		}
+		// Prefer the authenticated user-session controller when one is
+		// running. Falling back to the local composition keeps compatibility
+		// with first-run and recovery environments where no API exists.
+		client := localapi.NewClientFromFiles(queries.EndpointFiles())
+		probeContext, probeCancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		probe, probeErr := client.Do(probeContext, http.MethodGet, "/v1/health", nil)
+		probeCancel()
+		if probeErr == nil {
+			status := probe.StatusCode
+			_ = probe.Body.Close()
+			if status >= 400 {
+				return fmt.Errorf("API local ativa, mas indisponível para reload (HTTP %d)", status)
+			}
+			result, err := client.Reload(ctx)
+			printWarnings(result.Warnings)
+			if err != nil {
+				return err
+			}
+			fmt.Println("Configurações recarregadas pelo controlador DevLAN ativo.")
+			return nil
 		}
 		result, err := commands.Reload(ctx)
 		printWarnings(result.Warnings)

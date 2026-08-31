@@ -8,6 +8,7 @@ import (
 	pathpkg "path"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -445,9 +446,10 @@ func (a *App) EffectiveConfig(ctx context.Context, cfg domain.Config) (domain.Co
 	for _, park := range cfg.Parks {
 		discovered, err := a.Detector.BatchDiscoverProjects(platform.WithWSLOperation(ctx, platform.WSLOperationDiscovery), park.Path)
 		if err != nil {
-			if errors.Is(err, platform.ErrUnavailable) {
-				continue
-			}
+			// Discovery is a read-side capability. Keep the last known route
+			// allocations visible when WSL is temporarily unavailable, instead
+			// of making an entire parked tree disappear from the dashboard.
+			effective.Projects = append(effective.Projects, staleParkedProjects(cfg, park, knownNames, knownPaths)...)
 			continue
 		}
 		for _, item := range discovered {
@@ -520,6 +522,50 @@ func (a *App) EffectiveConfig(ctx context.Context, cfg domain.Config) (domain.Co
 		return domain.Config{}, err
 	}
 	return effective, nil
+}
+
+// staleParkedProjects reconstructs the minimal project identity from route
+// allocations. Allocations are already persisted by the reconciler and are
+// not user project files; this gives the read model a truthful last-known
+// entry while discovery is unavailable. The normal discovery path replaces
+// these placeholders as soon as WSL recovers.
+func staleParkedProjects(cfg domain.Config, park domain.Park, knownNames map[string]struct{}, knownPaths map[string]struct{}) []domain.Project {
+	paths := make([]string, 0)
+	for projectPath := range cfg.RoutePortAllocations {
+		normalized, err := domain.NormalizePath(projectPath)
+		if err != nil || pathpkg.Dir(normalized) != park.Path {
+			continue
+		}
+		if _, exists := knownPaths[normalized]; exists {
+			continue
+		}
+		ignored := false
+		for _, ignoredPath := range park.IgnoredPaths {
+			if ignoredPath == normalized {
+				ignored = true
+				break
+			}
+		}
+		if !ignored {
+			paths = append(paths, normalized)
+		}
+	}
+	sort.Strings(paths)
+	projects := make([]domain.Project, 0, len(paths))
+	for _, projectPath := range paths {
+		name, err := domain.NormalizeName(pathpkg.Base(projectPath))
+		if err != nil {
+			continue
+		}
+		if _, exists := knownNames[name]; exists {
+			continue
+		}
+		port := cfg.RoutePortAllocations[projectPath]
+		projects = append(projects, domain.Project{Name: name, Path: projectPath, RoutePort: &port})
+		knownNames[name] = struct{}{}
+		knownPaths[projectPath] = struct{}{}
+	}
+	return projects
 }
 
 func (a *App) ensureProjectAccess(ctx context.Context, cfg domain.Config) error {

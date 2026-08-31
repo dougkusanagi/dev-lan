@@ -20,8 +20,8 @@ func runBackgroundService(ctx context.Context, dataDir string, args []string) er
 		}
 		return backgroundservice.Run(ctx, dataDir)
 	case "install":
-		if len(args) != 1 {
-			return fmt.Errorf("uso: devlan service install")
+		if err := validateServiceInstallArgs(args); err != nil {
+			return err
 		}
 		options, err := backgroundservice.DefaultOptions(dataDir)
 		if err != nil {
@@ -70,4 +70,11 @@ func runBackgroundService(ctx context.Context, dataDir string, args []string) er
 	default:
 		return fmt.Errorf("subcomando service desconhecido: %s", args[0])
 	}
+}
+
+func validateServiceInstallArgs(args []string) error {
+	if len(args) == 2 && args[1] == "--system" {
+		return nil
+	}
+	return fmt.Errorf("o serviço Windows roda como LocalSystem e não acessa o WSL do usuário; use `devlan startup enable service` ou confirme explicitamente com `devlan service install --system`")
 }

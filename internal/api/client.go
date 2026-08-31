@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/dougkusanagi/dev-lan/internal/app"
+	"github.com/dougkusanagi/dev-lan/internal/application"
 )
 
 type Client struct {
@@ -61,6 +62,29 @@ func (c Client) Command(ctx context.Context, command string, args []string) (Com
 		return CommandResponse{}, fmt.Errorf("API local respondeu HTTP %d", response.StatusCode)
 	}
 	return payload, nil
+}
+
+// Reload asks the already-running controller to reconcile state and runtime.
+// Keeping this operation on the API is important: a CLI command must not open
+// a second App/Store while the user-session controller is active.
+func (c Client) Reload(ctx context.Context) (application.ApplyResult, error) {
+	response, err := c.Do(ctx, http.MethodPost, "/v1/reload", strings.NewReader("{}"))
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode >= 400 {
+		var payload ErrorResponse
+		if decodeErr := json.NewDecoder(response.Body).Decode(&payload); decodeErr == nil && payload.Error != "" {
+			return application.ApplyResult{}, fmt.Errorf("API local respondeu HTTP %d: %s", response.StatusCode, payload.Error)
+		}
+		return application.ApplyResult{}, fmt.Errorf("API local respondeu HTTP %d", response.StatusCode)
+	}
+	var payload ReloadResponse
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		return application.ApplyResult{}, err
+	}
+	return payload.Result, nil
 }
 
 func (c Client) Do(ctx context.Context, method, route string, body io.Reader) (*http.Response, error) {

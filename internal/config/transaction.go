@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/dougkusanagi/dev-lan/internal/domain"
@@ -93,11 +94,14 @@ func (s Store) acquireLock(ctx context.Context) (*os.File, error) {
 		if !errors.Is(err, os.ErrExist) {
 			return nil, fmt.Errorf("criar lock do DevLAN: %w", err)
 		}
-		if info, statErr := s.filesystem().Stat(path); statErr == nil && s.now().Sub(info.ModTime()) > lockStaleAfter {
-			// Reclaim only this exact managed lock. A concurrent owner may win
-			// the race; the next loop then observes its new lock.
-			_ = s.filesystem().Remove(path)
-			continue
+		if info, statErr := s.filesystem().Stat(path); statErr == nil {
+			stale, known := s.lockIsOrphaned(path)
+			if (known && stale) || (!known && s.now().Sub(info.ModTime()) > lockStaleAfter) {
+				// Reclaim only this exact managed lock. A concurrent owner may
+				// win the race; the next loop then observes its new lock.
+				_ = s.filesystem().Remove(path)
+				continue
+			}
 		}
 		timer := time.NewTimer(lockRetryInterval)
 		select {
@@ -107,6 +111,28 @@ func (s Store) acquireLock(ctx context.Context) (*os.File, error) {
 		case <-timer.C:
 		}
 	}
+}
+
+// lockIsOrphaned returns (orphaned, known). Old lock files contain a PID and
+// timestamp on separate lines, so malformed/legacy files remain protected by
+// the age-based fallback in acquireLock.
+func (s Store) lockIsOrphaned(path string) (bool, bool) {
+	data, err := s.filesystem().ReadFile(path)
+	if err != nil {
+		return false, false
+	}
+	lines := strings.Split(string(data), "\n")
+	if len(lines) == 0 {
+		return false, false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(lines[0]))
+	if err != nil || pid <= 0 {
+		return false, false
+	}
+	if processAlive(pid) {
+		return false, true
+	}
+	return true, true
 }
 
 func (s Store) saveTransaction(cfg domain.Config) error {

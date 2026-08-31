@@ -100,19 +100,20 @@ escopo do bootstrap.
 
 ## Operação após a instalação
 
-Para manter o controlador disponível sem a UI, instale o serviço opcional em
-um PowerShell elevado:
+Para manter o controlador disponível sem a UI, habilite o agente do usuário
+no login:
 
 ```powershell
-devlan service install
-devlan service start
-devlan service status
+devlan startup enable service
+devlan startup status
 ```
 
-O serviço usa a mesma configuração da CLI e escuta somente a API autenticada
-em loopback. Para uma inicialização de login sem SCM, use
-`devlan startup enable gui`; detalhes de recuperação, exportação e diagnóstico
-estão em [Operação, recuperação e suporte](OPERATIONS.md).
+Esse modo executa a API na sessão do usuário, que é necessária para acessar a
+distro WSL e `/home/silver/Sites`. O serviço Windows SCM é reservado para
+ambientes em que o WSL também esteja disponível para a conta do sistema; para
+solicitá-lo explicitamente use `devlan service install --system`. Detalhes de
+recuperação, exportação e diagnóstico estão em
+[Operação, recuperação e suporte](OPERATIONS.md).
 
 ## Fase 2: mais de uma versão PHP
 
