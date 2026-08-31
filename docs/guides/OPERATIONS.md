@@ -100,7 +100,10 @@ Para verificar o processo em execução:
 devlan api status
 ```
 
-`api serve` é útil para desenvolvimento e para ambientes sem o serviço:
+`api serve` é útil para desenvolvimento e para ambientes sem o serviço. Além
+de publicar a API, ele tenta reconciliar o Caddy WSL em segundo plano; assim o
+proxy do dashboard não fica apontando para um upstream morto após reinício ou
+retomada da sessão:
 
 ```powershell
 devlan api serve

@@ -1354,7 +1354,11 @@ input:focus-visible {
   align-items: center;
   gap: 8px;
 }
-.project-context-actions > button {
+.context-menu {
+  position: relative;
+  flex: 0 0 auto;
+}
+.context-menu-trigger {
   display: grid;
   place-items: center;
   width: 28px;
@@ -1364,9 +1368,52 @@ input:focus-visible {
   background: var(--panel);
   color: var(--muted);
 }
-.project-context-actions > button:hover {
+.context-menu-trigger:hover,
+.context-menu.open .context-menu-trigger {
   color: var(--text);
   border-color: var(--accent);
+}
+.context-menu-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  z-index: 25;
+  min-width: 205px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel);
+  box-shadow: 0 12px 28px #0009;
+}
+.context-menu-list.align-right {
+  right: 0;
+}
+.context-menu-list.align-left {
+  left: 0;
+}
+.context-menu-list button {
+  width: 100%;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font-size: 11px;
+}
+.context-menu-list button:hover {
+  background: var(--panel-hover);
+}
+.context-menu-list button:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+.context-menu-list button svg {
+  flex: 0 0 auto;
+  color: var(--muted);
 }
 .endpoint-grid {
   display: grid;
@@ -1401,6 +1448,8 @@ input:focus-visible {
   color: var(--success);
 }
 .endpoint-heading small {
+  min-width: 0;
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1421,6 +1470,55 @@ input:focus-visible {
   white-space: nowrap;
   color: var(--text);
   font-size: 12px;
+}
+.qr-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: #000a;
+}
+.qr-dialog {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  width: min(330px, 100%);
+  padding: 24px 22px 20px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 18px 55px #000b;
+  text-align: center;
+}
+.qr-dialog h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 17px;
+}
+.qr-dialog code {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qr-dialog p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.qr-code {
+  padding: 10px;
+  border-radius: 7px;
+  background: #fff;
+}
+.qr-dialog .dialog-close {
+  top: 12px;
+  right: 12px;
 }
 .endpoint-address .address-actions {
   display: flex;

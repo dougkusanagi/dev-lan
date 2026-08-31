@@ -36,12 +36,11 @@ func runGUI(ctx context.Context, service *app.App, commands *application.Command
 		uiPort = 3210
 	}
 
-	targetURL := "https://devlan.localhost/"
-	if !queries.CaddyStatus(ctx).Live {
-		targetURL = fmt.Sprintf("http://127.0.0.1:%d/", uiPort)
-	}
-
 	if foreground {
+		targetURL := "https://devlan.localhost/"
+		if !queries.CaddyStatus(ctx).Live {
+			targetURL = fmt.Sprintf("http://127.0.0.1:%d/", uiPort)
+		}
 		fmt.Printf("DevLAN GUI Web Server ativo em %s (porta %d)\n", targetURL, uiPort)
 		fmt.Println("Pressione Ctrl+C para encerrar.")
 		server := localapi.NewWithApplication(service, commands, queries)
@@ -100,6 +99,21 @@ func runGUI(ctx context.Context, service *app.App, commands *application.Command
 		if !started {
 			return fmt.Errorf("servidor web em segundo plano não respondeu na porta %d", uiPort)
 		}
+	}
+
+	// Re-check after starting the API. The API startup also performs a
+	// best-effort reconciliation, which can restore the canonical Caddy edge
+	// after a reboot. If recovery is unavailable, keep the direct loopback URL
+	// as a reliable fallback instead of opening a known 502 origin.
+	targetURL := fmt.Sprintf("http://127.0.0.1:%d/", uiPort)
+	if queries.CaddyStatus(ctx).Live {
+		targetURL = "https://devlan.localhost/"
+	} else {
+		reloadContext, reloadCancel := context.WithTimeout(ctx, 20*time.Second)
+		if _, reloadErr := service.Reload(reloadContext); reloadErr == nil && queries.CaddyStatus(reloadContext).Live {
+			targetURL = "https://devlan.localhost/"
+		}
+		reloadCancel()
 	}
 
 	fmt.Printf("Servidor Web DevLAN ativo em 127.0.0.1:%d\n", uiPort)

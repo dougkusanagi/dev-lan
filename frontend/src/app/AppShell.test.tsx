@@ -140,6 +140,22 @@ describe('AppShell states and keyboard behavior', () => {
     expect(await screen.findByText('Porta LAN 8123 aplicada.')).toBeInTheDocument();
   });
 
+  it('groups address actions and shows a QR code for each origin', async () => {
+    const user = userEvent.setup();
+    render(<AppShell client={clientWith([project])} pollIntervalMs={0} />);
+    await screen.findByRole('heading', { name: 'catalogo' });
+
+    await user.click(screen.getByRole('button', { name: 'Ações do endereço LOCAL' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Mostrar QR code' }));
+    expect(screen.getByRole('dialog', { name: 'Escaneie para abrir' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toHaveTextContent('https://catalogo.localhost/');
+    await user.click(screen.getByRole('button', { name: 'Fechar QR code' }));
+
+    await user.click(screen.getByRole('button', { name: 'Ações do endereço LAN · PREVIEW' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Mostrar QR code' }));
+    expect(screen.getByRole('dialog')).toHaveTextContent('http://192.168.1.50:8080/');
+  });
+
   it('shows immediate TLS loading and reconciles without a page reload', async () => {
     const user = userEvent.setup();
     const client = clientWith([project]);

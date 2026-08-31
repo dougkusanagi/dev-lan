@@ -1,5 +1,8 @@
-import { Copy, ExternalLink, LoaderCircle, RefreshCw } from 'lucide-react';
+import { Copy, ExternalLink, LoaderCircle, QrCode, RefreshCw, X } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
+import { useEffect, useState } from 'react';
 import type { ProjectInfo } from '../../types';
+import { ContextMenu, ContextMenuItem } from '../context-menu/ContextMenu';
 
 function stateLabel(project: ProjectInfo, local: boolean): string {
   if (local) {
@@ -39,6 +42,7 @@ function Endpoint({
   onCopy: () => void;
   active: boolean;
 }) {
+  const [qrOpen, setQROpen] = useState(false);
   const cardTitle =
     tone === 'lan'
       ? 'Acesso pela LAN: porta dedicada. Nota: cookies HTTP não são isolados por porta no mesmo IP.'
@@ -52,24 +56,63 @@ function Endpoint({
       <div className="endpoint-heading">
         <span>{label}</span>
         <small>{detail}</small>
+        <ContextMenu label={`Ações do endereço ${label}`}>
+          <ContextMenuItem onClick={onOpen}>
+            <ExternalLink size={14} aria-hidden="true" /> Abrir endereço
+          </ContextMenuItem>
+          <ContextMenuItem onClick={onCopy}>
+            <Copy size={14} aria-hidden="true" /> Copiar endereço
+          </ContextMenuItem>
+          <ContextMenuItem onClick={() => setQROpen(true)}>
+            <QrCode size={14} aria-hidden="true" /> Mostrar QR code
+          </ContextMenuItem>
+        </ContextMenu>
       </div>
       <div className="endpoint-address">
         <code title={url}>{url}</code>
-        <div className="address-actions">
-          <button type="button" title="Abrir endereço" aria-label="Abrir endereço" onClick={onOpen}>
-            <ExternalLink size={16} />
-          </button>
-          <button
-            type="button"
-            title="Copiar endereço"
-            aria-label="Copiar endereço"
-            onClick={onCopy}
-          >
-            <Copy size={16} />
-          </button>
-        </div>
       </div>
+      {qrOpen && <QRCodeDialog label={label} url={url} onClose={() => setQROpen(false)} />}
     </article>
+  );
+}
+
+function QRCodeDialog({
+  label,
+  url,
+  onClose,
+}: {
+  label: string;
+  url: string;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [onClose]);
+
+  return (
+    <div className="qr-backdrop" role="presentation">
+      <div className="qr-dialog" role="dialog" aria-modal="true" aria-labelledby="qr-dialog-title">
+        <button
+          type="button"
+          className="dialog-close"
+          onClick={onClose}
+          aria-label="Fechar QR code"
+        >
+          <X size={18} />
+        </button>
+        <span className="section-label">ENDEREÇO {label}</span>
+        <h2 id="qr-dialog-title">Escaneie para abrir</h2>
+        <div className="qr-code">
+          <QRCodeSVG value={url} size={208} level="M" includeMargin bgColor="#ffffff" />
+        </div>
+        <code title={url}>{url}</code>
+        <p>Abra a câmera do celular e aponte para o código.</p>
+      </div>
+    </div>
   );
 }
 
@@ -108,20 +151,19 @@ export function ProjectHeader({
           <span className={`inline-status ${project.status}`}>
             {projectStatusLabel(project.status)}
           </span>
-          <button
-            type="button"
-            title="Recarregar infraestrutura"
-            aria-label="Recarregar infraestrutura"
-            disabled={reloadPending}
-            aria-busy={reloadPending}
-            onClick={onReload}
-          >
-            {reloadPending ? (
-              <LoaderCircle className="spin" size={15} aria-hidden="true" />
-            ) : (
-              <RefreshCw size={15} aria-hidden="true" />
-            )}
-          </button>
+          <ContextMenu label={`Ações do projeto ${project.name}`}>
+            <ContextMenuItem onClick={onReload} disabled={reloadPending} busy={reloadPending}>
+              {reloadPending ? (
+                <LoaderCircle className="spin" size={14} aria-hidden="true" />
+              ) : (
+                <RefreshCw size={14} aria-hidden="true" />
+              )}
+              {reloadPending ? 'Recarregando infraestrutura…' : 'Recarregar infraestrutura'}
+            </ContextMenuItem>
+            <ContextMenuItem onClick={onCopyPath}>
+              <Copy size={14} aria-hidden="true" /> Copiar caminho do projeto
+            </ContextMenuItem>
+          </ContextMenu>
         </div>
       </div>
       <div className="endpoint-grid">
@@ -165,16 +207,8 @@ export function ProjectHeader({
             Logs
           </button>
         </div>
-        <div className="project-path">
-          <code title={project.path}>{project.path}</code>
-          <button
-            type="button"
-            title="Copiar caminho do projeto"
-            aria-label="Copiar caminho do projeto"
-            onClick={onCopyPath}
-          >
-            <Copy size={14} />
-          </button>
+        <div className="project-path" title={project.path}>
+          <code>{project.path}</code>
         </div>
       </div>
     </header>
